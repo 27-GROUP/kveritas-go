@@ -1,52 +1,94 @@
-# K-Veritas Go CLI
+# K-Veritas Go
 
 Standalone binary for tamper-evident verification of ML experiments. Cryptographically binds published results to the exact code, hardware, and time that produced them.
 
-Works with any language: Python, R, Julia, C++, shell scripts. No runtime dependencies.
+Works with any language -- Python, R, Julia, C++, shell scripts. Zero runtime dependencies. Single static binary.
 
 ---
 
 ## Installation
 
+### From source
+
+Requires [Go 1.22+](https://go.dev/dl/).
+
 ```bash
+git clone https://github.com/27-GROUP/kveritas-go.git
+cd kveritas-go
 make build
 make server
 ```
 
 Produces `bin/kveritas` and `bin/kveritas-server`.
 
-**Cross-compile for all platforms:**
+### Pre-built binaries
+
+Download from the [Releases](https://github.com/27-GROUP/kveritas-go/releases) page, or build cross-platform binaries locally:
+
 ```bash
 make cross
 ```
-Outputs to `dist/` for linux/darwin/windows on amd64/arm64.
+
+This produces binaries in `dist/` for the following platforms:
+
+| Platform | Architecture | Binary |
+|---|---|---|
+| Linux | x86_64 | `kveritas-linux-amd64` |
+| Linux | ARM64 | `kveritas-linux-arm64` |
+| macOS | Intel | `kveritas-darwin-amd64` |
+| macOS | Apple Silicon | `kveritas-darwin-arm64` |
+| Windows | x86_64 | `kveritas-windows-amd64.exe` |
+
+The attestation server is also cross-compiled for Linux (amd64) and macOS (arm64).
+
+### Install to PATH
+
+After building, copy the binary to a directory on your PATH:
+
+```bash
+# Linux / macOS
+sudo cp bin/kveritas /usr/local/bin/
+sudo cp bin/kveritas-server /usr/local/bin/
+
+# Or per-user
+cp bin/kveritas ~/.local/bin/
+```
+
+On Windows, add the directory containing `kveritas.exe` to your `PATH` environment variable.
 
 ---
 
 ## Quick Start
 
 ```bash
-# Start the attestation server (holds the private key)
-kveritas-server --addr :7433 --keys keys
+# 1. Start the attestation server (holds the private signing key)
+kveritas-server --addr :7433 --keys ./keys
 
-# In your project directory:
+# 2. Initialize a session in your project directory
 kveritas init --server http://localhost:7433
+
+# 3. Run your experiments under kveritas
 kveritas run -- python train.py --epochs 90
+kveritas run -- python evaluate.py --checkpoint best
+
+# 4. Seal the session into a signed PDF report
 kveritas seal --output report.pdf
 
-# Verify (no server needed)
+# 5. Verify the report (no server, no internet required)
 kveritas verify report.pdf
 
-# Cross-reference paper claims
+# 6. Generate and check claims for paper submission
 kveritas generate-claims --report report.pdf > claims.json
 kveritas check --claims claims.json --report report.pdf
 ```
 
-**Offline mode (no server):**
+**Offline mode (no server required):**
+
 ```bash
 kveritas init --local
 kveritas run -- python train.py
 kveritas seal --local-key keys/private.pem --output report.pdf
+kveritas verify report.pdf
 ```
 
 ---
@@ -57,10 +99,10 @@ kveritas seal --local-key keys/private.pem --output report.pdf
 
 ```
 --server URL     Attestation server URL (default: http://localhost:7433)
---local          Offline mode, no server
+--local          Offline mode, skip server registration
 ```
 
-Creates `.kveritas/` in the current directory. Registers with the server and stores a single-use token bound to the machine fingerprint.
+Creates a `.kveritas/` session directory. In server mode, registers the session and stores a single-use token bound to the machine fingerprint (SHA-256 of hostname, OS, architecture, CPU count). The server rejects seal requests from a different machine.
 
 ### `kveritas run`
 
@@ -68,16 +110,20 @@ Creates `.kveritas/` in the current directory. Registers with the server and sto
 --files f1,f2   Source files to hash before and after the run
 ```
 
-Runs the command as a monitored subprocess. Stdout/stderr are teed to the terminal while being hashed. Metrics printed as `KVERITAS_METRIC` lines are captured. Source files are hashed pre/post to detect modifications. Environment (`pip freeze`) is recorded.
+Executes the given command as a monitored subprocess. Stdout and stderr are teed to the terminal in real time while being SHA-256 hashed. Every line is scanned for `KVERITAS_METRIC` entries. After the process exits, source files are re-hashed to detect modifications. The Python environment (`pip freeze`) is captured and hashed.
+
+If `--files` is omitted, script files are detected heuristically from the command arguments (`.py`, `.R`, `.jl`, `.sh`, `.cpp`, etc.).
+
+Each run produces `.kveritas/runs/<id>.json` containing the full record.
 
 ### `kveritas seal`
 
 ```
 --output, -o path   Output PDF path (default: kveritas-report-<id>.pdf)
---local-key path    Path to local RSA private key PEM
+--local-key path    Path to a local RSA private key PEM for offline signing
 ```
 
-Computes a canonical SHA-256 hash of the complete session, sends only the hash to the server, receives a signature, and generates a PDF with all data and cryptographic proof embedded.
+Computes a canonical SHA-256 hash of the complete session (all run records, file hashes, stdout hashes, metrics, hardware, environment). Sends only this 64-character hash to the attestation server. Receives a signature, nonce, and timestamp. Generates a multi-page PDF report with all experiment data and cryptographic proof embedded.
 
 ### `kveritas verify <report.pdf>`
 
@@ -85,21 +131,24 @@ Computes a canonical SHA-256 hash of the complete session, sends only the hash t
 --public-key path   Override the embedded public key
 ```
 
-No account, no server, no internet required. Three sequential checks:
-1. Re-hash embedded data, compare to stored data hash
-2. Reconstruct payload, verify SHA-256 matches signed message hash
-3. Verify RSA-PSS-SHA256 signature
+Fully offline. No account, no server, no internet. The public key is embedded in the PDF at seal time. Performs three sequential checks:
+
+1. Re-hash embedded session data and compare to the stored data hash
+2. Reconstruct `payload = data_hash:nonce:signed_at` and verify its SHA-256 matches the stored signed message hash
+3. Verify the RSA-PSS-SHA256 signature over the payload
 
 Output: `VERIFIED`, `TAMPERED`, or `INVALID`.
 
 ### `kveritas check`
 
 ```
---claims claims.json   Claims file
---report report.pdf    Signed report
+--claims claims.json   Path to claims file
+--report report.pdf    Path to signed report
 ```
 
-Verifies the report first, then cross-references each claimed metric value against the signed record.
+Runs `verify` first. If the report is tampered, aborts immediately. Otherwise, cross-references each claimed metric value against the signed record.
+
+Per-claim output: `CONSISTENT`, `INCONSISTENT`, or `MISSING`.
 
 ### `kveritas generate-claims`
 
@@ -107,7 +156,9 @@ Verifies the report first, then cross-references each claimed metric value again
 --report report.pdf   Path to a sealed K-Veritas report
 ```
 
-Extracts all final metrics from a signed report and outputs a `claims.json` template to stdout. Authors edit this to match the values cited in their paper.
+Extracts all final metrics from a signed report and outputs a `claims.json` template to stdout. Authors edit this file to match the exact values cited in their paper and submit it alongside the PDF for reviewer verification.
+
+Output:
 
 ```json
 {
@@ -120,33 +171,53 @@ Extracts all final metrics from a signed report and outputs a `claims.json` temp
 
 ### `kveritas status`
 
-Shows session ID, timestamps, machine, sealed state, and a summary of all runs.
+Displays session ID, timestamps, machine fingerprint, sealed state, and a summary of all recorded runs.
 
 ---
 
 ## Metric Format
 
-The only format guaranteed to be captured:
+The only format guaranteed to be captured and anchored in the signed hash:
 
 ```
 KVERITAS_METRIC name=<identifier> value=<float> [step=<label>]
 ```
 
-Examples in any language:
+Add this line to your script's output in any language:
 
+**Python:**
 ```python
 print(f"KVERITAS_METRIC name=val_accuracy value={acc:.6f} step={epoch}")
 ```
+
+**R:**
 ```r
 cat(sprintf("KVERITAS_METRIC name=val_accuracy value=%.6f step=%d\n", acc, epoch))
 ```
+
+**Julia:**
 ```julia
 println("KVERITAS_METRIC name=val_accuracy value=$(acc) step=$(epoch)")
 ```
 
-The full stdout is SHA-256 hashed byte-for-byte. Each metric is anchored to its line number. Modifying any metric line invalidates the hash and the signature.
+**C++:**
+```cpp
+printf("KVERITAS_METRIC name=val_accuracy value=%.6f step=%d\n", acc, epoch);
+```
 
-Heuristic patterns (Keras-style, JSON objects) are also detected as a convenience and marked `source: heuristic`.
+**Shell:**
+```bash
+echo "KVERITAS_METRIC name=val_accuracy value=0.9471 step=100"
+```
+
+Constraints:
+- `name`: `[a-zA-Z][a-zA-Z0-9_]*`
+- `value`: any float literal including scientific notation (`1.2e-4`)
+- `step`: optional integer or string label (`final`, `epoch_10`)
+
+The entire stdout stream is SHA-256 hashed byte-for-byte as the process runs. Each metric is anchored to its exact line number in the hash. Inserting, removing, or reordering metric lines invalidates the signature.
+
+Heuristic patterns (Keras-style progress bars, JSON metric objects) are also detected as a convenience and marked `source: heuristic`. Do not rely on them for formal claims.
 
 ---
 
@@ -156,14 +227,62 @@ Heuristic patterns (Keras-style, JSON objects) are also detected as a convenienc
 kveritas-server --addr :7433 --keys /path/to/keys
 ```
 
-Generates a 4096-bit RSA key pair on first start. Never commit `keys/private.pem`.
+Generates a 4096-bit RSA key pair on first start. The private key never leaves the server.
 
-**Endpoints:**
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/init` | POST | Register session, return single-use token |
 | `/api/v1/seal` | POST | Validate token + machine ID, sign data hash |
 | `/api/v1/public-key` | GET | Return public key PEM |
+
+The server validates:
+- Token exists and matches the session
+- Machine ID matches the one used at init
+- Data hash is exactly 64 hex characters
+- At least one run was recorded
+- Session has not already been sealed
+
+---
+
+## Web Verification
+
+Reports generated by this CLI are fully compatible with the [K-Veritas Web Verifier](https://kveritas-web.vercel.app/verify). Reviewers can verify reports in a browser with no installation:
+
+1. Go to [kveritas-web.vercel.app/verify](https://kveritas-web.vercel.app/verify)
+2. Drop the PDF
+3. See instant verification result with all embedded metadata
+4. Optionally drop `claims.json` to cross-reference paper claims
+
+The web verifier calls the [K-Veritas API](https://kveritas-api.vercel.app) which supports both Go-format and Python-format reports.
+
+---
+
+## Repository Structure
+
+```
+kveritas-go/
+├── cmd/kveritas/main.go         CLI entry point (all cobra commands)
+├── server/main.go               Attestation server (standalone binary)
+├── internal/
+│   ├── session/session.go       Data models, .kveritas/ I/O
+│   ├── runner/runner.go         Subprocess wrapper, stdout tee, metric parsing
+│   ├── metrics/parser.go        KVERITAS_METRIC parser + heuristic patterns
+│   ├── crypto/crypto.go         RSA-PSS signing, SHA-256, canonical JSON
+│   ├── pdf/generator.go         Self-contained PDF/1.4 writer
+│   ├── client/client.go         HTTP client for attestation server
+│   └── hardware/hardware.go     Hardware snapshot + machine fingerprint
+├── experiments/                  Mock experiment scripts
+├── tests/
+│   ├── run_tests.sh             Integration test suite (14 tests)
+│   ├── mock_train.py            Mock training script
+│   ├── mock_eval.py             Mock evaluation script
+│   ├── mock_analysis.R          Mock R analysis script
+│   ├── claims_correct.json      Valid claims fixture
+│   └── claims_wrong.json        Invalid claims fixture
+├── Makefile
+├── go.mod
+└── go.sum
+```
 
 ---
 
@@ -178,9 +297,18 @@ signature       = RSA-PSS-SHA256(payload, salt=MAX, key=4096-bit)
 signed_msg_hash = SHA-256(payload)
 ```
 
-All values plus the public key PEM are embedded in the PDF after `%%EOF`. Standard PDF readers ignore this block.
+All six values plus the public key PEM are embedded in the PDF after `%%EOF`, delimited by `%%KVERITAS_SEAL_BEGIN%%` and `%%KVERITAS_SEAL_END%%`. Standard PDF readers ignore this block.
 
-Canonical JSON: sorted keys at every level, compact (no spaces), UTF-8. Matches Python's `json.dumps(v, sort_keys=True, separators=(',', ':'))`.
+Canonical JSON: sorted keys at every level, compact (no spaces after `:` or `,`), UTF-8. Matches Python's `json.dumps(v, sort_keys=True, separators=(',', ':'))` for cross-language compatibility.
+
+---
+
+## Dependencies
+
+- [`github.com/spf13/cobra`](https://github.com/spf13/cobra) -- CLI framework
+- [`github.com/google/uuid`](https://github.com/google/uuid) -- Session IDs
+
+Everything else (RSA-PSS, SHA-256, PDF generation, HTTP server/client) uses the Go standard library.
 
 ---
 
@@ -191,16 +319,7 @@ kveritas-server --keys keys &
 bash tests/run_tests.sh
 ```
 
-14 integration tests covering init, run, seal, verify, tamper detection, claims checking, and status.
-
----
-
-## Dependencies
-
-- `github.com/spf13/cobra` -- CLI framework
-- `github.com/google/uuid` -- session IDs
-
-Everything else (crypto, PDF generation, HTTP) uses the Go standard library.
+14 integration tests: init, double-init rejection, Python training run, metric capture, eval run, file tamper detection, seal, PDF metadata embedding, verify on clean report, tamper detection, correct claims, wrong claims, status, post-seal run rejection.
 
 ---
 
