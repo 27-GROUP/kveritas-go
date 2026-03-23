@@ -1,0 +1,19 @@
+{
+  "claims": [
+    {
+      "metric": "final_val_accuracy",
+      "value": 0.99,
+      "tolerance": 0.001
+    },
+    {
+      "metric": "test_accuracy",
+      "value": 0.97,
+      "tolerance": 0.001
+    },
+    {
+      "metric": "nonexistent_metric",
+      "value": 0.95,
+      "tolerance": 0.01
+    }
+  ]
+}
