@@ -19,7 +19,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultServer = "http://localhost:7433"
+const defaultServer = "https://kveritas-api.vercel.app"
 
 var root = &cobra.Command{
 	Use:   "kveritas",
