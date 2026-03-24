@@ -60,29 +60,35 @@ On Windows, add the directory containing `kveritas.exe` to your `PATH` environme
 
 ## Quick Start
 
+No server setup required. The CLI connects to the hosted K-Veritas attestation service by default.
+
 ```bash
-# 1. Start the attestation server (holds the private signing key)
-kveritas-server --addr :7433 --keys ./keys
+# 1. Initialize a session in your project directory
+kveritas init
 
-# 2. Initialize a session in your project directory
-kveritas init --server http://localhost:7433
-
-# 3. Run your experiments under kveritas
+# 2. Run your experiments under kveritas
 kveritas run -- python train.py --epochs 90
 kveritas run -- python evaluate.py --checkpoint best
 
-# 4. Seal the session into a signed PDF report
+# 3. Seal the session into a signed PDF report
 kveritas seal --output report.pdf
 
-# 5. Verify the report (no server, no internet required)
+# 4. Verify the report (no server, no internet required)
 kveritas verify report.pdf
 
-# 6. Generate and check claims for paper submission
+# 5. Generate and check claims for paper submission
 kveritas generate-claims --report report.pdf > claims.json
 kveritas check --claims claims.json --report report.pdf
 ```
 
-**Offline mode (no server required):**
+**Self-hosted server mode (optional):**
+
+```bash
+kveritas-server --addr :7433 --keys ./keys
+kveritas init --server http://localhost:7433
+```
+
+**Offline mode (no server at all):**
 
 ```bash
 kveritas init --local
@@ -98,11 +104,11 @@ kveritas verify report.pdf
 ### `kveritas init`
 
 ```
---server URL     Attestation server URL (default: http://localhost:7433)
+--server URL     Attestation server URL (default: https://kveritas-api.vercel.app)
 --local          Offline mode, skip server registration
 ```
 
-Creates a `.kveritas/` session directory. In server mode, registers the session and stores a single-use token bound to the machine fingerprint (SHA-256 of hostname, OS, architecture, CPU count). The server rejects seal requests from a different machine.
+Creates a `.kveritas/` session directory. By default, connects to the hosted K-Veritas attestation service. The session is registered and a single-use token bound to the machine fingerprint (SHA-256 of hostname, OS, architecture, CPU count) is stored. The server rejects seal requests from a different machine.
 
 ### `kveritas run`
 
