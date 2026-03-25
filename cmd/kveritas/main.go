@@ -36,12 +36,13 @@ Workflow:
                              Check paper claims against signed results.
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
-  kveritas status            Show current session state.`,
+  kveritas status            Show current session state.
+  kveritas update            Update to the latest version.`,
 	SilenceUsage: true,
 }
 
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims)
+	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
