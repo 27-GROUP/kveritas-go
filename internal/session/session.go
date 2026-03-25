@@ -22,6 +22,7 @@ type Session struct {
 	MachineID  string    `json:"machine_id"`
 	Token      string    `json:"token"`
 	ServerURL  string    `json:"server_url"`
+	OrgToken   string    `json:"org_token,omitempty"`
 	Runs       []string  `json:"runs"`
 	Sealed     bool      `json:"sealed"`
 }

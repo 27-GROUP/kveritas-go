@@ -28,6 +28,7 @@ type initRequest struct {
 	SessionID string `json:"session_id"`
 	MachineID string `json:"machine_id"`
 	InitAt    string `json:"init_at"`
+	OrgToken  string `json:"org_token,omitempty"`
 }
 
 type InitResponse struct {
@@ -40,6 +41,7 @@ type sealRequest struct {
 	MachineID string `json:"machine_id"`
 	DataHash  string `json:"data_hash"`
 	RunCount  int    `json:"run_count"`
+	OrgToken  string `json:"org_token,omitempty"`
 }
 
 // SealResponse contains the server's attestation response.
@@ -52,12 +54,13 @@ type SealResponse struct {
 }
 
 // Init registers a new session with the server and returns an opaque token.
-func (c *Client) Init(sessionID, machineID string, initAt time.Time) (string, error) {
+func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken string) (string, error) {
 	var resp InitResponse
 	err := c.post("/api/v1/init", initRequest{
 		SessionID: sessionID,
 		MachineID: machineID,
 		InitAt:    initAt.UTC().Format(time.RFC3339Nano),
+		OrgToken:  orgToken,
 	}, &resp)
 	if err != nil {
 		return "", err
@@ -74,6 +77,7 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 		MachineID: sess.MachineID,
 		DataHash:  dataHash,
 		RunCount:  runCount,
+		OrgToken:  sess.OrgToken,
 	}, &resp)
 	if err != nil {
 		return nil, err

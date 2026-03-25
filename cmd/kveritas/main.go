@@ -50,8 +50,9 @@ func main() {
 // --- init ---
 
 var (
-	initServer string
-	initLocal  bool
+	initServer   string
+	initLocal    bool
+	initOrgToken string
 )
 
 var cmdInit = &cobra.Command{
@@ -77,19 +78,26 @@ var cmdInit = &cobra.Command{
 
 		var token string
 		serverURL := initServer
+		orgToken := initOrgToken
+
+		// If no org-token flag was provided, prompt the user.
+		if orgToken == "" && !initLocal {
+			fmt.Fprint(os.Stderr, "[kveritas] Enter activation code (or press Enter to continue without): ")
+			var input string
+			fmt.Scanln(&input)
+			orgToken = strings.TrimSpace(input)
+		}
 
 		if !initLocal {
 			c := client.New(serverURL)
-			token, err = c.Init(sessionID, machineID, time.Now())
+			token, err = c.Init(sessionID, machineID, time.Now(), orgToken)
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
-			fmt.Fprintf(os.Stderr, "[kveritas] Registered with server %s\n", serverURL)
 		} else {
 			token = "local"
 			serverURL = "local"
-			fmt.Fprintf(os.Stderr, "[kveritas] Local mode: no server registration\n")
 		}
 
 		sess := &session.Session{
@@ -99,6 +107,7 @@ var cmdInit = &cobra.Command{
 			MachineID:  machineID,
 			Token:      token,
 			ServerURL:  serverURL,
+			OrgToken:   orgToken,
 			Runs:       []string{},
 		}
 
@@ -107,7 +116,9 @@ var cmdInit = &cobra.Command{
 		}
 
 		fmt.Printf("Session initialized: %s\n", sessionID)
-		fmt.Printf("Directory: %s\n", kvDir)
+		if orgToken != "" {
+			fmt.Printf("Organization: %s\n", orgToken)
+		}
 		return nil
 	},
 }
@@ -115,6 +126,7 @@ var cmdInit = &cobra.Command{
 func init() {
 	cmdInit.Flags().StringVar(&initServer, "server", defaultServer, "attestation server URL")
 	cmdInit.Flags().BoolVar(&initLocal, "local", false, "local mode: sign with a local key, no server")
+	cmdInit.Flags().StringVar(&initOrgToken, "org-token", "", "organization activation token (e.g. neurips_2026)")
 }
 
 // --- run ---
@@ -249,6 +261,24 @@ var cmdSeal = &cobra.Command{
 
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
+		fmt.Printf("Runs:          %d\n\n", len(runs))
+
+		for i, r := range runs {
+			cmd := strings.Join(r.Command, " ")
+			fmt.Printf("--- Run %d: %s ---\n", i+1, cmd)
+			if len(r.Metrics) == 0 {
+				fmt.Printf("  (no metrics captured)\n")
+			} else {
+				for _, m := range r.Metrics {
+					src := m.Source
+					step := ""
+					if m.Step != "" {
+						step = fmt.Sprintf(" [step=%s]", m.Step)
+					}
+					fmt.Printf("  %-30s  %.6g  (%s)%s\n", m.Name, m.Value, src, step)
+				}
+			}
+		}
 		return nil
 	},
 }
