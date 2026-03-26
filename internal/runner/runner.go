@@ -183,11 +183,22 @@ func digestBuf(b []byte) string {
 }
 
 func envDigest() (string, error) {
+	// Python: pip freeze
 	for _, pip := range []string{"pip", "pip3"} {
 		out, err := exec.Command(pip, "freeze").Output()
 		if err == nil {
 			return digestBuf(out), nil
 		}
 	}
-	return "", fmt.Errorf("pip not available")
+	// R: installed.packages()
+	out, err := exec.Command("Rscript", "-e", "cat(paste(installed.packages()[,'Package'], installed.packages()[,'Version'], sep='==', collapse='\n'))").Output()
+	if err == nil && len(out) > 0 {
+		return digestBuf(out), nil
+	}
+	// Julia: Pkg.status()
+	out, err = exec.Command("julia", "-e", "using Pkg; for (uuid, info) in Pkg.dependencies(); println(info.name, \"==\", info.version); end").Output()
+	if err == nil && len(out) > 0 {
+		return digestBuf(out), nil
+	}
+	return "", fmt.Errorf("no package manager available (tried pip, R, Julia)")
 }

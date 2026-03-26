@@ -395,16 +395,63 @@ func (b *builder) render() ([]byte, error) {
 }
 
 func pdfEscape(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r > 126 || !unicode.IsPrint(r) {
-			return ' '
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString("\\\\")
+		case r == '(':
+			b.WriteString("\\(")
+		case r == ')':
+			b.WriteString("\\)")
+		case r >= 32 && r <= 126:
+			b.WriteRune(r)
+		case r >= 0xA0 && r <= 0xFF:
+			// WinAnsiEncoding supports Latin-1 supplement directly as octal
+			b.WriteString(fmt.Sprintf("\\%03o", r))
+		case r == 0x2013: // en dash
+			b.WriteString("\\226")
+		case r == 0x2014: // em dash
+			b.WriteString("\\227")
+		case r == 0x2018: // left single quote
+			b.WriteString("\\221")
+		case r == 0x2019: // right single quote / apostrophe
+			b.WriteString("\\222")
+		case r == 0x201C: // left double quote
+			b.WriteString("\\223")
+		case r == 0x201D: // right double quote
+			b.WriteString("\\224")
+		case r == 0x2022: // bullet
+			b.WriteString("\\225")
+		case r == 0x2026: // ellipsis
+			b.WriteString("\\205")
+		case unicode.IsPrint(r):
+			// Non-WinAnsi printable: transliterate to ASCII approximation
+			b.WriteRune(transliterate(r))
+		default:
+			b.WriteByte(' ')
 		}
-		return r
-	}, s)
-	s = strings.ReplaceAll(s, "\\", "\\\\")
-	s = strings.ReplaceAll(s, "(", "\\(")
-	s = strings.ReplaceAll(s, ")", "\\)")
-	return s
+	}
+	return b.String()
+}
+
+func transliterate(r rune) rune {
+	// Common Unicode to ASCII approximations
+	switch {
+	case r >= 0x0100 && r <= 0x017F: // Latin Extended-A
+		base := strings.ToLower(string(r))
+		if len(base) > 0 {
+			first := []rune(base)[0]
+			switch {
+			case first >= 'a' && first <= 'z':
+				return first
+			}
+		}
+		return '?'
+	default:
+		return '?'
+	}
 }
 
 func wrapText(text string, maxChars int) []string {
