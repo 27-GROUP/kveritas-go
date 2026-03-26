@@ -32,7 +32,8 @@ type initRequest struct {
 }
 
 type InitResponse struct {
-	Token string `json:"token"`
+	Token   string `json:"token"`
+	OrgName string `json:"org_name,omitempty"`
 }
 
 type sealRequest struct {
@@ -53,8 +54,8 @@ type SealResponse struct {
 	PublicKeyPEM      string `json:"public_key_pem"`
 }
 
-// Init registers a new session with the server and returns an opaque token.
-func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken string) (string, error) {
+// Init registers a new session with the server and returns the full response.
+func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken string) (*InitResponse, error) {
 	var resp InitResponse
 	err := c.post("/api/v1/init", initRequest{
 		SessionID: sessionID,
@@ -63,9 +64,9 @@ func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken st
 		OrgToken:  orgToken,
 	}, &resp)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return resp.Token, nil
+	return &resp, nil
 }
 
 // Seal submits a data hash to the server and receives a cryptographic attestation.

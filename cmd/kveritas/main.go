@@ -6,10 +6,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mamadouk/kveritas/internal/bundle"
 	"github.com/mamadouk/kveritas/internal/client"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
@@ -91,10 +93,14 @@ var cmdInit = &cobra.Command{
 
 		if !initLocal {
 			c := client.New(serverURL)
-			token, err = c.Init(sessionID, machineID, time.Now(), orgToken)
+			initResp, err := c.Init(sessionID, machineID, time.Now(), orgToken)
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
+			}
+			token = initResp.Token
+			if initResp.OrgName != "" {
+				fmt.Fprintf(os.Stderr, "[kveritas] Session registered for %s\n", initResp.OrgName)
 			}
 		} else {
 			token = "local"
@@ -117,9 +123,6 @@ var cmdInit = &cobra.Command{
 		}
 
 		fmt.Printf("Session initialized: %s\n", sessionID)
-		if orgToken != "" {
-			fmt.Printf("Organization: %s\n", orgToken)
-		}
 		return nil
 	},
 }
@@ -227,7 +230,39 @@ var cmdSeal = &cobra.Command{
 			runs = append(runs, r)
 		}
 
-		dataHash, err := canonicalSessionHash(sess, runs)
+		if len(sess.SourceHashes) > 0 {
+			modified, missing, err := bundle.VerifySourceIntegrity(sess.ProjectDir, sess.SourceHashes)
+			if err != nil {
+				return fmt.Errorf("source integrity check failed: %w", err)
+			}
+			if len(modified) > 0 {
+				fmt.Fprintf(os.Stderr, "[kveritas] SEAL REFUSED: source files modified after experiment runs:\n")
+				for _, f := range modified {
+					fmt.Fprintf(os.Stderr, "  MODIFIED: %s\n", f)
+				}
+				return fmt.Errorf("source code was modified after experiments were run; results cannot be trusted")
+			}
+			if len(missing) > 0 {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: %d source files removed since runs\n", len(missing))
+			}
+		}
+
+		var bundleHash string
+		if len(sess.SourceHashes) > 0 {
+			files := make([]string, 0, len(sess.SourceHashes))
+			for f := range sess.SourceHashes {
+				files = append(files, f)
+			}
+			sort.Strings(files)
+			bundlePath := filepath.Join(kvDir, "kveritas_bundle.zip")
+			bundleHash, err = bundle.CreateBundle(sess.ProjectDir, files, bundlePath)
+			if err != nil {
+				return fmt.Errorf("creating source bundle: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
+		}
+
+		dataHash, err := canonicalSessionHash(sess, runs, bundleHash)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -242,6 +277,7 @@ var cmdSeal = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		seal.SourceBundleHash = bundleHash
 
 		outPath := sealOutput
 		if outPath == "" {
@@ -289,7 +325,7 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord) (string, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string) (string, error) {
 	type runPayload struct {
 		ID          string            `json:"id"`
 		Index       int               `json:"index"`
@@ -338,6 +374,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord) (str
 		"machine_id": sess.MachineID,
 		"server_url": sess.ServerURL,
 		"runs":       runPayloads,
+	}
+	if bundleHash != "" {
+		signingData["source_bundle_hash"] = bundleHash
 	}
 
 	return kvcrypto.CanonicalHash(signingData)
@@ -427,7 +466,7 @@ var cmdVerify = &cobra.Command{
 		runs := meta.Runs
 
 		// Step 1: recompute and verify the data hash.
-		computedHash, err := canonicalSessionHash(sess, runs)
+		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -524,7 +563,7 @@ var cmdCheck = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		computedHash, err := canonicalSessionHash(sess, runs)
+		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash)
 		if err != nil {
 			return err
 		}

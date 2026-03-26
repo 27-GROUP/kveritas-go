@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mamadouk/kveritas/internal/bundle"
 	"github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
 	"github.com/mamadouk/kveritas/internal/metrics"
@@ -141,6 +142,17 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 
 	if digest, err := envDigest(); err == nil {
 		rec.EnvDigest = digest
+	}
+
+	if len(sess.SourceHashes) == 0 {
+		files, err := bundle.CollectSourceFiles(sess.ProjectDir)
+		if err == nil && len(files) > 0 {
+			hashes, err := bundle.HashSourceFiles(sess.ProjectDir, files)
+			if err == nil {
+				sess.SourceHashes = hashes
+				fmt.Fprintf(os.Stderr, "[kveritas] Indexed %d source files for integrity tracking\n", len(hashes))
+			}
+		}
 	}
 
 	parser.WarnIfEmpty()

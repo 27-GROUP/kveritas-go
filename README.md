@@ -238,6 +238,29 @@ Heuristic patterns (Keras-style progress bars, JSON metric objects) are also det
 
 ---
 
+## Source Code Integrity
+
+K-Veritas prevents code modification after experiments are run.
+
+On the first `kveritas run`, all source files in the project directory are indexed and SHA-256 hashed. Supported extensions: `.py`, `.r`, `.R`, `.jl`, `.sh`, `.go`, `.cpp`, `.c`, `.h`, `.java`, `.rs`, `.js`, `.ts`, `.ipynb`, and more. Directories like `.git/`, `node_modules/`, `__pycache__/`, `venv/` are skipped.
+
+During `kveritas seal`, the CLI:
+1. Re-hashes all tracked source files and compares against stored hashes
+2. **Refuses to seal** if any file was modified after the runs
+3. Bundles all source files into `.kveritas/kveritas_bundle.zip`
+4. Includes the SHA-256 of the zip in the signed data hash
+
+This ensures the signed report is bound to the exact source code that produced the results.
+
+```bash
+kveritas init
+kveritas run -- python train.py      # source files indexed on first run
+# Editing train.py here will be detected
+kveritas seal                        # REFUSED if train.py was modified
+```
+
+---
+
 ## Attestation Server
 
 ```bash
@@ -288,7 +311,8 @@ kveritas-go/
 │   ├── crypto/crypto.go         RSA-PSS signing, SHA-256, canonical JSON
 │   ├── pdf/generator.go         Self-contained PDF/1.4 writer
 │   ├── client/client.go         HTTP client for attestation server
-│   └── hardware/hardware.go     Hardware snapshot + machine fingerprint
+│   ├── hardware/hardware.go     Hardware snapshot + machine fingerprint
+│   └── bundle/bundle.go         Source file collection, hashing, zip bundling
 ├── experiments/                  Mock experiment scripts
 ├── tests/
 │   ├── run_tests.sh             Integration test suite (14 tests)

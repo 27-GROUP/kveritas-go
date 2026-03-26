@@ -23,8 +23,9 @@ type Session struct {
 	Token      string    `json:"token"`
 	ServerURL  string    `json:"server_url"`
 	OrgToken   string    `json:"org_token,omitempty"`
-	Runs       []string  `json:"runs"`
-	Sealed     bool      `json:"sealed"`
+	Runs         []string          `json:"runs"`
+	Sealed       bool              `json:"sealed"`
+	SourceHashes map[string]string `json:"source_hashes,omitempty"`
 }
 
 type RunRecord struct {
@@ -71,9 +72,10 @@ type SealRecord struct {
 	Nonce            string    `json:"nonce"`
 	SignedAt         string    `json:"signed_at"`
 	Signature        string    `json:"signature"`
-	SignedMessageHash string   `json:"signed_message_hash"`
-	PublicKeyPEM     string    `json:"public_key_pem"`
-	ServerURL        string    `json:"server_url"`
+	SignedMessageHash string `json:"signed_message_hash"`
+	PublicKeyPEM      string `json:"public_key_pem"`
+	ServerURL         string `json:"server_url"`
+	SourceBundleHash  string `json:"source_bundle_hash,omitempty"`
 }
 
 // Find walks up from the working directory to find a .kveritas directory.
