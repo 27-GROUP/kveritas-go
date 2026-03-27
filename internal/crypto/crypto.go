@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 )
@@ -36,12 +37,18 @@ func HashBytes(b []byte) string {
 }
 
 // HashFile returns the SHA-256 hex digest of the named file.
+// Uses streaming hash to avoid loading the entire file into memory.
 func HashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	return HashBytes(data), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // CanonicalHash marshals v to deterministic JSON (sorted keys at every level)

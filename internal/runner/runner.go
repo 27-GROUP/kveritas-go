@@ -30,9 +30,25 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, fmt.Errorf("no command specified")
 	}
 
-	preHashes, err := hashFiles(fileHints)
-	if err != nil {
-		return nil, fmt.Errorf("pre-run file hashing: %w", err)
+	// Pre-hash files and snapshot hardware concurrently.
+	var preHashes map[string]string
+	var preHashErr error
+	var hwInfo session.HardwareInfo
+	var setupWg sync.WaitGroup
+
+	setupWg.Add(2)
+	go func() {
+		defer setupWg.Done()
+		preHashes, preHashErr = hashFiles(fileHints)
+	}()
+	go func() {
+		defer setupWg.Done()
+		hwInfo = hardware.Snapshot()
+	}()
+	setupWg.Wait()
+
+	if preHashErr != nil {
+		return nil, fmt.Errorf("pre-run file hashing: %w", preHashErr)
 	}
 
 	rec := &session.RunRecord{
@@ -42,7 +58,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		Command:   command,
 		StartAt:   time.Now().UTC(),
 		PreHashes: preHashes,
-		Hardware:  hardware.Snapshot(),
+		Hardware:  hwInfo,
 		Modified:  []string{},
 		Metrics:   []session.Metric{},
 	}
@@ -125,11 +141,44 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	rec.StderrHash = digestBuf(stderrBuf.Bytes())
 	rec.Metrics = allMetrics
 
-	postHashes, err := hashFiles(fileHints)
-	if err != nil {
-		return nil, fmt.Errorf("post-run file hashing: %w", err)
+	// Post-run: hash files, env digest, and source indexing concurrently.
+	var postHashes map[string]string
+	var postHashErr error
+	var envDig string
+
+	var postWg sync.WaitGroup
+	postWg.Add(2)
+	go func() {
+		defer postWg.Done()
+		postHashes, postHashErr = hashFiles(fileHints)
+	}()
+	go func() {
+		defer postWg.Done()
+		envDig, _ = envDigest()
+	}()
+
+	if len(sess.SourceHashes) == 0 {
+		postWg.Add(1)
+		go func() {
+			defer postWg.Done()
+			files, err := bundle.CollectSourceFiles(sess.ProjectDir)
+			if err == nil && len(files) > 0 {
+				hashes, err := bundle.HashSourceFiles(sess.ProjectDir, files)
+				if err == nil {
+					sess.SourceHashes = hashes
+					fmt.Fprintf(os.Stderr, "[kveritas] Indexed %d source files for integrity tracking\n", len(hashes))
+				}
+			}
+		}()
+	}
+
+	postWg.Wait()
+
+	if postHashErr != nil {
+		return nil, fmt.Errorf("post-run file hashing: %w", postHashErr)
 	}
 	rec.PostHashes = postHashes
+	rec.EnvDigest = envDig
 
 	for path, pre := range preHashes {
 		if post, ok := postHashes[path]; ok && post != pre {
@@ -138,21 +187,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}
 	if len(rec.Modified) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Warning: files modified during run: %v\n", rec.Modified)
-	}
-
-	if digest, err := envDigest(); err == nil {
-		rec.EnvDigest = digest
-	}
-
-	if len(sess.SourceHashes) == 0 {
-		files, err := bundle.CollectSourceFiles(sess.ProjectDir)
-		if err == nil && len(files) > 0 {
-			hashes, err := bundle.HashSourceFiles(sess.ProjectDir, files)
-			if err == nil {
-				sess.SourceHashes = hashes
-				fmt.Fprintf(os.Stderr, "[kveritas] Indexed %d source files for integrity tracking\n", len(hashes))
-			}
-		}
 	}
 
 	parser.WarnIfEmpty()

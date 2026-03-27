@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/mamadouk/kveritas/internal/crypto"
 )
@@ -73,14 +75,57 @@ func CollectSourceFiles(rootDir string) ([]string, error) {
 }
 
 // HashSourceFiles returns a map of relative path to SHA-256 hash for each file.
+// Files are hashed concurrently for speed.
 func HashSourceFiles(rootDir string, files []string) (map[string]string, error) {
-	result := make(map[string]string, len(files))
+	if len(files) == 0 {
+		return map[string]string{}, nil
+	}
+
+	type hashResult struct {
+		path string
+		hash string
+		err  error
+	}
+
+	workers := runtime.NumCPU()
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	ch := make(chan string, len(files))
+	results := make(chan hashResult, len(files))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for f := range ch {
+				h, err := crypto.HashFile(filepath.Join(rootDir, f))
+				results <- hashResult{path: f, hash: h, err: err}
+			}
+		}()
+	}
+
 	for _, f := range files {
-		h, err := crypto.HashFile(filepath.Join(rootDir, f))
-		if err != nil {
-			return nil, err
+		ch <- f
+	}
+	close(ch)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	result := make(map[string]string, len(files))
+	for hr := range results {
+		if hr.err != nil {
+			return nil, hr.err
 		}
-		result[f] = h
+		result[hr.path] = hr.hash
 	}
 	return result, nil
 }

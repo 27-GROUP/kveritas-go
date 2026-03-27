@@ -43,8 +43,27 @@ Workflow:
 	SilenceUsage: true,
 }
 
+var cmdClean = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove the .kveritas session directory",
+	Long: `Removes the .kveritas directory and all session data.
+Use this to abandon an in-progress session or clean up after a failed run.
+This action is irreversible -- the session token is lost.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return fmt.Errorf("no session found to clean")
+		}
+		if err := os.RemoveAll(kvDir); err != nil {
+			return fmt.Errorf("removing session directory: %w", err)
+		}
+		fmt.Println("Session directory removed.")
+		return nil
+	},
+}
+
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate)
+	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -177,6 +196,12 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
+		if rec.ExitCode != 0 {
+			fmt.Fprintf(os.Stderr, "[kveritas] Run failed with exit code %d -- discarding this run\n", rec.ExitCode)
+			fmt.Fprintf(os.Stderr, "[kveritas] Fix the issue (dependencies, environment, etc.) and try again\n")
+			return fmt.Errorf("command exited with code %d; only successful runs are recorded", rec.ExitCode)
+		}
+
 		if err := sess.SaveRun(kvDir, rec); err != nil {
 			return err
 		}
@@ -288,12 +313,11 @@ var cmdSeal = &cobra.Command{
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		sess.Sealed = true
-		if err := sess.Save(kvDir); err != nil {
-			return err
-		}
-		if err := session.SaveSeal(kvDir, seal); err != nil {
-			return err
+		// Session complete. Clean up the .kveritas directory.
+		if removeErr := os.RemoveAll(kvDir); removeErr != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not remove session directory: %v\n", removeErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "[kveritas] Session directory cleaned up\n")
 		}
 
 		fmt.Printf("Report sealed: %s\n", outPath)
