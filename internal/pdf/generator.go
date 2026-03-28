@@ -54,6 +54,7 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	for i, r := range runs {
 		b.addRunPage(i+1, r)
 	}
+	b.addRunHistoryPage(seal)
 	b.addCryptoPage(seal)
 
 	pdfBytes, err := b.render()
@@ -245,13 +246,73 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 	b.kv("Command", strings.Join(r.Command, " "))
 	b.kv("Start", r.StartAt.UTC().Format(time.RFC3339Nano))
 	b.kv("End", r.EndAt.UTC().Format(time.RFC3339Nano))
-	b.kv("Duration", fmt.Sprintf("%.3f s", r.DurationSec))
+	durStr := fmt.Sprintf("%.3f s", r.DurationSec)
+	if r.DurationFmt != "" {
+		durStr = r.DurationFmt
+	}
+	b.kv("Duration", durStr)
 	b.kv("Exit code", fmt.Sprintf("%d", r.ExitCode))
 	b.kv("Stdout lines", fmt.Sprintf("%d", r.StdoutLines))
 	b.kv("Hardware", fmt.Sprintf("%s / %s / %d CPU / %.1f GB RAM",
 		r.Hardware.OS, r.Hardware.Arch, r.Hardware.CPUCores, r.Hardware.MemGB))
 	if r.Hardware.GPUInfo != "" {
 		b.kv("GPU", r.Hardware.GPUInfo)
+	}
+
+	// Seed commitments (Addition 4)
+	if len(r.Seeds) > 0 {
+		b.heading("Seed Commitments")
+		for _, s := range r.Seeds {
+			b.body(fmt.Sprintf("  %s  committed at line %d  (%s)",
+				s.Source, s.Line, s.Timestamp.UTC().Format(time.RFC3339)))
+		}
+	}
+
+	// Phase timeline with hardware deltas (Addition 1)
+	if len(r.Phases) > 0 {
+		b.heading("Phase Timeline (Hardware Snapshots)")
+		for i, p := range r.Phases {
+			b.body(fmt.Sprintf("  PHASE %s  (line %d, %s)",
+				p.Name, p.Line, p.Timestamp.UTC().Format(time.RFC3339)))
+			c := p.Counters
+			b.body(fmt.Sprintf("    CPU: %.1fs  Mem: %.2f GB  Disk R/W: %.0f/%.0f MB",
+				c.CPUTimeSec, c.MemUsedGB, c.DiskReadMB, c.DiskWriteMB))
+			if c.GPUUtilPct > 0 || c.GPUMemUsedMB > 0 {
+				b.body(fmt.Sprintf("    GPU: %.0f%% util  %.0f MB mem  %.1fC  %.1fW",
+					c.GPUUtilPct, c.GPUMemUsedMB, c.GPUTempC, c.GPUPowerW))
+			}
+			if c.CPUTempC > 0 {
+				b.body(fmt.Sprintf("    CPU temp: %.1fC", c.CPUTempC))
+			}
+
+			// Delta from previous phase
+			if i > 0 {
+				prev := r.Phases[i-1]
+				lines := p.Line - prev.Line
+				dur := p.Timestamp.Sub(prev.Timestamp).Seconds()
+				cpuDelta := p.Counters.CPUTimeSec - prev.Counters.CPUTimeSec
+				diskR := p.Counters.DiskReadMB - prev.Counters.DiskReadMB
+				diskW := p.Counters.DiskWriteMB - prev.Counters.DiskWriteMB
+				b.body(fmt.Sprintf("    Delta from %s: %d lines, %.1fs wall, %.1fs CPU, %.0f/%.0f MB disk",
+					prev.Name, lines, dur, cpuDelta, diskR, diskW))
+				if p.Counters.GPUMemUsedMB > 0 && prev.Counters.GPUMemUsedMB > 0 {
+					memDelta := p.Counters.GPUMemUsedMB - prev.Counters.GPUMemUsedMB
+					b.body(fmt.Sprintf("    GPU mem delta: %.0f MB", memDelta))
+				}
+			}
+		}
+	}
+
+	// Inline claims (Addition 2)
+	if len(r.Claims) > 0 {
+		b.heading("Inline Claims (committed in stdout)")
+		for _, c := range r.Claims {
+			phase := ""
+			if c.Phase != "" {
+				phase = " phase=" + c.Phase
+			}
+			b.body(fmt.Sprintf("  %-30s  %.6g  (line %d%s)", c.Metric, c.Value, c.Line, phase))
+		}
 	}
 
 	if len(r.Metrics) > 0 {
@@ -291,6 +352,40 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 	if r.EnvDigest != "" {
 		b.mono("env     SHA-256: " + r.EnvDigest)
 	}
+	if r.MetricHash != "" {
+		b.mono("metrics SHA-256: " + r.MetricHash)
+	}
+}
+
+func (b *builder) addRunHistoryPage(seal *session.SealRecord) {
+	if seal.TotalRunCount == 0 && len(seal.RunHistory) == 0 {
+		return
+	}
+	b.newPage()
+	b.gap(10)
+	b.writeLine("Run History (Multi-Run Ledger)", "Hb", 15, mL)
+	b.gap(4)
+	b.hline()
+	b.gap(6)
+
+	b.body(fmt.Sprintf("Total invocations for this session: %d", seal.TotalRunCount))
+	b.body("The server ledger records every 'kveritas run' invocation, including failed")
+	b.body("and discarded runs. Actual metric values are not stored -- only their hashes.")
+	b.gap(6)
+
+	for _, entry := range seal.RunHistory {
+		status := "OK"
+		if entry.ExitCode != 0 {
+			status = fmt.Sprintf("EXIT %d", entry.ExitCode)
+		}
+		dur := entry.DurationFmt
+		if dur == "" {
+			dur = fmt.Sprintf("%.1fs", entry.DurationSec)
+		}
+		b.body(fmt.Sprintf("  Run %d  [%s]  %s  %d stdout lines  started %s",
+			entry.RunIndex+1, status, dur, entry.StdoutLines, entry.StartedAt[:19]))
+		b.mono(fmt.Sprintf("    metric_hash: %s", entry.MetricHash))
+	}
 }
 
 func (b *builder) addCryptoPage(seal *session.SealRecord) {
@@ -305,6 +400,9 @@ func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.kv("Sealed at", seal.SealedAt.UTC().Format(time.RFC3339Nano))
 	b.kv("Signed at", seal.SignedAt)
 	b.kv("Nonce", seal.Nonce)
+	if seal.SourceBundleHash != "" {
+		b.kv("Source bundle hash", seal.SourceBundleHash)
+	}
 
 	b.heading("Data Hash (SHA-256 of canonical experiment JSON)")
 	b.mono(seal.DataHash)
@@ -322,7 +420,8 @@ func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.body("2. Reconstruct payload: data_hash:nonce:signed_at")
 	b.body("3. Verify SHA-256(payload) == signed_message_hash.")
 	b.body("4. Verify RSA-PSS-SHA256 signature over payload using the server public key.")
-	b.body("Run:  kveritas verify <this_file.pdf>")
+	b.body("5. Upload the PDF (and optional bundle.zip) at kveritas-web.vercel.app/verify")
+	b.body("   or run:  kveritas verify <this_file.pdf>")
 }
 
 // render produces the raw PDF bytes (through %%EOF).

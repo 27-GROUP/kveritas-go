@@ -6,9 +6,11 @@
 //
 // Endpoints:
 //
-//	POST /api/v1/init       Register a session; returns an opaque token.
-//	POST /api/v1/seal       Validate token and sign data hash; returns attestation.
-//	GET  /api/v1/public-key Return the server's public key in PEM format.
+//	POST /api/v1/init        Register a session; returns an opaque token.
+//	POST /api/v1/seal        Validate token and sign data hash; returns attestation.
+//	POST /api/v1/record-run  Record a run invocation in the ledger.
+//	GET  /api/v1/run-history Return all run invocations for a session.
+//	GET  /api/v1/public-key  Return the server's public key in PEM format.
 //
 // Key storage: keys/private.pem and keys/public.pem. Generated on first run.
 package main
@@ -35,12 +37,23 @@ type serverSession struct {
 	Sealed    bool      `json:"sealed"`
 }
 
+type runInvocation struct {
+	RunIndex    int     `json:"run_index"`
+	StartedAt   string  `json:"started_at"`
+	DurationSec float64 `json:"duration_sec"`
+	DurationFmt string  `json:"duration_fmt"`
+	ExitCode    int     `json:"exit_code"`
+	MetricHash  string  `json:"metric_hash"`
+	StdoutLines int     `json:"stdout_lines"`
+}
+
 type srv struct {
 	privKey      *rsa.PrivateKey
 	pubKeyPEM    string
 	mu           sync.RWMutex
-	sessions     map[string]*serverSession // session_id -> session
-	tokens       map[string]string         // token -> session_id
+	sessions     map[string]*serverSession     // session_id -> session
+	tokens       map[string]string              // token -> session_id
+	runHistory   map[string][]runInvocation     // session_id -> runs
 }
 
 func main() {
@@ -57,10 +70,12 @@ func main() {
 	mux.HandleFunc("GET /api/v1/public-key", s.handlePublicKey)
 	mux.HandleFunc("POST /api/v1/init", s.handleInit)
 	mux.HandleFunc("POST /api/v1/seal", s.handleSeal)
+	mux.HandleFunc("POST /api/v1/record-run", s.handleRecordRun)
+	mux.HandleFunc("GET /api/v1/run-history", s.handleRunHistory)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{
 			"service": "K-Veritas Attestation Server",
-			"version": "1.0",
+			"version": "1.1",
 			"status":  "operational",
 		})
 	})
@@ -122,10 +137,11 @@ func newServer(keysDir string) (*srv, error) {
 	}
 
 	return &srv{
-		privKey:   privKey,
-		pubKeyPEM: string(pubPEM),
-		sessions:  make(map[string]*serverSession),
-		tokens:    make(map[string]string),
+		privKey:    privKey,
+		pubKeyPEM:  string(pubPEM),
+		sessions:   make(map[string]*serverSession),
+		tokens:     make(map[string]string),
+		runHistory: make(map[string][]runInvocation),
 	}, nil
 }
 
@@ -170,6 +186,68 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Session registered: %s machine=%s", req.SessionID, req.MachineID)
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// POST /api/v1/record-run
+func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token       string  `json:"token"`
+		SessionID   string  `json:"session_id"`
+		MachineID   string  `json:"machine_id"`
+		RunIndex    int     `json:"run_index"`
+		StartedAt   string  `json:"started_at"`
+		DurationSec float64 `json:"duration_sec"`
+		DurationFmt string  `json:"duration_fmt"`
+		ExitCode    int     `json:"exit_code"`
+		MetricHash  string  `json:"metric_hash"`
+		StdoutLines int     `json:"stdout_lines"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	s.mu.Lock()
+	sess, ok := s.sessions[req.SessionID]
+	if !ok || sess.Token != req.Token {
+		s.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "invalid session or token")
+		return
+	}
+	s.runHistory[req.SessionID] = append(s.runHistory[req.SessionID], runInvocation{
+		RunIndex:    req.RunIndex,
+		StartedAt:   req.StartedAt,
+		DurationSec: req.DurationSec,
+		DurationFmt: req.DurationFmt,
+		ExitCode:    req.ExitCode,
+		MetricHash:  req.MetricHash,
+		StdoutLines: req.StdoutLines,
+	})
+	s.mu.Unlock()
+
+	log.Printf("Run recorded: session=%s run=%d exit=%d", req.SessionID, req.RunIndex, req.ExitCode)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// GET /api/v1/run-history?session_id=<id>&token=<token>
+func (s *srv) handleRunHistory(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session_id")
+	token := r.URL.Query().Get("token")
+
+	s.mu.RLock()
+	sess, ok := s.sessions[sessionID]
+	if !ok || sess.Token != token {
+		s.mu.RUnlock()
+		writeError(w, http.StatusUnauthorized, "invalid session or token")
+		return
+	}
+	runs := s.runHistory[sessionID]
+	s.mu.RUnlock()
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"runs":       runs,
+		"total_runs": len(runs),
+	})
 }
 
 // POST /api/v1/seal

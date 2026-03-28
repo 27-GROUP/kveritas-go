@@ -39,7 +39,13 @@ Workflow:
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
   kveritas status            Show current session state.
-  kveritas update            Update to the latest version.`,
+  kveritas update            Update to the latest version.
+
+Protocol lines your script can emit:
+  KVERITAS_METRIC name=<id> value=<float> [step=<label>]
+  KVERITAS_PHASE  name=<phase>
+  KVERITAS_CLAIM  metric=<id> value=<float> [phase=<phase>]
+  KVERITAS_INPUT  src=seed:<value>`,
 	SilenceUsage: true,
 }
 
@@ -166,6 +172,18 @@ Metrics printed to stdout in the KVERITAS_METRIC format are captured:
 
   KVERITAS_METRIC name=val_accuracy value=0.9471 step=100
 
+Phase boundaries trigger hardware snapshots:
+
+  KVERITAS_PHASE name=eval
+
+Inline claims are committed into the stdout hash:
+
+  KVERITAS_CLAIM metric=accuracy value=0.9471 phase=eval
+
+Seed commitments are recorded before computation:
+
+  KVERITAS_INPUT src=seed:42
+
 Files listed with --files are hashed before and after the run.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -196,6 +214,14 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
+		// Record ALL runs to the server ledger (even failed ones) for the multi-run history.
+		if sess.ServerURL != "local" {
+			c := client.New(sess.ServerURL)
+			if ledgerErr := c.RecordRun(sess, rec); ledgerErr != nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record run in server ledger: %v\n", ledgerErr)
+			}
+		}
+
 		if rec.ExitCode != 0 {
 			fmt.Fprintf(os.Stderr, "[kveritas] Run failed with exit code %d -- discarding this run\n", rec.ExitCode)
 			fmt.Fprintf(os.Stderr, "[kveritas] Fix the issue (dependencies, environment, etc.) and try again\n")
@@ -211,7 +237,8 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
-		fmt.Printf("Run %s recorded (%d metrics)\n", rec.ID, len(rec.Metrics))
+		fmt.Printf("Run %s recorded (%d metrics, %d claims, %d phases, %d seeds)\n",
+			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
 		return nil
 	},
 }
@@ -304,6 +331,19 @@ var cmdSeal = &cobra.Command{
 		}
 		seal.SourceBundleHash = bundleHash
 
+		// Pull run history from server ledger (Addition 3).
+		if sess.ServerURL != "local" {
+			c := client.New(sess.ServerURL)
+			history, err := c.RunHistory(sess)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not retrieve run history: %v\n", err)
+			} else {
+				seal.RunHistory = history.Runs
+				seal.TotalRunCount = history.TotalRuns
+				fmt.Fprintf(os.Stderr, "[kveritas] Run history: %d total invocations for this session\n", history.TotalRuns)
+			}
+		}
+
 		outPath := sealOutput
 		if outPath == "" {
 			outPath = fmt.Sprintf("kveritas-report-%s.pdf", sess.ID[:8])
@@ -311,6 +351,17 @@ var cmdSeal = &cobra.Command{
 
 		if err := pdf.Generate(sess, runs, seal, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
+		}
+
+		// Copy bundle.zip alongside the PDF.
+		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
+		if _, err := os.Stat(bundleSrc); err == nil {
+			bundleDst := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "_bundle.zip"
+			if data, err := os.ReadFile(bundleSrc); err == nil {
+				if err := os.WriteFile(bundleDst, data, 0644); err == nil {
+					fmt.Fprintf(os.Stderr, "[kveritas] Bundle saved: %s\n", bundleDst)
+				}
+			}
 		}
 
 		// Session complete. Clean up the .kveritas directory.
@@ -322,11 +373,15 @@ var cmdSeal = &cobra.Command{
 
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
-		fmt.Printf("Runs:          %d\n\n", len(runs))
+		fmt.Printf("Runs:          %d\n", len(runs))
+		if seal.TotalRunCount > 0 {
+			fmt.Printf("Total runs:    %d (including failed/discarded)\n", seal.TotalRunCount)
+		}
+		fmt.Println()
 
 		for i, r := range runs {
 			cmd := strings.Join(r.Command, " ")
-			fmt.Printf("--- Run %d: %s ---\n", i+1, cmd)
+			fmt.Printf("--- Run %d: %s (%s) ---\n", i+1, cmd, r.DurationFmt)
 			if len(r.Metrics) == 0 {
 				fmt.Printf("  (no metrics captured)\n")
 			} else {
@@ -337,6 +392,22 @@ var cmdSeal = &cobra.Command{
 						step = fmt.Sprintf(" [step=%s]", m.Step)
 					}
 					fmt.Printf("  %-30s  %.6g  (%s)%s\n", m.Name, m.Value, src, step)
+				}
+			}
+			if len(r.Claims) > 0 {
+				fmt.Printf("  Claims:\n")
+				for _, c := range r.Claims {
+					phase := ""
+					if c.Phase != "" {
+						phase = fmt.Sprintf(" phase=%s", c.Phase)
+					}
+					fmt.Printf("    %-30s  %.6g  (line %d%s)\n", c.Metric, c.Value, c.Line, phase)
+				}
+			}
+			if len(r.Seeds) > 0 {
+				fmt.Printf("  Seed commitments:\n")
+				for _, s := range r.Seeds {
+					fmt.Printf("    %s (line %d)\n", s.Source, s.Line)
 				}
 			}
 		}
@@ -367,6 +438,12 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		Metrics     []session.Metric  `json:"metrics"`
 		Hardware    session.HardwareInfo `json:"hardware"`
 		EnvDigest   string            `json:"env_digest"`
+		// New fields (omitted when empty for backward compat with old verifier)
+		Phases     []session.PhaseEvent    `json:"phases,omitempty"`
+		Claims     []session.InlineClaim   `json:"claims,omitempty"`
+		Seeds      []session.SeedCommitment `json:"seeds,omitempty"`
+		MetricHash string                  `json:"metric_hash,omitempty"`
+		DurationFmt string                 `json:"duration_fmt,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -388,6 +465,11 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			Metrics:     r.Metrics,
 			Hardware:    r.Hardware,
 			EnvDigest:   r.EnvDigest,
+			Phases:      r.Phases,
+			Claims:      r.Claims,
+			Seeds:       r.Seeds,
+			MetricHash:  r.MetricHash,
+			DurationFmt: r.DurationFmt,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -534,15 +616,34 @@ var cmdVerify = &cobra.Command{
 		fmt.Printf("Runs:       %d\n", len(runs))
 		fmt.Printf("Data hash:  %s\n", seal.DataHash)
 
+		if seal.TotalRunCount > 0 {
+			fmt.Printf("Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
+		}
+
 		explicitCount := 0
+		claimCount := 0
+		phaseCount := 0
+		seedCount := 0
 		for _, r := range runs {
 			for _, m := range r.Metrics {
 				if m.Source == "explicit" {
 					explicitCount++
 				}
 			}
+			claimCount += len(r.Claims)
+			phaseCount += len(r.Phases)
+			seedCount += len(r.Seeds)
 		}
 		fmt.Printf("Metrics:    %d explicit\n", explicitCount)
+		if claimCount > 0 {
+			fmt.Printf("Claims:     %d inline\n", claimCount)
+		}
+		if phaseCount > 0 {
+			fmt.Printf("Phases:     %d boundaries\n", phaseCount)
+		}
+		if seedCount > 0 {
+			fmt.Printf("Seeds:      %d commitments\n", seedCount)
+		}
 		return nil
 	},
 }
@@ -705,8 +806,9 @@ var cmdStatus = &cobra.Command{
 			if r.ExitCode != 0 {
 				statusStr = fmt.Sprintf("EXIT %d", r.ExitCode)
 			}
-			fmt.Printf("  Run %d: [%s] %s  %.1fs  %d metrics\n",
-				i+1, statusStr, strings.Join(r.Command, " "), r.DurationSec, len(r.Metrics))
+			fmt.Printf("  Run %d: [%s] %s  %s  %d metrics  %d claims  %d phases  %d seeds\n",
+				i+1, statusStr, strings.Join(r.Command, " "), r.DurationFmt,
+				len(r.Metrics), len(r.Claims), len(r.Phases), len(r.Seeds))
 		}
 
 		if sess.Sealed {

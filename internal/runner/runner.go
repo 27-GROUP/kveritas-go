@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
 	"sync"
 	"time"
 
@@ -22,9 +23,9 @@ import (
 
 // Run executes command as a monitored subprocess.
 //
-// It tees stdout and stderr to the terminal while simultaneously hashing them
-// and parsing metrics. Files listed in fileHints are hashed before and after
-// the run; any file whose hash changes is recorded in RunRecord.Modified.
+// It tees stdout and stderr to the terminal while simultaneously hashing them,
+// parsing metrics, capturing phase boundaries with hardware snapshots, recording
+// inline claims, and tracking seed commitments.
 func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
@@ -61,16 +62,23 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		Hardware:  hwInfo,
 		Modified:  []string{},
 		Metrics:   []session.Metric{},
+		Phases:    []session.PhaseEvent{},
+		Claims:    []session.InlineClaim{},
+		Seeds:     []session.SeedCommitment{},
 	}
 
 	fmt.Fprintf(os.Stderr, "[kveritas] Monitoring: %v\n", command)
 
 	var (
-		stdoutBuf   bytes.Buffer
-		stderrBuf   bytes.Buffer
-		stdoutLines int
-		allMetrics  []session.Metric
-		mu          sync.Mutex
+		stdoutBuf    bytes.Buffer
+		stderrBuf    bytes.Buffer
+		metricLines  bytes.Buffer // only metric/claim lines for hashing
+		stdoutLines  int
+		allMetrics   []session.Metric
+		allPhases    []session.PhaseEvent
+		allClaims    []session.InlineClaim
+		allSeeds     []session.SeedCommitment
+		mu           sync.Mutex
 	)
 
 	parser := &metrics.Parser{}
@@ -95,16 +103,56 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdoutPipe)
+		// Increase scanner buffer for long lines
+		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 		lineNum := 0
 		for scanner.Scan() {
 			lineNum++
 			line := scanner.Text()
 			fmt.Fprintln(os.Stdout, line)
 			fmt.Fprintln(&stdoutBuf, line)
+
+			// Check for KVERITAS_PHASE
+			if phaseName, ok := parser.ParsePhase(line); ok {
+				pe := hardware.CapturePhaseEvent(phaseName, lineNum)
+				mu.Lock()
+				allPhases = append(allPhases, pe)
+				mu.Unlock()
+				fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (line %d, hardware snapshot captured)\n", phaseName, lineNum)
+				continue
+			}
+
+			// Check for KVERITAS_CLAIM
+			if claim, ok := parser.ParseClaim(line, lineNum); ok {
+				mu.Lock()
+				allClaims = append(allClaims, *claim)
+				mu.Unlock()
+				fmt.Fprintln(&metricLines, line)
+				fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (line %d)\n", claim.Metric, claim.Value, lineNum)
+				continue
+			}
+
+			// Check for KVERITAS_INPUT seed
+			if seedVal, ok := parser.ParseSeed(line); ok {
+				sc := session.SeedCommitment{
+					Source:    "seed:" + seedVal,
+					Value:     seedVal,
+					Line:      lineNum,
+					Timestamp: time.Now().UTC(),
+				}
+				mu.Lock()
+				allSeeds = append(allSeeds, sc)
+				mu.Unlock()
+				fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (line %d)\n", seedVal, lineNum)
+				continue
+			}
+
+			// Check for KVERITAS_METRIC
 			if m, ok := parser.Parse(line, lineNum); ok {
 				mu.Lock()
 				allMetrics = append(allMetrics, *m)
 				mu.Unlock()
+				fmt.Fprintln(&metricLines, line)
 			} else {
 				heuristics := parser.ParseHeuristic(line, lineNum)
 				if len(heuristics) > 0 {
@@ -135,11 +183,16 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 
 	rec.EndAt = time.Now().UTC()
 	rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
+	rec.DurationFmt = session.FormatDuration(rec.DurationSec)
 	rec.ExitCode = exitCode
 	rec.StdoutLines = stdoutLines
 	rec.StdoutHash = digestBuf(stdoutBuf.Bytes())
 	rec.StderrHash = digestBuf(stderrBuf.Bytes())
 	rec.Metrics = allMetrics
+	rec.Phases = allPhases
+	rec.Claims = allClaims
+	rec.Seeds = allSeeds
+	rec.MetricHash = digestBuf(metricLines.Bytes())
 
 	// Post-run: hash files, env digest, and source indexing concurrently.
 	var postHashes map[string]string
@@ -190,8 +243,8 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}
 
 	parser.WarnIfEmpty()
-	fmt.Fprintf(os.Stderr, "[kveritas] Run complete (%.2fs, exit %d)\n",
-		rec.DurationSec, rec.ExitCode)
+	fmt.Fprintf(os.Stderr, "[kveritas] Run complete (%s, exit %d)\n",
+		rec.DurationFmt, rec.ExitCode)
 
 	return rec, nil
 }
@@ -235,4 +288,16 @@ func envDigest() (string, error) {
 		return digestBuf(out), nil
 	}
 	return "", fmt.Errorf("no package manager available (tried pip, R, Julia)")
+}
+
+// MetricLinesDigest computes the hash of concatenated explicit metric and claim
+// lines from the run's stdout, for ledger recording. The actual values stay
+// private; only the hash is published.
+func MetricLinesDigest(metricLines []string) string {
+	h := sha256.New()
+	for _, l := range metricLines {
+		h.Write([]byte(l))
+		h.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
