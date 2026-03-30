@@ -220,7 +220,7 @@ Reports are fully compatible with the [K-Veritas Web Verifier](https://kveritas-
 1. Go to [kveritas-web.vercel.app/verify](https://kveritas-web.vercel.app/verify)
 2. Upload report PDF, bundle ZIP, and manuscript PDF
 3. Click Verify
-4. See the Nutrition Label: crypto status, HMCA score, code anomalies, claim mismatches
+4. See the Review Summary: crypto status, HMCA score, recorded metrics, code audit verdict, claim mismatches
 
 ---
 
