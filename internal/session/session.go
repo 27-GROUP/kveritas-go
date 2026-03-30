@@ -152,6 +152,10 @@ type SealRecord struct {
 	PublicKeyPEM      string `json:"public_key_pem"`
 	ServerURL         string `json:"server_url"`
 	SourceBundleHash  string `json:"source_bundle_hash,omitempty"`
+	// CanonicalJSON is the exact bytes that were hashed to produce DataHash.
+	// Verifiers re-hash this directly instead of reconstructing the signing
+	// data structure, making verification immune to future field additions.
+	CanonicalJSON    string `json:"canonical_json,omitempty"`
 	// Run history from server ledger, embedded at seal time (Addition 3)
 	RunHistory       []LedgerRunEntry `json:"run_history,omitempty"`
 	TotalRunCount    int              `json:"total_run_count,omitempty"`

@@ -326,7 +326,7 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
 		}
 
-		dataHash, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
+		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -342,6 +342,7 @@ var cmdSeal = &cobra.Command{
 			return err
 		}
 		seal.SourceBundleHash = bundleHash
+		seal.CanonicalJSON = string(canonicalBytes)
 
 		// Pull run history from server ledger (Addition 3).
 		if sess.ServerURL != "local" {
@@ -433,7 +434,7 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
 	type runPayload struct {
 		ID             string            `json:"id"`
 		Index          int               `json:"index"`
@@ -503,7 +504,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		signingData["hmca"] = hmcaResult
 	}
 
-	return kvcrypto.CanonicalHash(signingData)
+	return kvcrypto.CanonicalHashWithBytes(signingData)
 }
 
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
@@ -597,7 +598,7 @@ var cmdVerify = &cobra.Command{
 		verifyHMCA := hmca.Analyze(runs, verifySamples)
 
 		// Step 1: recompute and verify the data hash.
-		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -718,7 +719,7 @@ var cmdCheck = &cobra.Command{
 			checkSamples = append(checkSamples, r.HardwareSamples...)
 		}
 		checkHMCA := hmca.Analyze(runs, checkSamples)
-		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
 		if err != nil {
 			return err
 		}
