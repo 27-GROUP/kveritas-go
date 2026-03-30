@@ -15,6 +15,7 @@ import (
 	"github.com/mamadouk/kveritas/internal/client"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
+	"github.com/mamadouk/kveritas/internal/hmca"
 	"github.com/mamadouk/kveritas/internal/pdf"
 	"github.com/mamadouk/kveritas/internal/runner"
 	"github.com/mamadouk/kveritas/internal/session"
@@ -299,6 +300,17 @@ var cmdSeal = &cobra.Command{
 			}
 		}
 
+		// Run Hardware-Metric Consistency Analyzer.
+		var allSamples []session.HardwareSample
+		for _, r := range runs {
+			allSamples = append(allSamples, r.HardwareSamples...)
+		}
+		hmcaResult := hmca.Analyze(runs, allSamples)
+		fmt.Fprintf(os.Stderr, "[kveritas] HMCA score: %.2f  verdict: %s\n", hmcaResult.Score, hmcaResult.Verdict)
+		for _, f := range hmcaResult.Flags {
+			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
+		}
+
 		var bundleHash string
 		if len(sess.SourceHashes) > 0 {
 			files := make([]string, 0, len(sess.SourceHashes))
@@ -314,7 +326,7 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
 		}
 
-		dataHash, err := canonicalSessionHash(sess, runs, bundleHash)
+		dataHash, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -349,7 +361,7 @@ var cmdSeal = &cobra.Command{
 			outPath = fmt.Sprintf("kveritas-report-%s.pdf", sess.ID[:8])
 		}
 
-		if err := pdf.Generate(sess, runs, seal, outPath); err != nil {
+		if err := pdf.Generate(sess, runs, seal, &hmcaResult, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
@@ -374,6 +386,7 @@ var cmdSeal = &cobra.Command{
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
 		fmt.Printf("Runs:          %d\n", len(runs))
+		fmt.Printf("HMCA score:    %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
 		if seal.TotalRunCount > 0 {
 			fmt.Printf("Total runs:    %d (including failed/discarded)\n", seal.TotalRunCount)
 		}
@@ -420,56 +433,58 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string) (string, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, error) {
 	type runPayload struct {
-		ID          string            `json:"id"`
-		Index       int               `json:"index"`
-		Command     []string          `json:"command"`
-		StartAt     string            `json:"start_at"`
-		EndAt       string            `json:"end_at"`
-		DurationSec float64           `json:"duration_sec"`
-		ExitCode    int               `json:"exit_code"`
-		PreHashes   map[string]string `json:"pre_hashes"`
-		PostHashes  map[string]string `json:"post_hashes"`
-		Modified    []string          `json:"modified_files"`
-		StdoutHash  string            `json:"stdout_hash"`
-		StderrHash  string            `json:"stderr_hash"`
-		StdoutLines int               `json:"stdout_lines"`
-		Metrics     []session.Metric  `json:"metrics"`
-		Hardware    session.HardwareInfo `json:"hardware"`
-		EnvDigest   string            `json:"env_digest"`
+		ID             string            `json:"id"`
+		Index          int               `json:"index"`
+		Command        []string          `json:"command"`
+		StartAt        string            `json:"start_at"`
+		EndAt          string            `json:"end_at"`
+		DurationSec    float64           `json:"duration_sec"`
+		ExitCode       int               `json:"exit_code"`
+		PreHashes      map[string]string `json:"pre_hashes"`
+		PostHashes     map[string]string `json:"post_hashes"`
+		Modified       []string          `json:"modified_files"`
+		StdoutHash     string            `json:"stdout_hash"`
+		StderrHash     string            `json:"stderr_hash"`
+		StdoutLines    int               `json:"stdout_lines"`
+		Metrics        []session.Metric  `json:"metrics"`
+		Hardware       session.HardwareInfo `json:"hardware"`
+		EnvDigest      string            `json:"env_digest"`
 		// New fields (omitted when empty for backward compat with old verifier)
-		Phases     []session.PhaseEvent    `json:"phases,omitempty"`
-		Claims     []session.InlineClaim   `json:"claims,omitempty"`
-		Seeds      []session.SeedCommitment `json:"seeds,omitempty"`
-		MetricHash string                  `json:"metric_hash,omitempty"`
-		DurationFmt string                 `json:"duration_fmt,omitempty"`
+		Phases         []session.PhaseEvent    `json:"phases,omitempty"`
+		Claims         []session.InlineClaim   `json:"claims,omitempty"`
+		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
+		MetricHash     string                  `json:"metric_hash,omitempty"`
+		DurationFmt    string                  `json:"duration_fmt,omitempty"`
+		SourceCodeHash string                  `json:"source_code_hash,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
 	for _, r := range runs {
 		rp := runPayload{
-			ID:          r.ID,
-			Index:       r.Index,
-			Command:     r.Command,
-			StartAt:     r.StartAt.UTC().Format(time.RFC3339Nano),
-			EndAt:       r.EndAt.UTC().Format(time.RFC3339Nano),
-			DurationSec: r.DurationSec,
-			ExitCode:    r.ExitCode,
-			PreHashes:   r.PreHashes,
-			PostHashes:  r.PostHashes,
-			Modified:    r.Modified,
-			StdoutHash:  r.StdoutHash,
-			StderrHash:  r.StderrHash,
-			StdoutLines: r.StdoutLines,
-			Metrics:     r.Metrics,
-			Hardware:    r.Hardware,
-			EnvDigest:   r.EnvDigest,
-			Phases:      r.Phases,
-			Claims:      r.Claims,
-			Seeds:       r.Seeds,
-			MetricHash:  r.MetricHash,
-			DurationFmt: r.DurationFmt,
+			ID:             r.ID,
+			Index:          r.Index,
+			Command:        r.Command,
+			StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
+			EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
+			DurationSec:    r.DurationSec,
+			ExitCode:       r.ExitCode,
+			PreHashes:      r.PreHashes,
+			PostHashes:     r.PostHashes,
+			Modified:       r.Modified,
+			StdoutHash:     r.StdoutHash,
+			StderrHash:     r.StderrHash,
+			StdoutLines:    r.StdoutLines,
+			Metrics:        r.Metrics,
+			Hardware:       r.Hardware,
+			EnvDigest:      r.EnvDigest,
+			Phases:         r.Phases,
+			Claims:         r.Claims,
+			Seeds:          r.Seeds,
+			MetricHash:     r.MetricHash,
+			DurationFmt:    r.DurationFmt,
+			SourceCodeHash: r.SourceCodeHash,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -483,6 +498,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	}
 	if bundleHash != "" {
 		signingData["source_bundle_hash"] = bundleHash
+	}
+	if hmcaResult != nil {
+		signingData["hmca"] = hmcaResult
 	}
 
 	return kvcrypto.CanonicalHash(signingData)
@@ -571,8 +589,15 @@ var cmdVerify = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
+		// Recompute HMCA for verification.
+		var verifySamples []session.HardwareSample
+		for _, r := range runs {
+			verifySamples = append(verifySamples, r.HardwareSamples...)
+		}
+		verifyHMCA := hmca.Analyze(runs, verifySamples)
+
 		// Step 1: recompute and verify the data hash.
-		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash)
+		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -688,7 +713,12 @@ var cmdCheck = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash)
+		var checkSamples []session.HardwareSample
+		for _, r := range runs {
+			checkSamples = append(checkSamples, r.HardwareSamples...)
+		}
+		checkHMCA := hmca.Analyze(runs, checkSamples)
+		computedHash, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
 		if err != nil {
 			return err
 		}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 
 	"sync"
 	"time"
@@ -51,6 +52,10 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	if preHashErr != nil {
 		return nil, fmt.Errorf("pre-run file hashing: %w", preHashErr)
 	}
+
+	// Start background hardware sampler (15-second polling interval).
+	sampler := hardware.NewSampler(15 * time.Second)
+	sampler.Start()
 
 	rec := &session.RunRecord{
 		ID:        uuid.New().String()[:8],
@@ -181,6 +186,12 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
+	// Stop background hardware sampler and collect samples.
+	hwSamples := sampler.Stop()
+	if len(hwSamples) > 0 {
+		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
+	}
+
 	rec.EndAt = time.Now().UTC()
 	rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
 	rec.DurationFmt = session.FormatDuration(rec.DurationSec)
@@ -193,6 +204,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	rec.Claims = allClaims
 	rec.Seeds = allSeeds
 	rec.MetricHash = digestBuf(metricLines.Bytes())
+	rec.HardwareSamples = hwSamples
 
 	// Post-run: hash files, env digest, and source indexing concurrently.
 	var postHashes map[string]string
@@ -232,6 +244,11 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}
 	rec.PostHashes = postHashes
 	rec.EnvDigest = envDig
+
+	// Compute aggregate source code hash from all tracked source files.
+	if len(sess.SourceHashes) > 0 {
+		rec.SourceCodeHash = computeAggregateSourceHash(sess.SourceHashes)
+	}
 
 	for path, pre := range preHashes {
 		if post, ok := postHashes[path]; ok && post != pre {
@@ -297,6 +314,25 @@ func MetricLinesDigest(metricLines []string) string {
 	h := sha256.New()
 	for _, l := range metricLines {
 		h.Write([]byte(l))
+		h.Write([]byte("\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func computeAggregateSourceHash(hashes map[string]string) string {
+	if len(hashes) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(hashes))
+	for p := range hashes {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	h := sha256.New()
+	for _, p := range paths {
+		h.Write([]byte(p))
+		h.Write([]byte(":"))
+		h.Write([]byte(hashes[p]))
 		h.Write([]byte("\n"))
 	}
 	return hex.EncodeToString(h.Sum(nil))

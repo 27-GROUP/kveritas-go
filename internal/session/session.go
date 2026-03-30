@@ -56,6 +56,10 @@ type RunRecord struct {
 	Seeds      []SeedCommitment `json:"seeds,omitempty"`
 	// Hash of only the metric lines for ledger (Addition 3)
 	MetricHash string          `json:"metric_hash,omitempty"`
+	// Background hardware samples taken during the run
+	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
+	// Aggregate hash of all tracked source files
+	SourceCodeHash string `json:"source_code_hash,omitempty"`
 }
 
 type Metric struct {
@@ -111,6 +115,19 @@ type SeedCommitment struct {
 	Value    string    `json:"value"`
 	Line     int       `json:"line"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// HardwareSample is a timestamped hardware reading taken during a run.
+type HardwareSample struct {
+	Timestamp time.Time        `json:"timestamp"`
+	Counters  HardwareCounters `json:"counters"`
+}
+
+// HMCAResult is the output of the Hardware-Metric Consistency Analyzer.
+type HMCAResult struct {
+	Score   float64  `json:"hmca_score"`
+	Flags   []string `json:"hmca_flags,omitempty"`
+	Verdict string   `json:"hmca_verdict"`
 }
 
 // LedgerRunEntry is a run record from the server ledger (no actual metric values).

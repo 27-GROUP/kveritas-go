@@ -47,7 +47,7 @@ type EmbeddedData struct {
 }
 
 // Generate writes a signed K-Veritas report to outPath.
-func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, outPath string) error {
+func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, hmcaResult *session.HMCAResult, outPath string) error {
 	b := newBuilder()
 
 	b.addCoverPage(sess, seal, runs)
@@ -55,6 +55,9 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 		b.addRunPage(i+1, r)
 	}
 	b.addRunHistoryPage(seal)
+	if hmcaResult != nil {
+		b.addHMCAPage(hmcaResult)
+	}
 	b.addCryptoPage(seal)
 
 	pdfBytes, err := b.render()
@@ -386,6 +389,40 @@ func (b *builder) addRunHistoryPage(seal *session.SealRecord) {
 			entry.RunIndex+1, status, dur, entry.StdoutLines, entry.StartedAt[:19]))
 		b.mono(fmt.Sprintf("    metric_hash: %s", entry.MetricHash))
 	}
+}
+
+func (b *builder) addHMCAPage(result *session.HMCAResult) {
+	b.newPage()
+	b.gap(10)
+	b.writeLine("Hardware-Metric Consistency Analysis", "Hb", 15, mL)
+	b.gap(4)
+	b.hline()
+	b.gap(6)
+
+	b.body("The HMCA engine checks whether reported metrics are consistent with")
+	b.body("observed hardware activity during experiment execution.")
+	b.gap(6)
+
+	b.kv("Score", fmt.Sprintf("%.2f / 1.00", result.Score))
+	b.kv("Verdict", result.Verdict)
+	b.gap(6)
+
+	if len(result.Flags) > 0 {
+		b.heading("Flags")
+		for _, f := range result.Flags {
+			b.body("  " + f)
+		}
+	} else {
+		b.body("No consistency flags raised.")
+	}
+
+	b.gap(10)
+	b.heading("HMCA Rules")
+	b.body("ZERO_COST_METRIC: metrics reported in under 1 second of execution")
+	b.body("LOW_ACTIVITY_HIGH_GAIN: high metric values with minimal CPU/memory activity")
+	b.body("GPU_CLAIM_NO_GPU: GPU counters present but no GPU detected in hardware snapshot")
+	b.body("IDLE_RUN: hardware remained idle for the entire run duration")
+	b.body("PHASE_MISMATCH: evaluation phase used disproportionately more CPU than training")
 }
 
 func (b *builder) addCryptoPage(seal *session.SealRecord) {
