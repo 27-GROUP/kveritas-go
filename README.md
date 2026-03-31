@@ -291,4 +291,4 @@ The frontend and API also have private mirrors (`Mamadou2727/kveritas-web`, `Mam
 
 ## License
 
-MIT
+MIT License
