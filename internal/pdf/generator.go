@@ -457,7 +457,7 @@ func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.body("2. Reconstruct payload: data_hash:nonce:signed_at")
 	b.body("3. Verify SHA-256(payload) == signed_message_hash.")
 	b.body("4. Verify RSA-PSS-SHA256 signature over payload using the server public key.")
-	b.body("5. Upload the PDF (and optional bundle.zip) at kveritas-web.vercel.app/verify")
+	b.body("5. Upload the PDF (and optional bundle.zip) at kveritas.org/verify")
 	b.body("   or run:  kveritas verify <this_file.pdf>")
 }
 
