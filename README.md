@@ -279,9 +279,13 @@ bash tests/run_tests.sh
 
 ## Related Repositories
 
-- [kveritas-api](https://github.com/27-GROUP/kveritas-api) -- FastAPI backend for signing and verification
-- [kveritas-web](https://github.com/27-GROUP/kveritas-web) -- Next.js frontend for browser-based verification
-- [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) -- Pre-built binaries for all platforms
+| Repo | Purpose | Live URL |
+|---|---|---|
+| [kveritas-api](https://github.com/27-GROUP/kveritas-api) | FastAPI backend (signing, verification, AI audit) | [kveritas-api-production.up.railway.app](https://kveritas-api-production.up.railway.app) |
+| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Next.js frontend (web verifier, admin dashboard) | [kveritas.org](https://kveritas.org) |
+| [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) | Pre-built binaries for all platforms | |
+
+The frontend and API also have private mirrors (`Mamadou2727/kveritas-web`, `Mamadou2727/kveritas-api`) connected to Vercel and Railway for auto-deploy. The Go CLI repo stays on 27-GROUP only.
 
 ---
 
