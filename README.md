@@ -89,7 +89,23 @@ KVERITAS_INPUT src=seed:<value>
 
 ---
 
-## Hardware Sampler
+## Hardware Detection
+
+At session start, K-Veritas captures a full hardware snapshot:
+
+| Field | Source |
+|---|---|
+| CPU model | `/proc/cpuinfo` (Linux), `sysctl` (macOS) |
+| CPU cores | `runtime.NumCPU()` |
+| Memory (GB) | `/proc/meminfo` (Linux), `sysctl` (macOS) |
+| GPU names | `nvidia-smi --query-gpu=name` (per GPU) |
+| GPU count | Number of GPUs detected (multi-GPU / cluster support) |
+| GPU memory | `nvidia-smi --query-gpu=memory.total` |
+| OS / Arch | `runtime.GOOS` / `runtime.GOARCH` |
+
+Multi-GPU setups report each GPU individually. The GPU count and names array are included in the signed data.
+
+### Hardware Sampler
 
 During `kveritas run`, a background goroutine polls hardware counters every 15 seconds: CPU time, memory usage, GPU utilization, GPU memory, CPU temperature, and disk I/O. These samples are included in the signed data, providing a time-series trace of actual compute activity.
 
