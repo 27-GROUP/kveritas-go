@@ -75,8 +75,11 @@ type HardwareInfo struct {
 	OS       string  `json:"os"`
 	Arch     string  `json:"arch"`
 	CPUCores int     `json:"cpu_cores"`
+	CPUModel string  `json:"cpu_model,omitempty"`
 	MemGB    float64 `json:"mem_gb"`
 	GPUInfo  string  `json:"gpu_info,omitempty"`
+	GPUCount int     `json:"gpu_count,omitempty"`
+	GPUNames []string `json:"gpu_names,omitempty"`
 }
 
 // HardwareCounters captures detailed hardware state at a point in time.

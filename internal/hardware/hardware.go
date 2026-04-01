@@ -16,13 +16,18 @@ import (
 
 func Snapshot() session.HardwareInfo {
 	hostname, _ := os.Hostname()
+	gpuNames := gpuNames()
+	gpuSummary := gpuInfo()
 	return session.HardwareInfo{
 		Hostname: hostname,
 		OS:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
 		CPUCores: runtime.NumCPU(),
+		CPUModel: cpuModel(),
 		MemGB:    memGB(),
-		GPUInfo:  gpuInfo(),
+		GPUInfo:  gpuSummary,
+		GPUCount: len(gpuNames),
+		GPUNames: gpuNames,
 	}
 }
 
@@ -66,6 +71,60 @@ func CapturePhaseEvent(name string, line int) session.PhaseEvent {
 		Timestamp: time.Now().UTC(),
 		Counters:  DetailedCounters(),
 	}
+}
+
+func cpuModel() string {
+	switch runtime.GOOS {
+	case "linux":
+		data, err := os.ReadFile("/proc/cpuinfo")
+		if err != nil {
+			return ""
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "model name") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					return strings.TrimSpace(parts[1])
+				}
+			}
+		}
+	case "darwin":
+		out, err := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
+	return ""
+}
+
+func gpuNames() []string {
+	out, err := exec.Command(
+		"nvidia-smi",
+		"--query-gpu=name",
+		"--format=csv,noheader",
+	).Output()
+	if err == nil {
+		var names []string
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			name := strings.TrimSpace(line)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names
+	}
+	out, err = exec.Command("rocm-smi", "--showproductname").Output()
+	if err == nil {
+		var names []string
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "=") && !strings.Contains(line, "GPU") {
+				names = append(names, "AMD "+line)
+			}
+		}
+		return names
+	}
+	return nil
 }
 
 func memGB() float64 {
