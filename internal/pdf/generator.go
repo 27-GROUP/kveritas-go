@@ -47,16 +47,12 @@ type EmbeddedData struct {
 }
 
 // Generate writes a signed K-Veritas report to outPath.
-func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, hmcaResult *session.HMCAResult, outPath string) error {
+func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, outPath string) error {
 	b := newBuilder()
 
 	b.addCoverPage(sess, seal, runs)
 	for i, r := range runs {
 		b.addRunPage(i+1, r)
-	}
-	b.addRunHistoryPage(seal)
-	if hmcaResult != nil {
-		b.addHMCAPage(hmcaResult)
 	}
 	b.addCryptoPage(seal)
 
@@ -249,73 +245,13 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 	b.kv("Command", strings.Join(r.Command, " "))
 	b.kv("Start", r.StartAt.UTC().Format(time.RFC3339Nano))
 	b.kv("End", r.EndAt.UTC().Format(time.RFC3339Nano))
-	durStr := fmt.Sprintf("%.3f s", r.DurationSec)
-	if r.DurationFmt != "" {
-		durStr = r.DurationFmt
-	}
-	b.kv("Duration", durStr)
+	b.kv("Duration", fmt.Sprintf("%.3f s", r.DurationSec))
 	b.kv("Exit code", fmt.Sprintf("%d", r.ExitCode))
 	b.kv("Stdout lines", fmt.Sprintf("%d", r.StdoutLines))
 	b.kv("Hardware", fmt.Sprintf("%s / %s / %d CPU / %.1f GB RAM",
 		r.Hardware.OS, r.Hardware.Arch, r.Hardware.CPUCores, r.Hardware.MemGB))
 	if r.Hardware.GPUInfo != "" {
 		b.kv("GPU", r.Hardware.GPUInfo)
-	}
-
-	// Seed commitments (Addition 4)
-	if len(r.Seeds) > 0 {
-		b.heading("Seed Commitments")
-		for _, s := range r.Seeds {
-			b.body(fmt.Sprintf("  %s  committed at line %d  (%s)",
-				s.Source, s.Line, s.Timestamp.UTC().Format(time.RFC3339)))
-		}
-	}
-
-	// Phase timeline with hardware deltas (Addition 1)
-	if len(r.Phases) > 0 {
-		b.heading("Phase Timeline (Hardware Snapshots)")
-		for i, p := range r.Phases {
-			b.body(fmt.Sprintf("  PHASE %s  (line %d, %s)",
-				p.Name, p.Line, p.Timestamp.UTC().Format(time.RFC3339)))
-			c := p.Counters
-			b.body(fmt.Sprintf("    CPU: %.1fs  Mem: %.2f GB  Disk R/W: %.0f/%.0f MB",
-				c.CPUTimeSec, c.MemUsedGB, c.DiskReadMB, c.DiskWriteMB))
-			if c.GPUUtilPct > 0 || c.GPUMemUsedMB > 0 {
-				b.body(fmt.Sprintf("    GPU: %.0f%% util  %.0f MB mem  %.1fC  %.1fW",
-					c.GPUUtilPct, c.GPUMemUsedMB, c.GPUTempC, c.GPUPowerW))
-			}
-			if c.CPUTempC > 0 {
-				b.body(fmt.Sprintf("    CPU temp: %.1fC", c.CPUTempC))
-			}
-
-			// Delta from previous phase
-			if i > 0 {
-				prev := r.Phases[i-1]
-				lines := p.Line - prev.Line
-				dur := p.Timestamp.Sub(prev.Timestamp).Seconds()
-				cpuDelta := p.Counters.CPUTimeSec - prev.Counters.CPUTimeSec
-				diskR := p.Counters.DiskReadMB - prev.Counters.DiskReadMB
-				diskW := p.Counters.DiskWriteMB - prev.Counters.DiskWriteMB
-				b.body(fmt.Sprintf("    Delta from %s: %d lines, %.1fs wall, %.1fs CPU, %.0f/%.0f MB disk",
-					prev.Name, lines, dur, cpuDelta, diskR, diskW))
-				if p.Counters.GPUMemUsedMB > 0 && prev.Counters.GPUMemUsedMB > 0 {
-					memDelta := p.Counters.GPUMemUsedMB - prev.Counters.GPUMemUsedMB
-					b.body(fmt.Sprintf("    GPU mem delta: %.0f MB", memDelta))
-				}
-			}
-		}
-	}
-
-	// Inline claims (Addition 2)
-	if len(r.Claims) > 0 {
-		b.heading("Inline Claims (committed in stdout)")
-		for _, c := range r.Claims {
-			phase := ""
-			if c.Phase != "" {
-				phase = " phase=" + c.Phase
-			}
-			b.body(fmt.Sprintf("  %-30s  %.6g  (line %d%s)", c.Metric, c.Value, c.Line, phase))
-		}
 	}
 
 	if len(r.Metrics) > 0 {
@@ -355,74 +291,6 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 	if r.EnvDigest != "" {
 		b.mono("env     SHA-256: " + r.EnvDigest)
 	}
-	if r.MetricHash != "" {
-		b.mono("metrics SHA-256: " + r.MetricHash)
-	}
-}
-
-func (b *builder) addRunHistoryPage(seal *session.SealRecord) {
-	if seal.TotalRunCount == 0 && len(seal.RunHistory) == 0 {
-		return
-	}
-	b.newPage()
-	b.gap(10)
-	b.writeLine("Run History (Multi-Run Ledger)", "Hb", 15, mL)
-	b.gap(4)
-	b.hline()
-	b.gap(6)
-
-	b.body(fmt.Sprintf("Total invocations for this session: %d", seal.TotalRunCount))
-	b.body("The server ledger records every 'kveritas run' invocation, including failed")
-	b.body("and discarded runs. Actual metric values are not stored -- only their hashes.")
-	b.gap(6)
-
-	for _, entry := range seal.RunHistory {
-		status := "OK"
-		if entry.ExitCode != 0 {
-			status = fmt.Sprintf("EXIT %d", entry.ExitCode)
-		}
-		dur := entry.DurationFmt
-		if dur == "" {
-			dur = fmt.Sprintf("%.1fs", entry.DurationSec)
-		}
-		b.body(fmt.Sprintf("  Run %d  [%s]  %s  %d stdout lines  started %s",
-			entry.RunIndex+1, status, dur, entry.StdoutLines, entry.StartedAt[:19]))
-		b.mono(fmt.Sprintf("    metric_hash: %s", entry.MetricHash))
-	}
-}
-
-func (b *builder) addHMCAPage(result *session.HMCAResult) {
-	b.newPage()
-	b.gap(10)
-	b.writeLine("Hardware-Metric Consistency Analysis", "Hb", 15, mL)
-	b.gap(4)
-	b.hline()
-	b.gap(6)
-
-	b.body("The HMCA engine checks whether reported metrics are consistent with")
-	b.body("observed hardware activity during experiment execution.")
-	b.gap(6)
-
-	b.kv("Score", fmt.Sprintf("%.2f / 1.00", result.Score))
-	b.kv("Verdict", result.Verdict)
-	b.gap(6)
-
-	if len(result.Flags) > 0 {
-		b.heading("Flags")
-		for _, f := range result.Flags {
-			b.body("  " + f)
-		}
-	} else {
-		b.body("No consistency flags raised.")
-	}
-
-	b.gap(10)
-	b.heading("HMCA Rules")
-	b.body("ZERO_COST_METRIC: metrics reported in under 1 second of execution")
-	b.body("LOW_ACTIVITY_HIGH_GAIN: high metric values with minimal CPU/memory activity")
-	b.body("GPU_CLAIM_NO_GPU: GPU counters present but no GPU detected in hardware snapshot")
-	b.body("IDLE_RUN: hardware remained idle for the entire run duration")
-	b.body("PHASE_MISMATCH: evaluation phase used disproportionately more CPU than training")
 }
 
 func (b *builder) addCryptoPage(seal *session.SealRecord) {
@@ -437,9 +305,6 @@ func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.kv("Sealed at", seal.SealedAt.UTC().Format(time.RFC3339Nano))
 	b.kv("Signed at", seal.SignedAt)
 	b.kv("Nonce", seal.Nonce)
-	if seal.SourceBundleHash != "" {
-		b.kv("Source bundle hash", seal.SourceBundleHash)
-	}
 
 	b.heading("Data Hash (SHA-256 of canonical experiment JSON)")
 	b.mono(seal.DataHash)
@@ -457,8 +322,7 @@ func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.body("2. Reconstruct payload: data_hash:nonce:signed_at")
 	b.body("3. Verify SHA-256(payload) == signed_message_hash.")
 	b.body("4. Verify RSA-PSS-SHA256 signature over payload using the server public key.")
-	b.body("5. Upload the PDF (and optional bundle.zip) at kveritas.org/verify")
-	b.body("   or run:  kveritas verify <this_file.pdf>")
+	b.body("Run:  kveritas verify <this_file.pdf>")
 }
 
 // render produces the raw PDF bytes (through %%EOF).
@@ -531,63 +395,16 @@ func (b *builder) render() ([]byte, error) {
 }
 
 func pdfEscape(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '\\':
-			b.WriteString("\\\\")
-		case r == '(':
-			b.WriteString("\\(")
-		case r == ')':
-			b.WriteString("\\)")
-		case r >= 32 && r <= 126:
-			b.WriteRune(r)
-		case r >= 0xA0 && r <= 0xFF:
-			// WinAnsiEncoding supports Latin-1 supplement directly as octal
-			b.WriteString(fmt.Sprintf("\\%03o", r))
-		case r == 0x2013: // en dash
-			b.WriteString("\\226")
-		case r == 0x2014: // em dash
-			b.WriteString("\\227")
-		case r == 0x2018: // left single quote
-			b.WriteString("\\221")
-		case r == 0x2019: // right single quote / apostrophe
-			b.WriteString("\\222")
-		case r == 0x201C: // left double quote
-			b.WriteString("\\223")
-		case r == 0x201D: // right double quote
-			b.WriteString("\\224")
-		case r == 0x2022: // bullet
-			b.WriteString("\\225")
-		case r == 0x2026: // ellipsis
-			b.WriteString("\\205")
-		case unicode.IsPrint(r):
-			// Non-WinAnsi printable: transliterate to ASCII approximation
-			b.WriteRune(transliterate(r))
-		default:
-			b.WriteByte(' ')
+	s = strings.Map(func(r rune) rune {
+		if r > 126 || !unicode.IsPrint(r) {
+			return ' '
 		}
-	}
-	return b.String()
-}
-
-func transliterate(r rune) rune {
-	// Common Unicode to ASCII approximations
-	switch {
-	case r >= 0x0100 && r <= 0x017F: // Latin Extended-A
-		base := strings.ToLower(string(r))
-		if len(base) > 0 {
-			first := []rune(base)[0]
-			switch {
-			case first >= 'a' && first <= 'z':
-				return first
-			}
-		}
-		return '?'
-	default:
-		return '?'
-	}
+		return r
+	}, s)
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "(", "\\(")
+	s = strings.ReplaceAll(s, ")", "\\)")
+	return s
 }
 
 func wrapText(text string, maxChars int) []string {
