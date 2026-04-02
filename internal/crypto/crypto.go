@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 )
@@ -36,12 +37,18 @@ func HashBytes(b []byte) string {
 }
 
 // HashFile returns the SHA-256 hex digest of the named file.
+// Uses streaming hash to avoid loading the entire file into memory.
 func HashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	return HashBytes(data), nil
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // CanonicalHash marshals v to deterministic JSON (sorted keys at every level)
@@ -53,6 +60,18 @@ func CanonicalHash(v interface{}) (string, error) {
 		return "", err
 	}
 	return HashBytes(b), nil
+}
+
+// CanonicalHashWithBytes returns both the SHA-256 hex digest and the raw
+// canonical JSON bytes. The bytes are embedded in the seal record so that
+// verifiers can re-hash them directly instead of reconstructing the signing
+// data structure (which breaks when new fields are added).
+func CanonicalHashWithBytes(v interface{}) (string, []byte, error) {
+	b, err := sortedMarshal(v)
+	if err != nil {
+		return "", nil, err
+	}
+	return HashBytes(b), b, nil
 }
 
 // Payload constructs the signing payload string.
