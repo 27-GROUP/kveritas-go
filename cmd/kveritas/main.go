@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -90,7 +91,7 @@ var cmdInit = &cobra.Command{
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
-			fmt.Fprintf(os.Stderr, "[kveritas] Registered with server %s\n", serverURL)
+			fmt.Fprintf(os.Stderr, "[kveritas] Registered with server\n")
 		} else {
 			token = "local"
 			serverURL = "local"
@@ -246,6 +247,14 @@ var cmdSeal = &cobra.Command{
 
 		if err := pdf.Generate(sess, runs, seal, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
+		}
+
+		// Generate bundle.zip with source files
+		bundlePath := strings.TrimSuffix(outPath, ".pdf") + "-bundle.zip"
+		if err := createBundle(sess, runs, bundlePath); err != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: bundle creation failed: %v\n", err)
+		} else {
+			fmt.Printf("Bundle:        %s\n", bundlePath)
 		}
 
 		sess.Sealed = true
@@ -782,6 +791,102 @@ var cmdUpdate = &cobra.Command{
 		fmt.Println("Updated successfully.")
 		return nil
 	},
+}
+
+// --- bundle ---
+
+func createBundle(sess *session.Session, runs []*session.RunRecord, outPath string) error {
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := zip.NewWriter(f)
+	defer w.Close()
+
+	added := map[string]bool{}
+	sourceExts := map[string]bool{
+		".py": true, ".r": true, ".R": true, ".jl": true, ".sh": true,
+		".js": true, ".ts": true, ".go": true, ".cpp": true, ".c": true,
+		".h": true, ".java": true, ".rb": true, ".ipynb": true,
+	}
+
+	// Add files tracked by runs (pre/post hashes)
+	for _, r := range runs {
+		for path := range r.PreHashes {
+			if added[path] {
+				continue
+			}
+			if err := addFileToZip(w, sess.ProjectDir, path); err == nil {
+				added[path] = true
+			}
+		}
+		for path := range r.PostHashes {
+			if added[path] {
+				continue
+			}
+			if err := addFileToZip(w, sess.ProjectDir, path); err == nil {
+				added[path] = true
+			}
+		}
+		// Add the command script itself
+		for _, arg := range r.Command {
+			if isSourceFile(arg) && !added[arg] {
+				if err := addFileToZip(w, sess.ProjectDir, arg); err == nil {
+					added[arg] = true
+				}
+			}
+		}
+	}
+
+	// Walk the project directory for source files (up to 5MB total, skip hidden/venv)
+	var totalSize int64
+	const maxBundleSize = 5 * 1024 * 1024
+	filepath.Walk(sess.ProjectDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			name := info.Name()
+			if name == ".kveritas" || name == ".git" || name == "__pycache__" ||
+				name == "node_modules" || name == ".venv" || name == "venv" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if totalSize > maxBundleSize {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if !sourceExts[ext] {
+			return nil
+		}
+		rel, _ := filepath.Rel(sess.ProjectDir, path)
+		if added[rel] {
+			return nil
+		}
+		if info.Size() > 1*1024*1024 {
+			return nil // skip files > 1MB
+		}
+		if err := addFileToZip(w, sess.ProjectDir, rel); err == nil {
+			added[rel] = true
+			totalSize += info.Size()
+		}
+		return nil
+	})
+
+	return nil
+}
+
+func addFileToZip(w *zip.Writer, baseDir, relPath string) error {
+	fullPath := filepath.Join(baseDir, relPath)
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return err
+	}
+	fw, err := w.Create(relPath)
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write(data)
+	return err
 }
 
 // --- clean ---
