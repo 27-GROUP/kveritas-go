@@ -55,8 +55,9 @@ kveritas init
 kveritas run -- python train.py --epochs 90
 kveritas run -- python evaluate.py --checkpoint best
 
-# 3. Seal the session into a signed PDF report
+# 3. Seal the session: produces a signed PDF + source bundle
 kveritas seal --output report.pdf
+# Output: report.pdf + report-bundle.zip
 
 # 4. Verify the report (no server, no internet required)
 kveritas verify report.pdf
@@ -64,6 +65,10 @@ kveritas verify report.pdf
 # 5. Generate and check claims for paper submission
 kveritas generate-claims --report report.pdf > claims.json
 kveritas check --claims claims.json --report report.pdf
+
+# 6. Self-update / cleanup
+sudo kveritas update
+kveritas clean
 ```
 
 ---
@@ -168,10 +173,18 @@ Canonical JSON format: sorted keys at every level, compact separators (no spaces
 ```
 --server URL          Attestation server URL (default: hosted service)
 --local               Offline mode, skip server registration
---org-token TOKEN     Organization activation token
+--org-token TOKEN     Class/track token (links reports to an institution)
+--user EMAIL          Submitter email (for class-mode tokens)
 ```
 
 Creates a `.kveritas/` session directory. Registers with the attestation server and binds a single-use token to the machine fingerprint.
+
+Usage examples:
+```bash
+kveritas init                                          # standalone, no affiliation
+kveritas init --org-token CS229ABC --user s@mit.edu    # university class (identified)
+kveritas init --org-token NEURIPS2026                   # conference track (anonymous)
+```
 
 ### `kveritas run`
 
