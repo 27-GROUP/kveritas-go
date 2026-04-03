@@ -1,22 +1,21 @@
 package main
 
 import (
-	"archive/zip"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mamadouk/kveritas/internal/bundle"
 	"github.com/mamadouk/kveritas/internal/client"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
+	"github.com/mamadouk/kveritas/internal/hmca"
 	"github.com/mamadouk/kveritas/internal/pdf"
 	"github.com/mamadouk/kveritas/internal/runner"
 	"github.com/mamadouk/kveritas/internal/session"
@@ -40,8 +39,34 @@ Workflow:
                              Check paper claims against signed results.
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
-  kveritas status            Show current session state.`,
+  kveritas status            Show current session state.
+  kveritas update            Update to the latest version.
+
+Protocol lines your script can emit:
+  KVERITAS_METRIC name=<id> value=<float> [step=<label>]
+  KVERITAS_PHASE  name=<phase>
+  KVERITAS_CLAIM  metric=<id> value=<float> [phase=<phase>]
+  KVERITAS_INPUT  src=seed:<value>`,
 	SilenceUsage: true,
+}
+
+var cmdClean = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove the .kveritas session directory",
+	Long: `Removes the .kveritas directory and all session data.
+Use this to abandon an in-progress session or clean up after a failed run.
+This action is irreversible -- the session token is lost.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return fmt.Errorf("no session found to clean")
+		}
+		if err := os.RemoveAll(kvDir); err != nil {
+			return fmt.Errorf("removing session directory: %w", err)
+		}
+		fmt.Println("Session directory removed.")
+		return nil
+	},
 }
 
 func main() {
@@ -83,19 +108,30 @@ var cmdInit = &cobra.Command{
 
 		var token string
 		serverURL := initServer
+		orgToken := initOrgToken
+
+		// If no org-token flag was provided, prompt the user.
+		if orgToken == "" && !initLocal {
+			fmt.Fprint(os.Stderr, "[kveritas] Enter activation code (or press Enter to continue without): ")
+			var input string
+			fmt.Scanln(&input)
+			orgToken = strings.TrimSpace(input)
+		}
 
 		if !initLocal {
 			c := client.New(serverURL)
-			token, err = c.Init(sessionID, machineID, time.Now(), initOrgToken, initUser)
+			initResp, err := c.Init(sessionID, machineID, time.Now(), orgToken, initUser)
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
-			fmt.Fprintf(os.Stderr, "[kveritas] Registered with server\n")
+			token = initResp.Token
+			if initResp.OrgName != "" {
+				fmt.Fprintf(os.Stderr, "[kveritas] Session registered for %s\n", initResp.OrgName)
+			}
 		} else {
 			token = "local"
 			serverURL = "local"
-			fmt.Fprintf(os.Stderr, "[kveritas] Local mode: no server registration\n")
 		}
 
 		sess := &session.Session{
@@ -105,7 +141,7 @@ var cmdInit = &cobra.Command{
 			MachineID:  machineID,
 			Token:      token,
 			ServerURL:  serverURL,
-			OrgToken:   initOrgToken,
+			OrgToken:   orgToken,
 			UserEmail:  initUser,
 			Runs:       []string{},
 		}
@@ -115,7 +151,6 @@ var cmdInit = &cobra.Command{
 		}
 
 		fmt.Printf("Session initialized: %s\n", sessionID)
-		fmt.Printf("Directory: %s\n", kvDir)
 		return nil
 	},
 }
@@ -140,6 +175,18 @@ The stdout stream is teed to your terminal and simultaneously hashed.
 Metrics printed to stdout in the KVERITAS_METRIC format are captured:
 
   KVERITAS_METRIC name=val_accuracy value=0.9471 step=100
+
+Phase boundaries trigger hardware snapshots:
+
+  KVERITAS_PHASE name=eval
+
+Inline claims are committed into the stdout hash:
+
+  KVERITAS_CLAIM metric=accuracy value=0.9471 phase=eval
+
+Seed commitments are recorded before computation:
+
+  KVERITAS_INPUT src=seed:42
 
 Files listed with --files are hashed before and after the run.`,
 	Args: cobra.MinimumNArgs(1),
@@ -171,6 +218,20 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
+		// Record ALL runs to the server ledger (even failed ones) for the multi-run history.
+		if sess.ServerURL != "local" {
+			c := client.New(sess.ServerURL)
+			if ledgerErr := c.RecordRun(sess, rec); ledgerErr != nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record run in server ledger: %v\n", ledgerErr)
+			}
+		}
+
+		if rec.ExitCode != 0 {
+			fmt.Fprintf(os.Stderr, "[kveritas] Run failed with exit code %d -- discarding this run\n", rec.ExitCode)
+			fmt.Fprintf(os.Stderr, "[kveritas] Fix the issue (dependencies, environment, etc.) and try again\n")
+			return fmt.Errorf("command exited with code %d; only successful runs are recorded", rec.ExitCode)
+		}
+
 		if err := sess.SaveRun(kvDir, rec); err != nil {
 			return err
 		}
@@ -180,7 +241,8 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
-		fmt.Printf("Run %s recorded (%d metrics)\n", rec.ID, len(rec.Metrics))
+		fmt.Printf("Run %s recorded (%d metrics, %d claims, %d phases, %d seeds)\n",
+			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
 		return nil
 	},
 }
@@ -224,7 +286,50 @@ var cmdSeal = &cobra.Command{
 			runs = append(runs, r)
 		}
 
-		dataHash, err := canonicalSessionHash(sess, runs)
+		if len(sess.SourceHashes) > 0 {
+			modified, missing, err := bundle.VerifySourceIntegrity(sess.ProjectDir, sess.SourceHashes)
+			if err != nil {
+				return fmt.Errorf("source integrity check failed: %w", err)
+			}
+			if len(modified) > 0 {
+				fmt.Fprintf(os.Stderr, "[kveritas] SEAL REFUSED: source files modified after experiment runs:\n")
+				for _, f := range modified {
+					fmt.Fprintf(os.Stderr, "  MODIFIED: %s\n", f)
+				}
+				return fmt.Errorf("source code was modified after experiments were run; results cannot be trusted")
+			}
+			if len(missing) > 0 {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: %d source files removed since runs\n", len(missing))
+			}
+		}
+
+		// Run Hardware-Metric Consistency Analyzer.
+		var allSamples []session.HardwareSample
+		for _, r := range runs {
+			allSamples = append(allSamples, r.HardwareSamples...)
+		}
+		hmcaResult := hmca.Analyze(runs, allSamples)
+		fmt.Fprintf(os.Stderr, "[kveritas] HMCA score: %.2f  verdict: %s\n", hmcaResult.Score, hmcaResult.Verdict)
+		for _, f := range hmcaResult.Flags {
+			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
+		}
+
+		var bundleHash string
+		if len(sess.SourceHashes) > 0 {
+			files := make([]string, 0, len(sess.SourceHashes))
+			for f := range sess.SourceHashes {
+				files = append(files, f)
+			}
+			sort.Strings(files)
+			bundlePath := filepath.Join(kvDir, "kveritas_bundle.zip")
+			bundleHash, err = bundle.CreateBundle(sess.ProjectDir, files, bundlePath)
+			if err != nil {
+				return fmt.Errorf("creating source bundle: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
+		}
+
+		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -239,39 +344,90 @@ var cmdSeal = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		seal.SourceBundleHash = bundleHash
+		seal.CanonicalJSON = string(canonicalBytes)
+
+		// Pull run history from server ledger (Addition 3).
+		if sess.ServerURL != "local" {
+			c := client.New(sess.ServerURL)
+			history, err := c.RunHistory(sess)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not retrieve run history: %v\n", err)
+			} else {
+				seal.RunHistory = history.Runs
+				seal.TotalRunCount = history.TotalRuns
+				fmt.Fprintf(os.Stderr, "[kveritas] Run history: %d total invocations for this session\n", history.TotalRuns)
+			}
+		}
 
 		outPath := sealOutput
 		if outPath == "" {
 			outPath = fmt.Sprintf("kveritas-report-%s.pdf", sess.ID[:8])
 		}
 
-		if err := pdf.Generate(sess, runs, seal, outPath); err != nil {
+		if err := pdf.Generate(sess, runs, seal, &hmcaResult, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Generate bundle.zip with source files
-		bundlePath := strings.TrimSuffix(outPath, ".pdf") + "-bundle.zip"
-		if err := createBundle(sess, runs, bundlePath); err != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: bundle creation failed: %v\n", err)
+		// Copy bundle.zip alongside the PDF.
+		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
+		if _, err := os.Stat(bundleSrc); err == nil {
+			bundleDst := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "_bundle.zip"
+			if data, err := os.ReadFile(bundleSrc); err == nil {
+				if err := os.WriteFile(bundleDst, data, 0644); err == nil {
+					fmt.Fprintf(os.Stderr, "[kveritas] Bundle saved: %s\n", bundleDst)
+				}
+			}
+		}
+
+		// Session complete. Clean up the .kveritas directory.
+		if removeErr := os.RemoveAll(kvDir); removeErr != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not remove session directory: %v\n", removeErr)
 		} else {
-			fmt.Printf("Bundle:        %s\n", bundlePath)
-		}
-
-		sess.Sealed = true
-		if err := sess.Save(kvDir); err != nil {
-			return err
-		}
-		if err := session.SaveSeal(kvDir, seal); err != nil {
-			return err
-		}
-
-		// Clean up session directory after successful seal
-		if err := os.RemoveAll(kvDir); err != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not clean session: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[kveritas] Session directory cleaned up\n")
 		}
 
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
+		fmt.Printf("Runs:          %d\n", len(runs))
+		fmt.Printf("HMCA score:    %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
+		if seal.TotalRunCount > 0 {
+			fmt.Printf("Total runs:    %d (including failed/discarded)\n", seal.TotalRunCount)
+		}
+		fmt.Println()
+
+		for i, r := range runs {
+			cmd := strings.Join(r.Command, " ")
+			fmt.Printf("--- Run %d: %s (%s) ---\n", i+1, cmd, r.DurationFmt)
+			if len(r.Metrics) == 0 {
+				fmt.Printf("  (no metrics captured)\n")
+			} else {
+				for _, m := range r.Metrics {
+					src := m.Source
+					step := ""
+					if m.Step != "" {
+						step = fmt.Sprintf(" [step=%s]", m.Step)
+					}
+					fmt.Printf("  %-30s  %.6g  (%s)%s\n", m.Name, m.Value, src, step)
+				}
+			}
+			if len(r.Claims) > 0 {
+				fmt.Printf("  Claims:\n")
+				for _, c := range r.Claims {
+					phase := ""
+					if c.Phase != "" {
+						phase = fmt.Sprintf(" phase=%s", c.Phase)
+					}
+					fmt.Printf("    %-30s  %.6g  (line %d%s)\n", c.Metric, c.Value, c.Line, phase)
+				}
+			}
+			if len(r.Seeds) > 0 {
+				fmt.Printf("  Seed commitments:\n")
+				for _, s := range r.Seeds {
+					fmt.Printf("    %s (line %d)\n", s.Source, s.Line)
+				}
+			}
+		}
 		return nil
 	},
 }
@@ -281,53 +437,58 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord) (string, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
 	type runPayload struct {
-		ID          string            `json:"id"`
-		Index       int               `json:"index"`
-		Command     []string          `json:"command"`
-		StartAt     string            `json:"start_at"`
-		EndAt       string            `json:"end_at"`
-		DurationSec float64           `json:"duration_sec"`
-		DurationFmt string            `json:"duration_fmt,omitempty"`
-		ExitCode    int               `json:"exit_code"`
-		PreHashes   map[string]string `json:"pre_hashes"`
-		PostHashes  map[string]string `json:"post_hashes"`
-		Modified    []string          `json:"modified_files"`
-		StdoutHash  string            `json:"stdout_hash"`
-		StderrHash  string            `json:"stderr_hash"`
-		StdoutLines int               `json:"stdout_lines"`
-		Metrics     []session.Metric  `json:"metrics"`
-		Phases      []session.Phase   `json:"phases,omitempty"`
-		Claims      []session.Claim   `json:"claims,omitempty"`
-		Seeds       []session.Seed    `json:"seeds,omitempty"`
-		Hardware    session.HardwareInfo `json:"hardware"`
-		EnvDigest   string            `json:"env_digest"`
+		ID             string            `json:"id"`
+		Index          int               `json:"index"`
+		Command        []string          `json:"command"`
+		StartAt        string            `json:"start_at"`
+		EndAt          string            `json:"end_at"`
+		DurationSec    float64           `json:"duration_sec"`
+		ExitCode       int               `json:"exit_code"`
+		PreHashes      map[string]string `json:"pre_hashes"`
+		PostHashes     map[string]string `json:"post_hashes"`
+		Modified       []string          `json:"modified_files"`
+		StdoutHash     string            `json:"stdout_hash"`
+		StderrHash     string            `json:"stderr_hash"`
+		StdoutLines    int               `json:"stdout_lines"`
+		Metrics        []session.Metric  `json:"metrics"`
+		Hardware       session.HardwareInfo `json:"hardware"`
+		EnvDigest      string            `json:"env_digest"`
+		// New fields (omitted when empty for backward compat with old verifier)
+		Phases         []session.PhaseEvent    `json:"phases,omitempty"`
+		Claims         []session.InlineClaim   `json:"claims,omitempty"`
+		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
+		MetricHash     string                  `json:"metric_hash,omitempty"`
+		DurationFmt    string                  `json:"duration_fmt,omitempty"`
+		SourceCodeHash string                  `json:"source_code_hash,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
 	for _, r := range runs {
 		rp := runPayload{
-			ID:          r.ID,
-			Index:       r.Index,
-			Command:     r.Command,
-			StartAt:     r.StartAt.UTC().Format(time.RFC3339Nano),
-			EndAt:       r.EndAt.UTC().Format(time.RFC3339Nano),
-			DurationSec: r.DurationSec,
-			DurationFmt: r.DurationFmt,
-			ExitCode:    r.ExitCode,
-			PreHashes:   r.PreHashes,
-			PostHashes:  r.PostHashes,
-			Modified:    r.Modified,
-			StdoutHash:  r.StdoutHash,
-			StderrHash:  r.StderrHash,
-			StdoutLines: r.StdoutLines,
-			Metrics:     r.Metrics,
-			Phases:      r.Phases,
-			Claims:      r.Claims,
-			Seeds:       r.Seeds,
-			Hardware:    r.Hardware,
-			EnvDigest:   r.EnvDigest,
+			ID:             r.ID,
+			Index:          r.Index,
+			Command:        r.Command,
+			StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
+			EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
+			DurationSec:    r.DurationSec,
+			ExitCode:       r.ExitCode,
+			PreHashes:      r.PreHashes,
+			PostHashes:     r.PostHashes,
+			Modified:       r.Modified,
+			StdoutHash:     r.StdoutHash,
+			StderrHash:     r.StderrHash,
+			StdoutLines:    r.StdoutLines,
+			Metrics:        r.Metrics,
+			Hardware:       r.Hardware,
+			EnvDigest:      r.EnvDigest,
+			Phases:         r.Phases,
+			Claims:         r.Claims,
+			Seeds:          r.Seeds,
+			MetricHash:     r.MetricHash,
+			DurationFmt:    r.DurationFmt,
+			SourceCodeHash: r.SourceCodeHash,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -339,8 +500,14 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord) (str
 		"server_url": sess.ServerURL,
 		"runs":       runPayloads,
 	}
+	if bundleHash != "" {
+		signingData["source_bundle_hash"] = bundleHash
+	}
+	if hmcaResult != nil {
+		signingData["hmca"] = hmcaResult
+	}
 
-	return kvcrypto.CanonicalHash(signingData)
+	return kvcrypto.CanonicalHashWithBytes(signingData)
 }
 
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
@@ -426,8 +593,15 @@ var cmdVerify = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
+		// Recompute HMCA for verification.
+		var verifySamples []session.HardwareSample
+		for _, r := range runs {
+			verifySamples = append(verifySamples, r.HardwareSamples...)
+		}
+		verifyHMCA := hmca.Analyze(runs, verifySamples)
+
 		// Step 1: recompute and verify the data hash.
-		computedHash, err := canonicalSessionHash(sess, runs)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -471,15 +645,34 @@ var cmdVerify = &cobra.Command{
 		fmt.Printf("Runs:       %d\n", len(runs))
 		fmt.Printf("Data hash:  %s\n", seal.DataHash)
 
+		if seal.TotalRunCount > 0 {
+			fmt.Printf("Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
+		}
+
 		explicitCount := 0
+		claimCount := 0
+		phaseCount := 0
+		seedCount := 0
 		for _, r := range runs {
 			for _, m := range r.Metrics {
 				if m.Source == "explicit" {
 					explicitCount++
 				}
 			}
+			claimCount += len(r.Claims)
+			phaseCount += len(r.Phases)
+			seedCount += len(r.Seeds)
 		}
 		fmt.Printf("Metrics:    %d explicit\n", explicitCount)
+		if claimCount > 0 {
+			fmt.Printf("Claims:     %d inline\n", claimCount)
+		}
+		if phaseCount > 0 {
+			fmt.Printf("Phases:     %d boundaries\n", phaseCount)
+		}
+		if seedCount > 0 {
+			fmt.Printf("Seeds:      %d commitments\n", seedCount)
+		}
 		return nil
 	},
 }
@@ -524,7 +717,12 @@ var cmdCheck = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		computedHash, err := canonicalSessionHash(sess, runs)
+		var checkSamples []session.HardwareSample
+		for _, r := range runs {
+			checkSamples = append(checkSamples, r.HardwareSamples...)
+		}
+		checkHMCA := hmca.Analyze(runs, checkSamples)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
 		if err != nil {
 			return err
 		}
@@ -642,8 +840,9 @@ var cmdStatus = &cobra.Command{
 			if r.ExitCode != 0 {
 				statusStr = fmt.Sprintf("EXIT %d", r.ExitCode)
 			}
-			fmt.Printf("  Run %d: [%s] %s  %.1fs  %d metrics\n",
-				i+1, statusStr, strings.Join(r.Command, " "), r.DurationSec, len(r.Metrics))
+			fmt.Printf("  Run %d: [%s] %s  %s  %d metrics  %d claims  %d phases  %d seeds\n",
+				i+1, statusStr, strings.Join(r.Command, " "), r.DurationFmt,
+				len(r.Metrics), len(r.Claims), len(r.Phases), len(r.Seeds))
 		}
 
 		if sess.Sealed {
@@ -720,200 +919,6 @@ func init() {
 	cmdGenerateClaims.Flags().StringVar(&generateClaimsReportPath, "report", "", "path to K-Veritas PDF report")
 }
 
-// --- update ---
-
-var cmdUpdate = &cobra.Command{
-	Use:   "update",
-	Short: "Update kveritas to the latest version",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		base := "https://github.com/27-GROUP/kveritas-releases/raw/main/bin"
-
-		goos := strings.ToLower(runtime.GOOS)
-		goarch := strings.ToLower(runtime.GOARCH)
-
-		var fname string
-		switch {
-		case goos == "linux" && goarch == "amd64":
-			fname = "kveritas-linux-amd64"
-		case goos == "linux" && goarch == "arm64":
-			fname = "kveritas-linux-arm64"
-		case goos == "darwin" && goarch == "arm64":
-			fname = "kveritas-darwin-arm64"
-		case goos == "darwin" && goarch == "amd64":
-			fname = "kveritas-darwin-amd64"
-		case goos == "windows" && goarch == "amd64":
-			fname = "kveritas-windows-amd64.exe"
-		default:
-			return fmt.Errorf("unsupported platform: %s/%s", goos, goarch)
-		}
-
-		url := base + "/" + fname
-
-		exePath, err := os.Executable()
-		if err != nil {
-			return fmt.Errorf("cannot determine executable path: %w", err)
-		}
-		exePath, err = filepath.EvalSymlinks(exePath)
-		if err != nil {
-			return fmt.Errorf("cannot resolve symlinks: %w", err)
-		}
-
-		fmt.Printf("Downloading %s...\n", fname)
-
-		resp, err := http.Get(url)
-		if err != nil {
-			return fmt.Errorf("download failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
-		}
-
-		tmpFile := exePath + ".tmp"
-		out, err := os.Create(tmpFile)
-		if err != nil {
-			return fmt.Errorf("cannot create temp file: %w (try running with sudo)", err)
-		}
-
-		if _, err := io.Copy(out, resp.Body); err != nil {
-			out.Close()
-			os.Remove(tmpFile)
-			return fmt.Errorf("download interrupted: %w", err)
-		}
-		out.Close()
-
-		if err := os.Chmod(tmpFile, 0755); err != nil {
-			os.Remove(tmpFile)
-			return err
-		}
-
-		if err := os.Rename(tmpFile, exePath); err != nil {
-			os.Remove(tmpFile)
-			return fmt.Errorf("cannot replace binary: %w (try running with sudo)", err)
-		}
-
-		fmt.Println("Updated successfully.")
-		return nil
-	},
-}
-
-// --- bundle ---
-
-func createBundle(sess *session.Session, runs []*session.RunRecord, outPath string) error {
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	w := zip.NewWriter(f)
-	defer w.Close()
-
-	added := map[string]bool{}
-	sourceExts := map[string]bool{
-		".py": true, ".r": true, ".R": true, ".jl": true, ".sh": true,
-		".js": true, ".ts": true, ".go": true, ".cpp": true, ".c": true,
-		".h": true, ".java": true, ".rb": true, ".ipynb": true,
-	}
-
-	// Add files tracked by runs (pre/post hashes)
-	for _, r := range runs {
-		for path := range r.PreHashes {
-			if added[path] {
-				continue
-			}
-			if err := addFileToZip(w, sess.ProjectDir, path); err == nil {
-				added[path] = true
-			}
-		}
-		for path := range r.PostHashes {
-			if added[path] {
-				continue
-			}
-			if err := addFileToZip(w, sess.ProjectDir, path); err == nil {
-				added[path] = true
-			}
-		}
-		// Add the command script itself
-		for _, arg := range r.Command {
-			if isSourceFile(arg) && !added[arg] {
-				if err := addFileToZip(w, sess.ProjectDir, arg); err == nil {
-					added[arg] = true
-				}
-			}
-		}
-	}
-
-	// Walk the project directory for source files (up to 5MB total, skip hidden/venv)
-	var totalSize int64
-	const maxBundleSize = 5 * 1024 * 1024
-	filepath.Walk(sess.ProjectDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			name := info.Name()
-			if name == ".kveritas" || name == ".git" || name == "__pycache__" ||
-				name == "node_modules" || name == ".venv" || name == "venv" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if totalSize > maxBundleSize {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(path))
-		if !sourceExts[ext] {
-			return nil
-		}
-		rel, _ := filepath.Rel(sess.ProjectDir, path)
-		if added[rel] {
-			return nil
-		}
-		if info.Size() > 1*1024*1024 {
-			return nil // skip files > 1MB
-		}
-		if err := addFileToZip(w, sess.ProjectDir, rel); err == nil {
-			added[rel] = true
-			totalSize += info.Size()
-		}
-		return nil
-	})
-
-	return nil
-}
-
-func addFileToZip(w *zip.Writer, baseDir, relPath string) error {
-	fullPath := filepath.Join(baseDir, relPath)
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		return err
-	}
-	fw, err := w.Create(relPath)
-	if err != nil {
-		return err
-	}
-	_, err = fw.Write(data)
-	return err
-}
-
-// --- clean ---
-
-var cmdClean = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove the .kveritas session directory",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
-		if err != nil {
-			return err
-		}
-		if err := os.RemoveAll(kvDir); err != nil {
-			return err
-		}
-		fmt.Println("Session cleaned")
-		return nil
-	},
-}
-
-// --- helpers ---
-
 // isSourceFile returns true for file arguments that look like executable scripts.
 func isSourceFile(path string) bool {
 	exts := []string{".py", ".r", ".R", ".jl", ".sh", ".bash", ".rb", ".js", ".ts"}
@@ -925,4 +930,3 @@ func isSourceFile(path string) bool {
 	}
 	return false
 }
-

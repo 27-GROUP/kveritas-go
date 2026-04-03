@@ -4,16 +4,16 @@
 //
 //	KVERITAS_METRIC name=<identifier> value=<float> [step=<value>]
 //
-// The identifier must match [a-zA-Z][a-zA-Z0-9_]*.
-// The value is a standard floating-point literal including scientific notation.
-// The step is optional; it may be an integer or a label such as "final".
+// Additional protocol lines:
+//
+//	KVERITAS_PHASE name=<phase>                                    Phase boundary with hardware snapshot
+//	KVERITAS_CLAIM metric=<name> value=<float> [phase=<phase>]     Inline claim committed in stdout
+//	KVERITAS_INPUT src=seed:<value>                                 Seed commitment before computation
 //
 // The entire stdout stream is SHA-256 hashed byte-for-byte as the process runs.
-// Each metric is anchored to its line number within that hash, making it
-// impossible to insert, remove, or reorder metrics without invalidating the hash.
-//
-// Heuristic patterns are also detected for convenience but are marked with
-// source="heuristic" and should not be relied upon for formal claims.
+// Each metric, claim, phase, and seed is anchored to its line number within
+// that hash, making it impossible to insert, remove, or reorder without
+// invalidating the hash.
 package metrics
 
 import (
@@ -30,6 +30,21 @@ var (
 	// explicitRe matches the primary KVERITAS_METRIC format.
 	explicitRe = regexp.MustCompile(
 		`^KVERITAS_METRIC\s+name=([a-zA-Z][a-zA-Z0-9_]*)\s+value=([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s+step=(\S+))?`,
+	)
+
+	// phaseRe matches KVERITAS_PHASE name=<phase>
+	phaseRe = regexp.MustCompile(
+		`^KVERITAS_PHASE\s+name=(\S+)`,
+	)
+
+	// claimRe matches KVERITAS_CLAIM metric=<name> value=<float> [phase=<phase>]
+	claimRe = regexp.MustCompile(
+		`^KVERITAS_CLAIM\s+metric=([a-zA-Z][a-zA-Z0-9_]*)\s+value=([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s+phase=(\S+))?`,
+	)
+
+	// inputRe matches KVERITAS_INPUT src=seed:<value>
+	inputRe = regexp.MustCompile(
+		`^KVERITAS_INPUT\s+src=seed:(\S+)`,
 	)
 
 	// kerasRe matches Keras/PyTorch Lightning style: "loss: 0.24 - val_acc: 0.94"
@@ -73,6 +88,9 @@ var blocklist = map[string]bool{
 type Parser struct {
 	explicitCount  int
 	heuristicCount int
+	phaseCount     int
+	claimCount     int
+	seedCount      int
 }
 
 // Parse checks a line for the primary KVERITAS_METRIC format.
@@ -97,6 +115,51 @@ func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
 	}
 	p.explicitCount++
 	return metric, true
+}
+
+// ParsePhase checks a line for KVERITAS_PHASE.
+// Returns the phase name and true if found.
+func (p *Parser) ParsePhase(line string) (string, bool) {
+	m := phaseRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	p.phaseCount++
+	return m[1], true
+}
+
+// ParseClaim checks a line for KVERITAS_CLAIM.
+// Returns an InlineClaim and true if found.
+func (p *Parser) ParseClaim(line string, lineNum int) (*session.InlineClaim, bool) {
+	m := claimRe.FindStringSubmatch(line)
+	if m == nil {
+		return nil, false
+	}
+	v, err := strconv.ParseFloat(m[2], 64)
+	if err != nil {
+		return nil, false
+	}
+	claim := &session.InlineClaim{
+		Metric: m[1],
+		Value:  v,
+		Line:   lineNum,
+	}
+	if len(m) > 3 && m[3] != "" {
+		claim.Phase = m[3]
+	}
+	p.claimCount++
+	return claim, true
+}
+
+// ParseSeed checks a line for KVERITAS_INPUT src=seed:<value>.
+// Returns the seed value and true if found.
+func (p *Parser) ParseSeed(line string) (string, bool) {
+	m := inputRe.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	p.seedCount++
+	return m[1], true
 }
 
 // ParseHeuristic runs best-effort detection on a line.
@@ -162,6 +225,15 @@ func (p *Parser) WarnIfEmpty() {
 		} else {
 			fmt.Fprintf(os.Stderr, "[kveritas] Metrics captured: %d explicit\n", p.explicitCount)
 		}
+	}
+	if p.phaseCount > 0 {
+		fmt.Fprintf(os.Stderr, "[kveritas] Phase boundaries: %d\n", p.phaseCount)
+	}
+	if p.claimCount > 0 {
+		fmt.Fprintf(os.Stderr, "[kveritas] Inline claims: %d\n", p.claimCount)
+	}
+	if p.seedCount > 0 {
+		fmt.Fprintf(os.Stderr, "[kveritas] Seed commitments: %d\n", p.seedCount)
 	}
 }
 

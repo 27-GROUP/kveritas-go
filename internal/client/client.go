@@ -33,7 +33,8 @@ type initRequest struct {
 }
 
 type InitResponse struct {
-	Token string `json:"token"`
+	Token   string `json:"token"`
+	OrgName string `json:"org_name,omitempty"`
 }
 
 type sealRequest struct {
@@ -54,8 +55,27 @@ type SealResponse struct {
 	PublicKeyPEM      string `json:"public_key_pem"`
 }
 
-// Init registers a new session with the server and returns an opaque token.
-func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken, userEmail string) (string, error) {
+type recordRunRequest struct {
+	Token       string  `json:"token"`
+	SessionID   string  `json:"session_id"`
+	MachineID   string  `json:"machine_id"`
+	RunIndex    int     `json:"run_index"`
+	StartedAt   string  `json:"started_at"`
+	DurationSec float64 `json:"duration_sec"`
+	DurationFmt string  `json:"duration_fmt"`
+	ExitCode    int     `json:"exit_code"`
+	MetricHash  string  `json:"metric_hash"`
+	StdoutLines int     `json:"stdout_lines"`
+}
+
+// RunHistoryResponse contains the server's run history for a session.
+type RunHistoryResponse struct {
+	Runs      []session.LedgerRunEntry `json:"runs"`
+	TotalRuns int                      `json:"total_runs"`
+}
+
+// Init registers a new session with the server and returns the full response.
+func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken, userEmail string) (*InitResponse, error) {
 	var resp InitResponse
 	err := c.post("/api/v1/init", initRequest{
 		SessionID: sessionID,
@@ -65,9 +85,9 @@ func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken, u
 		UserEmail: userEmail,
 	}, &resp)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return resp.Token, nil
+	return &resp, nil
 }
 
 // Seal submits a data hash to the server and receives a cryptographic attestation.
@@ -79,11 +99,53 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 		MachineID: sess.MachineID,
 		DataHash:  dataHash,
 		RunCount:  runCount,
+		OrgToken:  sess.OrgToken,
 	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 	return &resp, nil
+}
+
+// RecordRun records a run invocation in the server ledger.
+// This records every invocation -- successful or not -- for the multi-run ledger.
+func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error {
+	var resp struct{}
+	return c.post("/api/v1/record-run", recordRunRequest{
+		Token:       sess.Token,
+		SessionID:   sess.ID,
+		MachineID:   sess.MachineID,
+		RunIndex:    rec.Index,
+		StartedAt:   rec.StartAt.UTC().Format(time.RFC3339Nano),
+		DurationSec: rec.DurationSec,
+		DurationFmt: rec.DurationFmt,
+		ExitCode:    rec.ExitCode,
+		MetricHash:  rec.MetricHash,
+		StdoutLines: rec.StdoutLines,
+	}, &resp)
+}
+
+// RunHistory retrieves the full run history for a session from the server ledger.
+func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) {
+	url := fmt.Sprintf("%s/api/v1/run-history?session_id=%s&token=%s",
+		c.BaseURL, sess.ID, sess.Token)
+	resp, err := c.HTTPClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach server: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, body)
+	}
+	var result RunHistoryResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // PublicKeyPEM fetches the server's public key in PEM format.
