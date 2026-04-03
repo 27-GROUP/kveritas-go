@@ -44,7 +44,7 @@ Workflow:
 }
 
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate)
+	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -780,6 +780,24 @@ var cmdUpdate = &cobra.Command{
 		}
 
 		fmt.Println("Updated successfully.")
+		return nil
+	},
+}
+
+// --- clean ---
+
+var cmdClean = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove the .kveritas session directory",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(kvDir); err != nil {
+			return err
+		}
+		fmt.Println("Session cleaned")
 		return nil
 	},
 }
