@@ -6,23 +6,20 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mamadouk/kveritas/internal/bundle"
 	"github.com/mamadouk/kveritas/internal/client"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
-	"github.com/mamadouk/kveritas/internal/hmca"
 	"github.com/mamadouk/kveritas/internal/pdf"
 	"github.com/mamadouk/kveritas/internal/runner"
 	"github.com/mamadouk/kveritas/internal/session"
 	"github.com/spf13/cobra"
 )
 
-const defaultServer = "https://kveritas-api-production.up.railway.app"
+const defaultServer = "http://localhost:7433"
 
 var root = &cobra.Command{
 	Use:   "kveritas",
@@ -39,38 +36,13 @@ Workflow:
                              Check paper claims against signed results.
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
-  kveritas status            Show current session state.
-  kveritas update            Update to the latest version.
-
-Protocol lines your script can emit:
-  KVERITAS_METRIC name=<id> value=<float> [step=<label>]
-  KVERITAS_PHASE  name=<phase>
-  KVERITAS_CLAIM  metric=<id> value=<float> [phase=<phase>]
-  KVERITAS_INPUT  src=seed:<value>`,
+  kveritas status            Show current session state.`,
 	SilenceUsage: true,
 }
 
-var cmdClean = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove the .kveritas session directory",
-	Long: `Removes the .kveritas directory and all session data.
-Use this to abandon an in-progress session or clean up after a failed run.
-This action is irreversible -- the session token is lost.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
-		if err != nil {
-			return fmt.Errorf("no session found to clean")
-		}
-		if err := os.RemoveAll(kvDir); err != nil {
-			return fmt.Errorf("removing session directory: %w", err)
-		}
-		fmt.Println("Session directory removed.")
-		return nil
-	},
-}
-
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
+	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims)
+	root.AddCommand(cmdStartRun, cmdEndRun, cmdLog, cmdClean)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -82,6 +54,7 @@ var (
 	initServer   string
 	initLocal    bool
 	initOrgToken string
+	initUser     string
 )
 
 var cmdInit = &cobra.Command{
@@ -107,30 +80,19 @@ var cmdInit = &cobra.Command{
 
 		var token string
 		serverURL := initServer
-		orgToken := initOrgToken
-
-		// If no org-token flag was provided, prompt the user.
-		if orgToken == "" && !initLocal {
-			fmt.Fprint(os.Stderr, "[kveritas] Enter activation code (or press Enter to continue without): ")
-			var input string
-			fmt.Scanln(&input)
-			orgToken = strings.TrimSpace(input)
-		}
 
 		if !initLocal {
 			c := client.New(serverURL)
-			initResp, err := c.Init(sessionID, machineID, time.Now(), orgToken)
+			token, err = c.Init(sessionID, machineID, time.Now(), initOrgToken, initUser)
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
-			token = initResp.Token
-			if initResp.OrgName != "" {
-				fmt.Fprintf(os.Stderr, "[kveritas] Session registered for %s\n", initResp.OrgName)
-			}
+			fmt.Fprintf(os.Stderr, "[kveritas] Registered with server %s\n", serverURL)
 		} else {
 			token = "local"
 			serverURL = "local"
+			fmt.Fprintf(os.Stderr, "[kveritas] Local mode: no server registration\n")
 		}
 
 		sess := &session.Session{
@@ -140,7 +102,8 @@ var cmdInit = &cobra.Command{
 			MachineID:  machineID,
 			Token:      token,
 			ServerURL:  serverURL,
-			OrgToken:   orgToken,
+			OrgToken:   initOrgToken,
+			UserEmail:  initUser,
 			Runs:       []string{},
 		}
 
@@ -149,6 +112,7 @@ var cmdInit = &cobra.Command{
 		}
 
 		fmt.Printf("Session initialized: %s\n", sessionID)
+		fmt.Printf("Directory: %s\n", kvDir)
 		return nil
 	},
 }
@@ -156,7 +120,8 @@ var cmdInit = &cobra.Command{
 func init() {
 	cmdInit.Flags().StringVar(&initServer, "server", defaultServer, "attestation server URL")
 	cmdInit.Flags().BoolVar(&initLocal, "local", false, "local mode: sign with a local key, no server")
-	cmdInit.Flags().StringVar(&initOrgToken, "org-token", "", "organization activation token (e.g. neurips_2026)")
+	cmdInit.Flags().StringVar(&initOrgToken, "org-token", "", "organization/class token (links reports to a class or track)")
+	cmdInit.Flags().StringVar(&initUser, "user", "", "user email (identifies the submitter for class-mode tokens)")
 }
 
 // --- run ---
@@ -172,18 +137,6 @@ The stdout stream is teed to your terminal and simultaneously hashed.
 Metrics printed to stdout in the KVERITAS_METRIC format are captured:
 
   KVERITAS_METRIC name=val_accuracy value=0.9471 step=100
-
-Phase boundaries trigger hardware snapshots:
-
-  KVERITAS_PHASE name=eval
-
-Inline claims are committed into the stdout hash:
-
-  KVERITAS_CLAIM metric=accuracy value=0.9471 phase=eval
-
-Seed commitments are recorded before computation:
-
-  KVERITAS_INPUT src=seed:42
 
 Files listed with --files are hashed before and after the run.`,
 	Args: cobra.MinimumNArgs(1),
@@ -215,20 +168,6 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
-		// Record ALL runs to the server ledger (even failed ones) for the multi-run history.
-		if sess.ServerURL != "local" {
-			c := client.New(sess.ServerURL)
-			if ledgerErr := c.RecordRun(sess, rec); ledgerErr != nil {
-				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record run in server ledger: %v\n", ledgerErr)
-			}
-		}
-
-		if rec.ExitCode != 0 {
-			fmt.Fprintf(os.Stderr, "[kveritas] Run failed with exit code %d -- discarding this run\n", rec.ExitCode)
-			fmt.Fprintf(os.Stderr, "[kveritas] Fix the issue (dependencies, environment, etc.) and try again\n")
-			return fmt.Errorf("command exited with code %d; only successful runs are recorded", rec.ExitCode)
-		}
-
 		if err := sess.SaveRun(kvDir, rec); err != nil {
 			return err
 		}
@@ -238,8 +177,7 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
-		fmt.Printf("Run %s recorded (%d metrics, %d claims, %d phases, %d seeds)\n",
-			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
+		fmt.Printf("Run %s recorded (%d metrics)\n", rec.ID, len(rec.Metrics))
 		return nil
 	},
 }
@@ -283,50 +221,7 @@ var cmdSeal = &cobra.Command{
 			runs = append(runs, r)
 		}
 
-		if len(sess.SourceHashes) > 0 {
-			modified, missing, err := bundle.VerifySourceIntegrity(sess.ProjectDir, sess.SourceHashes)
-			if err != nil {
-				return fmt.Errorf("source integrity check failed: %w", err)
-			}
-			if len(modified) > 0 {
-				fmt.Fprintf(os.Stderr, "[kveritas] SEAL REFUSED: source files modified after experiment runs:\n")
-				for _, f := range modified {
-					fmt.Fprintf(os.Stderr, "  MODIFIED: %s\n", f)
-				}
-				return fmt.Errorf("source code was modified after experiments were run; results cannot be trusted")
-			}
-			if len(missing) > 0 {
-				fmt.Fprintf(os.Stderr, "[kveritas] Warning: %d source files removed since runs\n", len(missing))
-			}
-		}
-
-		// Run Hardware-Metric Consistency Analyzer.
-		var allSamples []session.HardwareSample
-		for _, r := range runs {
-			allSamples = append(allSamples, r.HardwareSamples...)
-		}
-		hmcaResult := hmca.Analyze(runs, allSamples)
-		fmt.Fprintf(os.Stderr, "[kveritas] HMCA score: %.2f  verdict: %s\n", hmcaResult.Score, hmcaResult.Verdict)
-		for _, f := range hmcaResult.Flags {
-			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
-		}
-
-		var bundleHash string
-		if len(sess.SourceHashes) > 0 {
-			files := make([]string, 0, len(sess.SourceHashes))
-			for f := range sess.SourceHashes {
-				files = append(files, f)
-			}
-			sort.Strings(files)
-			bundlePath := filepath.Join(kvDir, "kveritas_bundle.zip")
-			bundleHash, err = bundle.CreateBundle(sess.ProjectDir, files, bundlePath)
-			if err != nil {
-				return fmt.Errorf("creating source bundle: %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
-		}
-
-		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
+		dataHash, err := canonicalSessionHash(sess, runs)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -341,90 +236,26 @@ var cmdSeal = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		seal.SourceBundleHash = bundleHash
-		seal.CanonicalJSON = string(canonicalBytes)
-
-		// Pull run history from server ledger (Addition 3).
-		if sess.ServerURL != "local" {
-			c := client.New(sess.ServerURL)
-			history, err := c.RunHistory(sess)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not retrieve run history: %v\n", err)
-			} else {
-				seal.RunHistory = history.Runs
-				seal.TotalRunCount = history.TotalRuns
-				fmt.Fprintf(os.Stderr, "[kveritas] Run history: %d total invocations for this session\n", history.TotalRuns)
-			}
-		}
 
 		outPath := sealOutput
 		if outPath == "" {
 			outPath = fmt.Sprintf("kveritas-report-%s.pdf", sess.ID[:8])
 		}
 
-		if err := pdf.Generate(sess, runs, seal, &hmcaResult, outPath); err != nil {
+		if err := pdf.Generate(sess, runs, seal, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Copy bundle.zip alongside the PDF.
-		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
-		if _, err := os.Stat(bundleSrc); err == nil {
-			bundleDst := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "_bundle.zip"
-			if data, err := os.ReadFile(bundleSrc); err == nil {
-				if err := os.WriteFile(bundleDst, data, 0644); err == nil {
-					fmt.Fprintf(os.Stderr, "[kveritas] Bundle saved: %s\n", bundleDst)
-				}
-			}
+		sess.Sealed = true
+		if err := sess.Save(kvDir); err != nil {
+			return err
 		}
-
-		// Session complete. Clean up the .kveritas directory.
-		if removeErr := os.RemoveAll(kvDir); removeErr != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not remove session directory: %v\n", removeErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "[kveritas] Session directory cleaned up\n")
+		if err := session.SaveSeal(kvDir, seal); err != nil {
+			return err
 		}
 
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
-		fmt.Printf("Runs:          %d\n", len(runs))
-		fmt.Printf("HMCA score:    %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
-		if seal.TotalRunCount > 0 {
-			fmt.Printf("Total runs:    %d (including failed/discarded)\n", seal.TotalRunCount)
-		}
-		fmt.Println()
-
-		for i, r := range runs {
-			cmd := strings.Join(r.Command, " ")
-			fmt.Printf("--- Run %d: %s (%s) ---\n", i+1, cmd, r.DurationFmt)
-			if len(r.Metrics) == 0 {
-				fmt.Printf("  (no metrics captured)\n")
-			} else {
-				for _, m := range r.Metrics {
-					src := m.Source
-					step := ""
-					if m.Step != "" {
-						step = fmt.Sprintf(" [step=%s]", m.Step)
-					}
-					fmt.Printf("  %-30s  %.6g  (%s)%s\n", m.Name, m.Value, src, step)
-				}
-			}
-			if len(r.Claims) > 0 {
-				fmt.Printf("  Claims:\n")
-				for _, c := range r.Claims {
-					phase := ""
-					if c.Phase != "" {
-						phase = fmt.Sprintf(" phase=%s", c.Phase)
-					}
-					fmt.Printf("    %-30s  %.6g  (line %d%s)\n", c.Metric, c.Value, c.Line, phase)
-				}
-			}
-			if len(r.Seeds) > 0 {
-				fmt.Printf("  Seed commitments:\n")
-				for _, s := range r.Seeds {
-					fmt.Printf("    %s (line %d)\n", s.Source, s.Line)
-				}
-			}
-		}
 		return nil
 	},
 }
@@ -434,58 +265,53 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord) (string, error) {
 	type runPayload struct {
-		ID             string            `json:"id"`
-		Index          int               `json:"index"`
-		Command        []string          `json:"command"`
-		StartAt        string            `json:"start_at"`
-		EndAt          string            `json:"end_at"`
-		DurationSec    float64           `json:"duration_sec"`
-		ExitCode       int               `json:"exit_code"`
-		PreHashes      map[string]string `json:"pre_hashes"`
-		PostHashes     map[string]string `json:"post_hashes"`
-		Modified       []string          `json:"modified_files"`
-		StdoutHash     string            `json:"stdout_hash"`
-		StderrHash     string            `json:"stderr_hash"`
-		StdoutLines    int               `json:"stdout_lines"`
-		Metrics        []session.Metric  `json:"metrics"`
-		Hardware       session.HardwareInfo `json:"hardware"`
-		EnvDigest      string            `json:"env_digest"`
-		// New fields (omitted when empty for backward compat with old verifier)
-		Phases         []session.PhaseEvent    `json:"phases,omitempty"`
-		Claims         []session.InlineClaim   `json:"claims,omitempty"`
-		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
-		MetricHash     string                  `json:"metric_hash,omitempty"`
-		DurationFmt    string                  `json:"duration_fmt,omitempty"`
-		SourceCodeHash string                  `json:"source_code_hash,omitempty"`
+		ID          string            `json:"id"`
+		Index       int               `json:"index"`
+		Command     []string          `json:"command"`
+		StartAt     string            `json:"start_at"`
+		EndAt       string            `json:"end_at"`
+		DurationSec float64           `json:"duration_sec"`
+		DurationFmt string            `json:"duration_fmt,omitempty"`
+		ExitCode    int               `json:"exit_code"`
+		PreHashes   map[string]string `json:"pre_hashes"`
+		PostHashes  map[string]string `json:"post_hashes"`
+		Modified    []string          `json:"modified_files"`
+		StdoutHash  string            `json:"stdout_hash"`
+		StderrHash  string            `json:"stderr_hash"`
+		StdoutLines int               `json:"stdout_lines"`
+		Metrics     []session.Metric  `json:"metrics"`
+		Phases      []session.Phase   `json:"phases,omitempty"`
+		Claims      []session.Claim   `json:"claims,omitempty"`
+		Seeds       []session.Seed    `json:"seeds,omitempty"`
+		Hardware    session.HardwareInfo `json:"hardware"`
+		EnvDigest   string            `json:"env_digest"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
 	for _, r := range runs {
 		rp := runPayload{
-			ID:             r.ID,
-			Index:          r.Index,
-			Command:        r.Command,
-			StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
-			EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
-			DurationSec:    r.DurationSec,
-			ExitCode:       r.ExitCode,
-			PreHashes:      r.PreHashes,
-			PostHashes:     r.PostHashes,
-			Modified:       r.Modified,
-			StdoutHash:     r.StdoutHash,
-			StderrHash:     r.StderrHash,
-			StdoutLines:    r.StdoutLines,
-			Metrics:        r.Metrics,
-			Hardware:       r.Hardware,
-			EnvDigest:      r.EnvDigest,
-			Phases:         r.Phases,
-			Claims:         r.Claims,
-			Seeds:          r.Seeds,
-			MetricHash:     r.MetricHash,
-			DurationFmt:    r.DurationFmt,
-			SourceCodeHash: r.SourceCodeHash,
+			ID:          r.ID,
+			Index:       r.Index,
+			Command:     r.Command,
+			StartAt:     r.StartAt.UTC().Format(time.RFC3339Nano),
+			EndAt:       r.EndAt.UTC().Format(time.RFC3339Nano),
+			DurationSec: r.DurationSec,
+			DurationFmt: r.DurationFmt,
+			ExitCode:    r.ExitCode,
+			PreHashes:   r.PreHashes,
+			PostHashes:  r.PostHashes,
+			Modified:    r.Modified,
+			StdoutHash:  r.StdoutHash,
+			StderrHash:  r.StderrHash,
+			StdoutLines: r.StdoutLines,
+			Metrics:     r.Metrics,
+			Phases:      r.Phases,
+			Claims:      r.Claims,
+			Seeds:       r.Seeds,
+			Hardware:    r.Hardware,
+			EnvDigest:   r.EnvDigest,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -497,14 +323,8 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		"server_url": sess.ServerURL,
 		"runs":       runPayloads,
 	}
-	if bundleHash != "" {
-		signingData["source_bundle_hash"] = bundleHash
-	}
-	if hmcaResult != nil {
-		signingData["hmca"] = hmcaResult
-	}
 
-	return kvcrypto.CanonicalHashWithBytes(signingData)
+	return kvcrypto.CanonicalHash(signingData)
 }
 
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
@@ -590,15 +410,8 @@ var cmdVerify = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		// Recompute HMCA for verification.
-		var verifySamples []session.HardwareSample
-		for _, r := range runs {
-			verifySamples = append(verifySamples, r.HardwareSamples...)
-		}
-		verifyHMCA := hmca.Analyze(runs, verifySamples)
-
 		// Step 1: recompute and verify the data hash.
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
+		computedHash, err := canonicalSessionHash(sess, runs)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -642,34 +455,15 @@ var cmdVerify = &cobra.Command{
 		fmt.Printf("Runs:       %d\n", len(runs))
 		fmt.Printf("Data hash:  %s\n", seal.DataHash)
 
-		if seal.TotalRunCount > 0 {
-			fmt.Printf("Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
-		}
-
 		explicitCount := 0
-		claimCount := 0
-		phaseCount := 0
-		seedCount := 0
 		for _, r := range runs {
 			for _, m := range r.Metrics {
 				if m.Source == "explicit" {
 					explicitCount++
 				}
 			}
-			claimCount += len(r.Claims)
-			phaseCount += len(r.Phases)
-			seedCount += len(r.Seeds)
 		}
 		fmt.Printf("Metrics:    %d explicit\n", explicitCount)
-		if claimCount > 0 {
-			fmt.Printf("Claims:     %d inline\n", claimCount)
-		}
-		if phaseCount > 0 {
-			fmt.Printf("Phases:     %d boundaries\n", phaseCount)
-		}
-		if seedCount > 0 {
-			fmt.Printf("Seeds:      %d commitments\n", seedCount)
-		}
 		return nil
 	},
 }
@@ -714,12 +508,7 @@ var cmdCheck = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		var checkSamples []session.HardwareSample
-		for _, r := range runs {
-			checkSamples = append(checkSamples, r.HardwareSamples...)
-		}
-		checkHMCA := hmca.Analyze(runs, checkSamples)
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
+		computedHash, err := canonicalSessionHash(sess, runs)
 		if err != nil {
 			return err
 		}
@@ -837,9 +626,8 @@ var cmdStatus = &cobra.Command{
 			if r.ExitCode != 0 {
 				statusStr = fmt.Sprintf("EXIT %d", r.ExitCode)
 			}
-			fmt.Printf("  Run %d: [%s] %s  %s  %d metrics  %d claims  %d phases  %d seeds\n",
-				i+1, statusStr, strings.Join(r.Command, " "), r.DurationFmt,
-				len(r.Metrics), len(r.Claims), len(r.Phases), len(r.Seeds))
+			fmt.Printf("  Run %d: [%s] %s  %.1fs  %d metrics\n",
+				i+1, statusStr, strings.Join(r.Command, " "), r.DurationSec, len(r.Metrics))
 		}
 
 		if sess.Sealed {
@@ -914,6 +702,270 @@ report for reviewer cross-referencing.`,
 
 func init() {
 	cmdGenerateClaims.Flags().StringVar(&generateClaimsReportPath, "report", "", "path to K-Veritas PDF report")
+}
+
+// --- start-run (notebook mode) ---
+
+var startRunCommand string
+
+var cmdStartRun = &cobra.Command{
+	Use:   "start-run",
+	Short: "Start a new run without wrapping a subprocess (for notebooks)",
+	Long: `Creates a new run record in the current session. Use this in Jupyter,
+Colab, or Kaggle notebooks where code runs in cells, not as a subprocess.
+
+After starting a run, use 'kveritas log' to record metrics, phases, claims,
+and seeds. Finish with 'kveritas end-run'.
+
+Example (notebook cells):
+  !kveritas start-run --command "training experiment"
+  !kveritas log phase training
+  ... your training code ...
+  !kveritas log metric accuracy 0.95
+  !kveritas log claim accuracy ">=" 0.90
+  !kveritas end-run`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+		sess, err := session.Load(kvDir)
+		if err != nil {
+			return err
+		}
+		if sess.Sealed {
+			return fmt.Errorf("session is already sealed")
+		}
+
+		cmdParts := []string{"notebook"}
+		if startRunCommand != "" {
+			cmdParts = strings.Fields(startRunCommand)
+		}
+
+		rec := &session.RunRecord{
+			ID:        uuid.New().String()[:8],
+			SessionID: sess.ID,
+			Index:     len(sess.Runs),
+			Command:   cmdParts,
+			StartAt:   time.Now().UTC(),
+			Hardware:  hardware.Snapshot(),
+			Metrics:   []session.Metric{},
+			PreHashes: map[string]string{},
+			PostHashes: map[string]string{},
+			Modified:  []string{},
+		}
+
+		runsDir := filepath.Join(kvDir, session.RunsDir)
+		if err := os.MkdirAll(runsDir, 0700); err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(runsDir, rec.ID+".json"), data, 0600); err != nil {
+			return err
+		}
+
+		// Write active run marker so log/end-run know which run is open
+		if err := os.WriteFile(filepath.Join(kvDir, "active_run"), []byte(rec.ID), 0600); err != nil {
+			return err
+		}
+
+		fmt.Printf("Run %s started\n", rec.ID)
+		return nil
+	},
+}
+
+func init() {
+	cmdStartRun.Flags().StringVar(&startRunCommand, "command", "", "description of the run (e.g. \"training experiment\")")
+}
+
+// --- end-run (notebook mode) ---
+
+var cmdEndRun = &cobra.Command{
+	Use:   "end-run",
+	Short: "End the current notebook run",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+		sess, err := session.Load(kvDir)
+		if err != nil {
+			return err
+		}
+
+		activeRunID, err := os.ReadFile(filepath.Join(kvDir, "active_run"))
+		if err != nil {
+			return fmt.Errorf("no active run; use 'kveritas start-run' first")
+		}
+		runID := strings.TrimSpace(string(activeRunID))
+
+		rec, err := session.LoadRun(kvDir, runID)
+		if err != nil {
+			return fmt.Errorf("loading run %s: %w", runID, err)
+		}
+
+		rec.EndAt = time.Now().UTC()
+		rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
+		rec.DurationFmt = formatDuration(rec.DurationSec)
+
+		if err := sess.SaveRun(kvDir, rec); err != nil {
+			return err
+		}
+
+		sess.Runs = append(sess.Runs, runID)
+		if err := sess.Save(kvDir); err != nil {
+			return err
+		}
+
+		os.Remove(filepath.Join(kvDir, "active_run"))
+		fmt.Printf("Run %s ended (%.1fs, %d metrics)\n", runID, rec.DurationSec, len(rec.Metrics))
+		return nil
+	},
+}
+
+// --- log (notebook mode) ---
+
+var cmdLog = &cobra.Command{
+	Use:   "log <type> [args...]",
+	Short: "Log a metric, phase, claim, or seed to the active run",
+	Long: `Record experiment data in the currently active notebook run.
+
+Types:
+  kveritas log metric <name> <value> [step]
+  kveritas log phase <name>
+  kveritas log claim <metric> <operator> <value>
+  kveritas log seed <source> <value>
+
+Examples:
+  !kveritas log metric accuracy 0.95
+  !kveritas log metric loss 0.042 epoch_10
+  !kveritas log phase training
+  !kveritas log claim accuracy ">=" 0.90
+  !kveritas log seed random 42`,
+	Args: cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+
+		activeRunID, err := os.ReadFile(filepath.Join(kvDir, "active_run"))
+		if err != nil {
+			return fmt.Errorf("no active run; use 'kveritas start-run' first")
+		}
+		runID := strings.TrimSpace(string(activeRunID))
+
+		rec, err := session.LoadRun(kvDir, runID)
+		if err != nil {
+			return fmt.Errorf("loading run %s: %w", runID, err)
+		}
+
+		logType := strings.ToLower(args[0])
+		switch logType {
+		case "metric":
+			if len(args) < 3 {
+				return fmt.Errorf("usage: kveritas log metric <name> <value> [step]")
+			}
+			name := args[1]
+			var val float64
+			if _, err := fmt.Sscanf(args[2], "%f", &val); err != nil {
+				return fmt.Errorf("invalid metric value %q: %w", args[2], err)
+			}
+			step := ""
+			if len(args) > 3 {
+				step = args[3]
+			}
+			rec.Metrics = append(rec.Metrics, session.Metric{
+				Name:   name,
+				Value:  val,
+				Step:   step,
+				Line:   0,
+				Source: "explicit",
+			})
+			fmt.Printf("Logged metric: %s=%g\n", name, val)
+
+		case "phase":
+			if len(args) < 2 {
+				return fmt.Errorf("usage: kveritas log phase <name>")
+			}
+			rec.Phases = append(rec.Phases, session.Phase{
+				Name:      args[1],
+				Line:      0,
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+				Counters:  hardware.SnapshotCounters(),
+			})
+			fmt.Printf("Logged phase: %s\n", args[1])
+
+		case "claim":
+			if len(args) < 4 {
+				return fmt.Errorf("usage: kveritas log claim <metric> <operator> <value>")
+			}
+			var val float64
+			if _, err := fmt.Sscanf(args[3], "%f", &val); err != nil {
+				return fmt.Errorf("invalid claim value %q: %w", args[3], err)
+			}
+			rec.Claims = append(rec.Claims, session.Claim{
+				Metric:    args[1],
+				Operator:  args[2],
+				Value:     val,
+				Line:      0,
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			fmt.Printf("Logged claim: %s %s %g\n", args[1], args[2], val)
+
+		case "seed":
+			if len(args) < 3 {
+				return fmt.Errorf("usage: kveritas log seed <source> <value>")
+			}
+			rec.Seeds = append(rec.Seeds, session.Seed{
+				Source:    args[1],
+				Value:     args[2],
+				Line:      0,
+				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			fmt.Printf("Logged seed: %s=%s\n", args[1], args[2])
+
+		default:
+			return fmt.Errorf("unknown log type %q; use metric, phase, claim, or seed", logType)
+		}
+
+		// Save the updated run record back to disk
+		data, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(kvDir, session.RunsDir, runID+".json"), data, 0600)
+	},
+}
+
+// --- clean ---
+
+var cmdClean = &cobra.Command{
+	Use:   "clean",
+	Short: "Remove the .kveritas session directory",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(kvDir); err != nil {
+			return err
+		}
+		fmt.Println("Session cleaned")
+		return nil
+	},
+}
+
+func formatDuration(sec float64) string {
+	if sec < 60 {
+		return fmt.Sprintf("%.1fs", sec)
+	}
+	m := int(sec) / 60
+	s := sec - float64(m*60)
+	return fmt.Sprintf("%dm%.1fs", m, s)
 }
 
 // isSourceFile returns true for file arguments that look like executable scripts.
