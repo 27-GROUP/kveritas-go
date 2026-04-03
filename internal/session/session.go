@@ -160,6 +160,7 @@ type SealRecord struct {
 	// Verifiers re-hash this directly instead of reconstructing the signing
 	// data structure, making verification immune to future field additions.
 	CanonicalJSON    string `json:"canonical_json,omitempty"`
+	VisualPDFHash    string `json:"visual_pdf_hash,omitempty"`
 	// Run history from server ledger, embedded at seal time (Addition 3)
 	RunHistory       []LedgerRunEntry `json:"run_history,omitempty"`
 	TotalRunCount    int              `json:"total_run_count,omitempty"`

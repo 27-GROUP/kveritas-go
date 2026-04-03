@@ -14,6 +14,8 @@ package pdf
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -64,6 +66,10 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	if err != nil {
 		return err
 	}
+
+	// Hash the visual PDF content so tampering the visual pages is detectable
+	pdfHash := sha256.Sum256(pdfBytes)
+	seal.VisualPDFHash = hex.EncodeToString(pdfHash[:])
 
 	meta := EmbeddedData{
 		Version: "1.0",
