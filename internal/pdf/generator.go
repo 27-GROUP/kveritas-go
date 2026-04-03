@@ -77,6 +77,18 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 		Runs:    runs,
 		Seal:    seal,
 	}
+
+	// First pass: build the JSON without seal_block_hash
+	metaJSON1, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Hash the entire seal block content
+	blockHash := sha256.Sum256(metaJSON1)
+	seal.SealBlockHash = hex.EncodeToString(blockHash[:])
+
+	// Second pass: rebuild with the seal_block_hash included
+	meta.Seal = seal
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
