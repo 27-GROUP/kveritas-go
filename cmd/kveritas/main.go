@@ -265,6 +265,11 @@ var cmdSeal = &cobra.Command{
 			return err
 		}
 
+		// Clean up session directory after successful seal
+		if err := os.RemoveAll(kvDir); err != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not clean session: %v\n", err)
+		}
+
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
 		return nil
