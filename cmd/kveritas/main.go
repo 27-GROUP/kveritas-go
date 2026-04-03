@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -41,8 +44,7 @@ Workflow:
 }
 
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims)
-	root.AddCommand(cmdStartRun, cmdEndRun, cmdLog, cmdClean)
+	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -704,269 +706,85 @@ func init() {
 	cmdGenerateClaims.Flags().StringVar(&generateClaimsReportPath, "report", "", "path to K-Veritas PDF report")
 }
 
-// --- start-run (notebook mode) ---
+// --- update ---
 
-var startRunCommand string
-
-var cmdStartRun = &cobra.Command{
-	Use:   "start-run",
-	Short: "Start a new run without wrapping a subprocess (for notebooks)",
-	Long: `Creates a new run record in the current session. Use this in Jupyter,
-Colab, or Kaggle notebooks where code runs in cells, not as a subprocess.
-
-After starting a run, use 'kveritas log' to record metrics, phases, claims,
-and seeds. Finish with 'kveritas end-run'.
-
-Example (notebook cells):
-  !kveritas start-run --command "training experiment"
-  !kveritas log phase training
-  ... your training code ...
-  !kveritas log metric accuracy 0.95
-  !kveritas log claim accuracy ">=" 0.90
-  !kveritas end-run`,
+var cmdUpdate = &cobra.Command{
+	Use:   "update",
+	Short: "Update kveritas to the latest version",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
-		if err != nil {
-			return err
-		}
-		sess, err := session.Load(kvDir)
-		if err != nil {
-			return err
-		}
-		if sess.Sealed {
-			return fmt.Errorf("session is already sealed")
-		}
+		base := "https://github.com/27-GROUP/kveritas-releases/raw/main/bin"
 
-		cmdParts := []string{"notebook"}
-		if startRunCommand != "" {
-			cmdParts = strings.Fields(startRunCommand)
-		}
+		goos := strings.ToLower(runtime.GOOS)
+		goarch := strings.ToLower(runtime.GOARCH)
 
-		rec := &session.RunRecord{
-			ID:        uuid.New().String()[:8],
-			SessionID: sess.ID,
-			Index:     len(sess.Runs),
-			Command:   cmdParts,
-			StartAt:   time.Now().UTC(),
-			Hardware:  hardware.Snapshot(),
-			Metrics:   []session.Metric{},
-			PreHashes: map[string]string{},
-			PostHashes: map[string]string{},
-			Modified:  []string{},
-		}
-
-		runsDir := filepath.Join(kvDir, session.RunsDir)
-		if err := os.MkdirAll(runsDir, 0700); err != nil {
-			return err
-		}
-		data, err := json.MarshalIndent(rec, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(runsDir, rec.ID+".json"), data, 0600); err != nil {
-			return err
-		}
-
-		// Write active run marker so log/end-run know which run is open
-		if err := os.WriteFile(filepath.Join(kvDir, "active_run"), []byte(rec.ID), 0600); err != nil {
-			return err
-		}
-
-		fmt.Printf("Run %s started\n", rec.ID)
-		return nil
-	},
-}
-
-func init() {
-	cmdStartRun.Flags().StringVar(&startRunCommand, "command", "", "description of the run (e.g. \"training experiment\")")
-}
-
-// --- end-run (notebook mode) ---
-
-var cmdEndRun = &cobra.Command{
-	Use:   "end-run",
-	Short: "End the current notebook run",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
-		if err != nil {
-			return err
-		}
-		sess, err := session.Load(kvDir)
-		if err != nil {
-			return err
-		}
-
-		activeRunID, err := os.ReadFile(filepath.Join(kvDir, "active_run"))
-		if err != nil {
-			return fmt.Errorf("no active run; use 'kveritas start-run' first")
-		}
-		runID := strings.TrimSpace(string(activeRunID))
-
-		rec, err := session.LoadRun(kvDir, runID)
-		if err != nil {
-			return fmt.Errorf("loading run %s: %w", runID, err)
-		}
-
-		rec.EndAt = time.Now().UTC()
-		rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
-		rec.DurationFmt = formatDuration(rec.DurationSec)
-
-		if err := sess.SaveRun(kvDir, rec); err != nil {
-			return err
-		}
-
-		sess.Runs = append(sess.Runs, runID)
-		if err := sess.Save(kvDir); err != nil {
-			return err
-		}
-
-		os.Remove(filepath.Join(kvDir, "active_run"))
-		fmt.Printf("Run %s ended (%.1fs, %d metrics)\n", runID, rec.DurationSec, len(rec.Metrics))
-		return nil
-	},
-}
-
-// --- log (notebook mode) ---
-
-var cmdLog = &cobra.Command{
-	Use:   "log <type> [args...]",
-	Short: "Log a metric, phase, claim, or seed to the active run",
-	Long: `Record experiment data in the currently active notebook run.
-
-Types:
-  kveritas log metric <name> <value> [step]
-  kveritas log phase <name>
-  kveritas log claim <metric> <operator> <value>
-  kveritas log seed <source> <value>
-
-Examples:
-  !kveritas log metric accuracy 0.95
-  !kveritas log metric loss 0.042 epoch_10
-  !kveritas log phase training
-  !kveritas log claim accuracy ">=" 0.90
-  !kveritas log seed random 42`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
-		if err != nil {
-			return err
-		}
-
-		activeRunID, err := os.ReadFile(filepath.Join(kvDir, "active_run"))
-		if err != nil {
-			return fmt.Errorf("no active run; use 'kveritas start-run' first")
-		}
-		runID := strings.TrimSpace(string(activeRunID))
-
-		rec, err := session.LoadRun(kvDir, runID)
-		if err != nil {
-			return fmt.Errorf("loading run %s: %w", runID, err)
-		}
-
-		logType := strings.ToLower(args[0])
-		switch logType {
-		case "metric":
-			if len(args) < 3 {
-				return fmt.Errorf("usage: kveritas log metric <name> <value> [step]")
-			}
-			name := args[1]
-			var val float64
-			if _, err := fmt.Sscanf(args[2], "%f", &val); err != nil {
-				return fmt.Errorf("invalid metric value %q: %w", args[2], err)
-			}
-			step := ""
-			if len(args) > 3 {
-				step = args[3]
-			}
-			rec.Metrics = append(rec.Metrics, session.Metric{
-				Name:   name,
-				Value:  val,
-				Step:   step,
-				Line:   0,
-				Source: "explicit",
-			})
-			fmt.Printf("Logged metric: %s=%g\n", name, val)
-
-		case "phase":
-			if len(args) < 2 {
-				return fmt.Errorf("usage: kveritas log phase <name>")
-			}
-			rec.Phases = append(rec.Phases, session.Phase{
-				Name:      args[1],
-				Line:      0,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-				Counters:  hardware.SnapshotCounters(),
-			})
-			fmt.Printf("Logged phase: %s\n", args[1])
-
-		case "claim":
-			if len(args) < 4 {
-				return fmt.Errorf("usage: kveritas log claim <metric> <operator> <value>")
-			}
-			var val float64
-			if _, err := fmt.Sscanf(args[3], "%f", &val); err != nil {
-				return fmt.Errorf("invalid claim value %q: %w", args[3], err)
-			}
-			rec.Claims = append(rec.Claims, session.Claim{
-				Metric:    args[1],
-				Operator:  args[2],
-				Value:     val,
-				Line:      0,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-			})
-			fmt.Printf("Logged claim: %s %s %g\n", args[1], args[2], val)
-
-		case "seed":
-			if len(args) < 3 {
-				return fmt.Errorf("usage: kveritas log seed <source> <value>")
-			}
-			rec.Seeds = append(rec.Seeds, session.Seed{
-				Source:    args[1],
-				Value:     args[2],
-				Line:      0,
-				Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-			})
-			fmt.Printf("Logged seed: %s=%s\n", args[1], args[2])
-
+		var fname string
+		switch {
+		case goos == "linux" && goarch == "amd64":
+			fname = "kveritas-linux-amd64"
+		case goos == "linux" && goarch == "arm64":
+			fname = "kveritas-linux-arm64"
+		case goos == "darwin" && goarch == "arm64":
+			fname = "kveritas-darwin-arm64"
+		case goos == "darwin" && goarch == "amd64":
+			fname = "kveritas-darwin-amd64"
+		case goos == "windows" && goarch == "amd64":
+			fname = "kveritas-windows-amd64.exe"
 		default:
-			return fmt.Errorf("unknown log type %q; use metric, phase, claim, or seed", logType)
+			return fmt.Errorf("unsupported platform: %s/%s", goos, goarch)
 		}
 
-		// Save the updated run record back to disk
-		data, err := json.MarshalIndent(rec, "", "  ")
+		url := base + "/" + fname
+
+		exePath, err := os.Executable()
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot determine executable path: %w", err)
 		}
-		return os.WriteFile(filepath.Join(kvDir, session.RunsDir, runID+".json"), data, 0600)
-	},
-}
-
-// --- clean ---
-
-var cmdClean = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove the .kveritas session directory",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		kvDir, err := session.Find()
+		exePath, err = filepath.EvalSymlinks(exePath)
 		if err != nil {
+			return fmt.Errorf("cannot resolve symlinks: %w", err)
+		}
+
+		fmt.Printf("Downloading %s...\n", fname)
+
+		resp, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+		}
+
+		tmpFile := exePath + ".tmp"
+		out, err := os.Create(tmpFile)
+		if err != nil {
+			return fmt.Errorf("cannot create temp file: %w (try running with sudo)", err)
+		}
+
+		if _, err := io.Copy(out, resp.Body); err != nil {
+			out.Close()
+			os.Remove(tmpFile)
+			return fmt.Errorf("download interrupted: %w", err)
+		}
+		out.Close()
+
+		if err := os.Chmod(tmpFile, 0755); err != nil {
+			os.Remove(tmpFile)
 			return err
 		}
-		if err := os.RemoveAll(kvDir); err != nil {
-			return err
+
+		if err := os.Rename(tmpFile, exePath); err != nil {
+			os.Remove(tmpFile)
+			return fmt.Errorf("cannot replace binary: %w (try running with sudo)", err)
 		}
-		fmt.Println("Session cleaned")
+
+		fmt.Println("Updated successfully.")
 		return nil
 	},
 }
 
-func formatDuration(sec float64) string {
-	if sec < 60 {
-		return fmt.Sprintf("%.1fs", sec)
-	}
-	m := int(sec) / 60
-	s := sec - float64(m*60)
-	return fmt.Sprintf("%dm%.1fs", m, s)
-}
+// --- helpers ---
 
 // isSourceFile returns true for file arguments that look like executable scripts.
 func isSourceFile(path string) bool {
@@ -979,3 +797,4 @@ func isSourceFile(path string) bool {
 	}
 	return false
 }
+
