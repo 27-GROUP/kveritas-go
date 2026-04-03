@@ -149,18 +149,22 @@ On the first `kveritas run`, all source files are indexed and SHA-256 hashed. Du
 ## Cryptographic Protocol
 
 ```
-canonical_json  = sorted_keys_compact_json(signing_data)
-data_hash       = SHA-256(canonical_json)
-nonce           = hex(16 random bytes)
-signed_at       = RFC3339Nano UTC timestamp
-payload         = "{data_hash}:{nonce}:{signed_at}"
-signature       = RSA-PSS-SHA256(payload, salt=MAX, key=4096-bit)
-signed_msg_hash = SHA-256(payload)
+canonical_json    = sorted_keys_compact_json(signing_data)
+data_hash         = SHA-256(canonical_json)
+nonce             = hex(16 random bytes)
+signed_at         = RFC3339Nano UTC timestamp
+payload           = "{data_hash}:{nonce}:{signed_at}"
+signature         = RSA-PSS-SHA256(payload, salt=MAX, key=4096-bit)
+signed_msg_hash   = SHA-256(payload)
+visual_pdf_hash   = SHA-256(visual PDF pages before seal marker)
+seal_block_hash   = SHA-256(entire seal JSON before seal_block_hash insertion)
 ```
 
 All values plus the public key PEM and the canonical JSON bytes are embedded in the PDF after `%%EOF`, delimited by `%%KVERITAS_SEAL_BEGIN%%` and `%%KVERITAS_SEAL_END%%`.
 
 The `canonical_json` field in the seal record stores the exact bytes that were hashed. Verifiers (including the Python API server) hash these bytes directly instead of reconstructing the signing data. This makes verification immune to future field additions -- no matter what new fields are added to the Go CLI's signing data, the Python verifier will always produce the correct hash.
+
+`visual_pdf_hash` is computed over the visual PDF content (charts, tables, text) before the seal marker is appended. `seal_block_hash` is computed over the entire seal JSON before `seal_block_hash` itself is inserted, so any change to any seal field invalidates it. `source_bundle_hash` is included in the canonical JSON and binds the source bundle ZIP to the signed data.
 
 Canonical JSON format: sorted keys at every level, compact separators (no spaces after `:` or `,`), UTF-8, ensure_ascii. Matches Python's `json.dumps(v, sort_keys=True, separators=(',', ':'))`.
 
@@ -209,7 +213,7 @@ Runs HMCA analysis, computes aggregate source hash, creates bundle.zip, computes
 --public-key path   Override the embedded public key
 ```
 
-Fully offline. Three-step verification: data hash match, signed message hash match, RSA-PSS signature verification.
+Fully offline. Five-layer verification: data hash match, signed message hash match, RSA-PSS signature verification, visual PDF hash match, seal block hash match.
 
 ### `kveritas check`
 
