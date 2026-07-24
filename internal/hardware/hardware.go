@@ -32,7 +32,7 @@ func Snapshot() session.HardwareInfo {
 }
 
 // MachineID returns an 8-byte hex fingerprint of the host machine.
-// It is not a secret — its purpose is replay-attack detection across machines.
+// It is not a secret; its purpose is replay-attack detection across machines.
 func MachineID() string {
 	hostname, _ := os.Hostname()
 	raw := fmt.Sprintf("%s:%s:%s:%d", hostname, runtime.GOOS, runtime.GOARCH, runtime.NumCPU())

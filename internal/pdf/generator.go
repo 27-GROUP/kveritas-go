@@ -280,7 +280,7 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		b.kv("GPU", r.Hardware.GPUInfo)
 	}
 
-	// Seed commitments (Addition 4)
+	// Seed commitments
 	if len(r.Seeds) > 0 {
 		b.heading("Seed Commitments")
 		for _, s := range r.Seeds {
@@ -289,7 +289,7 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		}
 	}
 
-	// Phase timeline with hardware deltas (Addition 1)
+	// Phase timeline with hardware deltas
 	if len(r.Phases) > 0 {
 		b.heading("Phase Timeline (Hardware Snapshots)")
 		for i, p := range r.Phases {
@@ -324,7 +324,7 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		}
 	}
 
-	// Inline claims (Addition 2)
+	// Inline claims
 	if len(r.Claims) > 0 {
 		b.heading("Inline Claims (committed in stdout)")
 		for _, c := range r.Claims {

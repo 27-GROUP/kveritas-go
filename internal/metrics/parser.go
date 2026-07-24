@@ -193,7 +193,7 @@ func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
 		return out
 	}
 
-	// Single "metric_name: 0.947" — only when the name is a known metric keyword.
+	// Single "metric_name: 0.947", only when the name is a known metric keyword.
 	if m := colonKVRe.FindStringSubmatch(line); m != nil {
 		name := m[1]
 		if !blocklist[strings.ToLower(name)] && metricKeywords[strings.ToLower(name)] {

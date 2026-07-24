@@ -40,7 +40,7 @@ for epoch in range(1, EPOCHS + 1):
     train_acc = fake_accuracy(epoch)
     val_acc = fake_accuracy(epoch - 0.5)
 
-    # Primary format: KVERITAS_METRIC — these are guaranteed to be captured.
+    # Primary format: KVERITAS_METRIC; these are guaranteed to be captured.
     print(f"KVERITAS_METRIC name=train_loss value={train_loss:.6f} step={epoch}")
     print(f"KVERITAS_METRIC name=val_loss value={val_loss:.6f} step={epoch}")
     print(f"KVERITAS_METRIC name=train_accuracy value={train_acc:.6f} step={epoch}")

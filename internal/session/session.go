@@ -49,13 +49,13 @@ type RunRecord struct {
 	Hardware    HardwareInfo      `json:"hardware"`
 	EnvDigest   string            `json:"env_digest"`
 
-	// Per-phase hardware snapshots (Addition 1)
+	// Per-phase hardware snapshots
 	Phases     []PhaseEvent   `json:"phases,omitempty"`
-	// Inline claims committed in stdout (Addition 2)
+	// Inline claims committed in stdout
 	Claims     []InlineClaim  `json:"claims,omitempty"`
-	// Seed commitments declared in stdout (Addition 4)
+	// Seed commitments declared in stdout
 	Seeds      []SeedCommitment `json:"seeds,omitempty"`
-	// Hash of only the metric lines for ledger (Addition 3)
+	// Hash of only the metric lines for ledger
 	MetricHash string          `json:"metric_hash,omitempty"`
 	// Background hardware samples taken during the run
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
@@ -162,7 +162,7 @@ type SealRecord struct {
 	CanonicalJSON    string `json:"canonical_json,omitempty"`
 	VisualPDFHash    string `json:"visual_pdf_hash,omitempty"`
 	SealBlockHash    string `json:"seal_block_hash,omitempty"`
-	// Run history from server ledger, embedded at seal time (Addition 3)
+	// Run history from server ledger, embedded at seal time
 	RunHistory       []LedgerRunEntry `json:"run_history,omitempty"`
 	TotalRunCount    int              `json:"total_run_count,omitempty"`
 }

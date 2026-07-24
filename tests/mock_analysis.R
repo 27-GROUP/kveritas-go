@@ -1,7 +1,7 @@
 # Mock statistical analysis script for K-Veritas integration testing.
 #
 # Demonstrates that kveritas works with R scripts identically to Python.
-# The KVERITAS_METRIC format is just a printed line — any language works.
+# The KVERITAS_METRIC format is just a printed line; any language works.
 #
 # Usage:
 #   kveritas run --files tests/mock_analysis.R -- Rscript tests/mock_analysis.R
@@ -30,7 +30,7 @@ cat(sprintf("  RMSE:        %.4f\n", rmse))
 cat(sprintf("  F-statistic: %.4f\n", f_statistic))
 cat(sprintf("  p-value:     %.6f\n", p_value))
 
-# Emit KVERITAS_METRIC lines — identical format to Python.
+# Emit KVERITAS_METRIC lines, identical format to Python.
 cat(sprintf("KVERITAS_METRIC name=r_squared value=%.6f step=final\n", r_squared))
 cat(sprintf("KVERITAS_METRIC name=adj_r_squared value=%.6f step=final\n", adj_r2))
 cat(sprintf("KVERITAS_METRIC name=rmse value=%.6f step=final\n", rmse))

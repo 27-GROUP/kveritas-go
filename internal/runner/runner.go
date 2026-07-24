@@ -117,7 +117,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 			fmt.Fprintln(os.Stdout, line)
 			fmt.Fprintln(&stdoutBuf, line)
 
-			// Check for KVERITAS_PHASE
 			if phaseName, ok := parser.ParsePhase(line); ok {
 				pe := hardware.CapturePhaseEvent(phaseName, lineNum)
 				mu.Lock()
@@ -127,7 +126,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				continue
 			}
 
-			// Check for KVERITAS_CLAIM
 			if claim, ok := parser.ParseClaim(line, lineNum); ok {
 				mu.Lock()
 				allClaims = append(allClaims, *claim)
@@ -137,7 +135,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				continue
 			}
 
-			// Check for KVERITAS_INPUT seed
 			if seedVal, ok := parser.ParseSeed(line); ok {
 				sc := session.SeedCommitment{
 					Source:    "seed:" + seedVal,
@@ -152,7 +149,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				continue
 			}
 
-			// Check for KVERITAS_METRIC
 			if m, ok := parser.Parse(line, lineNum); ok {
 				mu.Lock()
 				allMetrics = append(allMetrics, *m)
@@ -186,7 +182,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
-	// Stop background hardware sampler and collect samples.
 	hwSamples := sampler.Stop()
 	if len(hwSamples) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
@@ -245,7 +240,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	rec.PostHashes = postHashes
 	rec.EnvDigest = envDig
 
-	// Compute aggregate source code hash from all tracked source files.
 	if len(sess.SourceHashes) > 0 {
 		rec.SourceCodeHash = computeAggregateSourceHash(sess.SourceHashes)
 	}

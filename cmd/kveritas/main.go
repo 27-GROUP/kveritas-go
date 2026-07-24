@@ -347,7 +347,7 @@ var cmdSeal = &cobra.Command{
 		seal.SourceBundleHash = bundleHash
 		seal.CanonicalJSON = string(canonicalBytes)
 
-		// Pull run history from server ledger (Addition 3).
+		// Pull run history from the server ledger.
 		if sess.ServerURL != "local" {
 			c := client.New(sess.ServerURL)
 			history, err := c.RunHistory(sess)
@@ -744,7 +744,6 @@ var cmdCheck = &cobra.Command{
 			return nil
 		}
 
-		// Load claims.
 		claimsData, err := os.ReadFile(checkClaimsPath)
 		if err != nil {
 			return fmt.Errorf("reading claims file: %w", err)

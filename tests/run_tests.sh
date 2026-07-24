@@ -182,7 +182,7 @@ else
     fail "verify: expected VERIFIED, got: $VERIFY_OUT"
 fi
 
-# --- Test 10: tamper detection — modify embedded JSON ---
+# --- Test 10: tamper detection (modify embedded JSON) ---
 info "Test 10: tamper detection (modified embedded data)"
 TAMPERED="$WORK/tampered.pdf"
 cp "$REPORT" "$TAMPERED"

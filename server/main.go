@@ -1,8 +1,8 @@
 // K-Veritas attestation server.
 //
 // The server holds the RSA private key and is the only entity that can issue
-// valid signatures. It receives a data_hash from the client — never the raw
-// experiment data — and signs the payload data_hash:nonce:signed_at.
+// valid signatures. It receives a data_hash from the client, never the raw
+// experiment data, and signs the payload data_hash:nonce:signed_at.
 //
 // Endpoints:
 //
