@@ -24,6 +24,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mamadouk/kveritas/internal/compute"
 	"github.com/mamadouk/kveritas/internal/session"
 )
 
@@ -60,6 +61,7 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	if hmcaResult != nil {
 		b.addHMCAPage(hmcaResult)
 	}
+	b.addComputePage(runs)
 	b.addCryptoPage(seal)
 
 	pdfBytes, err := b.render()
@@ -124,8 +126,6 @@ func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 	}
 	return &meta, nil
 }
-
-// --- minimal self-contained PDF builder ---
 
 type page struct {
 	content strings.Builder
@@ -194,7 +194,6 @@ func (b *builder) heading(text string) {
 }
 
 func (b *builder) body(text string) {
-	// Wrap long lines.
 	for _, line := range wrapText(text, 95) {
 		b.writeLine(line, "H", 9.5, mL)
 	}
@@ -280,7 +279,6 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		b.kv("GPU", r.Hardware.GPUInfo)
 	}
 
-	// Seed commitments
 	if len(r.Seeds) > 0 {
 		b.heading("Seed Commitments")
 		for _, s := range r.Seeds {
@@ -289,7 +287,6 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		}
 	}
 
-	// Phase timeline with hardware deltas
 	if len(r.Phases) > 0 {
 		b.heading("Phase Timeline (Hardware Snapshots)")
 		for i, p := range r.Phases {
@@ -306,7 +303,6 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 				b.body(fmt.Sprintf("    CPU temp: %.1fC", c.CPUTempC))
 			}
 
-			// Delta from previous phase
 			if i > 0 {
 				prev := r.Phases[i-1]
 				lines := p.Line - prev.Line
@@ -324,7 +320,6 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 		}
 	}
 
-	// Inline claims
 	if len(r.Claims) > 0 {
 		b.heading("Inline Claims (committed in stdout)")
 		for _, c := range r.Claims {
@@ -443,6 +438,71 @@ func (b *builder) addHMCAPage(result *session.HMCAResult) {
 	b.body("PHASE_MISMATCH: evaluation phase used disproportionately more CPU than training")
 }
 
+func (b *builder) addComputePage(runs []*session.RunRecord) {
+	hasDeclared := false
+	for _, r := range runs {
+		if r.Declared != nil {
+			hasDeclared = true
+			break
+		}
+	}
+	if !hasDeclared {
+		return
+	}
+
+	b.newPage()
+	b.gap(10)
+	b.writeLine("Compute-Cost Attestation", "Hb", 15, mL)
+	b.gap(4)
+	b.hline()
+	b.gap(6)
+
+	b.body("A non-deniable check that the declared computational work was physically")
+	b.body("performed on the reported hardware. Bounds are computed generous toward the")
+	b.body("author, so an honest run cannot trip the accusatory verdict. This proves the")
+	b.body("work was run at the declared scale, not that the result is correct.")
+	b.gap(6)
+
+	for i, r := range runs {
+		if r.Declared == nil {
+			continue
+		}
+		cert := compute.Analyze(r)
+		d := r.Declared
+		b.heading(fmt.Sprintf("Run %d verdict: %s", i+1, cert.Verdict))
+		if d.Arch != "" || d.Params > 0 {
+			b.kv("Declared model", fmt.Sprintf("%s, %d params, %s", d.Arch, d.Params, d.Precision))
+		}
+		if d.DatasetSize > 0 {
+			b.kv("Declared workload", fmt.Sprintf("%d samples, %.0f epochs, batch %d",
+				d.DatasetSize, d.Epochs, d.BatchSize))
+		}
+		if cert.FDeclaredFLOPs > 0 {
+			b.kv("Declared FLOPs", fmt.Sprintf("%.3e", cert.FDeclaredFLOPs))
+		}
+		b.kv("Measured", fmt.Sprintf("%.0fs GPU-active, %.0f J, %.0f MB peak memory",
+			cert.GPUActiveSec, cert.EnergyJoules, cert.PeakGPUMemMB))
+		if cert.FPeakGenerous > 0 {
+			b.kv("Device peak (generous)", fmt.Sprintf("%.2e FLOP/s", cert.FPeakGenerous))
+		}
+		if cert.ImpliedMFU > 0 {
+			b.kv("Implied MFU", fmt.Sprintf("%.4f", cert.ImpliedMFU))
+		}
+		for _, n := range cert.Notes {
+			b.body("  " + n)
+		}
+		b.gap(4)
+	}
+
+	b.gap(6)
+	b.heading("Bounds")
+	b.body("TIME: declared FLOPs cannot exceed device peak times GPU-active seconds.")
+	b.body("ENERGY: declared FLOPs cannot exceed measured joules over the minimum energy per FLOP.")
+	b.body("MEMORY: declared model weights should fit the observed GPU memory footprint.")
+	b.body("A hard time or energy violation is a physical impossibility, and is non-deniable")
+	b.body("because every input above is printed and the inequality can be recomputed.")
+}
+
 func (b *builder) addCryptoPage(seal *session.SealRecord) {
 	b.newPage()
 	b.gap(10)
@@ -495,14 +555,12 @@ func (b *builder) render() ([]byte, error) {
 
 	buf.WriteString("%PDF-1.4\n")
 
-	// Font objects: F1=Helvetica, F2=Helvetica-Bold, F3=Courier
 	fontH := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
 	fontHb := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
 	fontC := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>")
 
 	fontDict := fmt.Sprintf("<< /H %d 0 R /Hb %d 0 R /C %d 0 R >>", fontH, fontHb, fontC)
 
-	// Page content streams and page objects.
 	pageNums := make([]int, 0, len(b.pages))
 	for _, pg := range b.pages {
 		stream := pg.content.String()
@@ -528,7 +586,6 @@ func (b *builder) render() ([]byte, error) {
 	pagesObj := writeObj(fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", kidsStr, len(pageNums)))
 	catalogObj := writeObj(fmt.Sprintf("<< /Type /Catalog /Pages %d 0 R >>", pagesObj))
 
-	// Cross-reference table.
 	xrefOffset := buf.Len()
 	fmt.Fprintf(&buf, "xref\n0 %d\n", objCount+1)
 	fmt.Fprintf(&buf, "0000000000 65535 f \n")
@@ -591,7 +648,6 @@ func pdfEscape(s string) string {
 }
 
 func transliterate(r rune) rune {
-	// Common Unicode to ASCII approximations
 	switch {
 	case r >= 0x0100 && r <= 0x017F: // Latin Extended-A
 		base := strings.ToLower(string(r))

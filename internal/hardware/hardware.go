@@ -153,7 +153,6 @@ func memGB() float64 {
 }
 
 func gpuInfo() string {
-	// NVIDIA
 	out, err := exec.Command(
 		"nvidia-smi",
 		"--query-gpu=name,memory.total",
@@ -162,7 +161,6 @@ func gpuInfo() string {
 	if err == nil {
 		return strings.TrimSpace(string(out))
 	}
-	// AMD ROCm
 	out, err = exec.Command("rocm-smi", "--showproductname").Output()
 	if err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
@@ -174,8 +172,6 @@ func gpuInfo() string {
 	}
 	return ""
 }
-
-// --- Linux-specific counters ---
 
 func linuxCPUTime() float64 {
 	data, err := os.ReadFile("/proc/stat")
@@ -221,7 +217,6 @@ func linuxMemUsed() float64 {
 }
 
 func linuxCPUTemp() float64 {
-	// Try thermal zones
 	for i := 0; i < 10; i++ {
 		path := fmt.Sprintf("/sys/class/thermal/thermal_zone%d/temp", i)
 		data, err := os.ReadFile(path)
@@ -254,8 +249,6 @@ func linuxDiskIO() (readMB, writeMB float64) {
 	}
 	return readMB, writeMB
 }
-
-// --- macOS-specific counters ---
 
 func darwinCPUTime() float64 {
 	out, err := exec.Command("sysctl", "-n", "kern.cp_time").Output()
@@ -294,8 +287,6 @@ func darwinMemUsed() float64 {
 	return (active + wired + compressed) * pageSize / (1024 * 1024 * 1024)
 }
 
-// --- GPU counters (cross-platform via nvidia-smi / rocm-smi) ---
-
 type gpuState struct {
 	GPUUtilPct   float64
 	GPUMemUsedMB float64
@@ -306,7 +297,6 @@ type gpuState struct {
 func gpuCounters() gpuState {
 	g := gpuState{}
 
-	// NVIDIA
 	out, err := exec.Command("nvidia-smi",
 		"--query-gpu=utilization.gpu,memory.used,temperature.gpu,power.draw",
 		"--format=csv,noheader,nounits",
@@ -322,7 +312,6 @@ func gpuCounters() gpuState {
 		return g
 	}
 
-	// AMD ROCm
 	out, err = exec.Command("rocm-smi", "--showuse", "--showtemp", "--showmeminfo", "vram", "--csv").Output()
 	if err == nil {
 		for _, line := range strings.Split(string(out), "\n") {

@@ -75,13 +75,15 @@ kveritas clean
 
 ## Protocol Lines
 
-The CLI recognizes four protocol line formats in stdout:
+The CLI recognizes these protocol line formats in stdout:
 
 ```
 KVERITAS_METRIC name=<identifier> value=<float> [step=<label>]
 KVERITAS_PHASE <phase_name>
 KVERITAS_CLAIM <metric> <op> <value>
 KVERITAS_INPUT src=seed:<value>
+KVERITAS_MODEL params=<int> arch=<name> precision=<fp16|bf16|fp32>
+KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]
 ```
 
 **KVERITAS_METRIC** -- Records a metric value at a specific line. The entire stdout is SHA-256 hashed byte-by-byte.
@@ -91,6 +93,8 @@ KVERITAS_INPUT src=seed:<value>
 **KVERITAS_CLAIM** -- An inline assertion committed to the hash at a specific line number. Operators: `=`, `>=`, `<=`, `>`, `<`.
 
 **KVERITAS_INPUT** -- Commits a PRNG seed to the record. Proves the seed was declared before results appeared.
+
+**KVERITAS_MODEL** and **KVERITAS_WORKLOAD** -- Declare the model card (parameter count, architecture, precision) and the training workload (dataset size, epochs, batch size). These feed the compute-cost certificate, which checks that the declared work was physically performed on the reported hardware. Counts accept scientific notation (e.g. `params=25.6e6`).
 
 ---
 
@@ -129,6 +133,37 @@ At `kveritas seal` time, a deterministic rule engine analyzes the relationship b
 | `PHASE_MISMATCH` | Eval phase used more CPU than training phase | Suspicious resource distribution |
 
 The HMCA produces a score (0.0-1.0), verdict (PASS/WARN/FAIL), and triggered flags. These are baked into the canonical JSON before signing and included in the PDF report.
+
+---
+
+## Compute-Cost Attestation
+
+When a run declares a model card via `KVERITAS_MODEL` and `KVERITAS_WORKLOAD`, `kveritas seal`
+produces a per-run certificate that checks the declared computational work against the hardware
+evidence sampled during the run. It proves the work was physically performed at the declared
+scale; it does not prove the result is correct (that requires a rerun).
+
+The certificate checks three physical bounds, all recomputable from values printed on the report:
+
+| Bound | Impossible when |
+|---|---|
+| Time | declared FLOPs exceed device peak times GPU-active seconds |
+| Energy | declared FLOPs exceed measured joules divided by the minimum energy per FLOP |
+| Memory | declared model weights exceed the observed GPU memory footprint (soft, review-only) |
+
+Constants are chosen generous toward the author (theoretical peak, an energy floor below any
+real device, all GPUs summed), so an honest run cannot trip the accusatory verdict; small or
+CPU-only runs are marked N/A. A hard time or energy violation is a physical impossibility and is
+non-deniable. The verdict (PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A) is bound into the signed
+canonical JSON, so editing the declared card to dodge the check breaks verification. See
+`COMPUTE_ATTESTATION_SPEC.md` for the full design.
+
+Example (Python):
+
+```python
+print("KVERITAS_MODEL params=25600000 arch=resnet50 precision=fp16")
+print("KVERITAS_WORKLOAD dataset_size=1281167 epochs=90 batch_size=256")
+```
 
 ---
 
@@ -177,17 +212,14 @@ Canonical JSON format: sorted keys at every level, compact separators (no spaces
 ```
 --server URL          Attestation server URL (default: hosted service)
 --local               Offline mode, skip server registration
---org-token TOKEN     Class/track token (links reports to an institution)
---user EMAIL          Submitter email (for class-mode tokens)
 ```
 
 Creates a `.kveritas/` session directory. Registers with the attestation server and binds a single-use token to the machine fingerprint.
 
 Usage examples:
 ```bash
-kveritas init                                          # standalone, no affiliation
-kveritas init --org-token CS229ABC --user s@mit.edu    # university class (identified)
-kveritas init --org-token NEURIPS2026                   # conference track (anonymous)
+kveritas init                # register with the hosted attestation server
+kveritas init --local        # offline mode, sign with a local key
 ```
 
 ### `kveritas run`
@@ -315,7 +347,7 @@ bash tests/run_tests.sh
 | Repo | Purpose | Live URL |
 |---|---|---|
 | [kveritas-api](https://github.com/27-GROUP/kveritas-api) | FastAPI backend (signing, verification, AI audit) | [kveritas-api-production.up.railway.app](https://kveritas-api-production.up.railway.app) |
-| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Next.js frontend (web verifier, admin dashboard) | [kveritas.org](https://kveritas.org) |
+| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Next.js frontend (web verifier) | [kveritas.org](https://kveritas.org) |
 | [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) | Pre-built binaries for all platforms | |
 
 The frontend and API also have private mirrors (`Mamadou2727/kveritas-web`, `Mamadou2727/kveritas-api`) connected to Vercel and Railway for auto-deploy. The Go CLI repo stays on 27-GROUP only.

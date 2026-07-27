@@ -28,13 +28,10 @@ type initRequest struct {
 	SessionID string `json:"session_id"`
 	MachineID string `json:"machine_id"`
 	InitAt    string `json:"init_at"`
-	OrgToken  string `json:"org_token,omitempty"`
-	UserEmail string `json:"user_email,omitempty"`
 }
 
 type InitResponse struct {
-	Token   string `json:"token"`
-	OrgName string `json:"org_name,omitempty"`
+	Token string `json:"token"`
 }
 
 type sealRequest struct {
@@ -43,7 +40,6 @@ type sealRequest struct {
 	MachineID string `json:"machine_id"`
 	DataHash  string `json:"data_hash"`
 	RunCount  int    `json:"run_count"`
-	OrgToken  string `json:"org_token,omitempty"`
 }
 
 // SealResponse contains the server's attestation response.
@@ -75,14 +71,12 @@ type RunHistoryResponse struct {
 }
 
 // Init registers a new session with the server and returns the full response.
-func (c *Client) Init(sessionID, machineID string, initAt time.Time, orgToken, userEmail string) (*InitResponse, error) {
+func (c *Client) Init(sessionID, machineID string, initAt time.Time) (*InitResponse, error) {
 	var resp InitResponse
 	err := c.post("/api/v1/init", initRequest{
 		SessionID: sessionID,
 		MachineID: machineID,
 		InitAt:    initAt.UTC().Format(time.RFC3339Nano),
-		OrgToken:  orgToken,
-		UserEmail: userEmail,
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -99,7 +93,6 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 		MachineID: sess.MachineID,
 		DataHash:  dataHash,
 		RunCount:  runCount,
-		OrgToken:  sess.OrgToken,
 	}, &resp)
 	if err != nil {
 		return nil, err

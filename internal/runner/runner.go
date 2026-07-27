@@ -53,8 +53,9 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, fmt.Errorf("pre-run file hashing: %w", preHashErr)
 	}
 
-	// Start background hardware sampler (15-second polling interval).
-	sampler := hardware.NewSampler(15 * time.Second)
+	// Start background hardware sampler. A short interval gives enough resolution
+	// to integrate GPU energy and active time for the compute-cost certificate.
+	sampler := hardware.NewSampler(2 * time.Second)
 	sampler.Start()
 
 	rec := &session.RunRecord{
@@ -83,6 +84,8 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		allPhases    []session.PhaseEvent
 		allClaims    []session.InlineClaim
 		allSeeds     []session.SeedCommitment
+		declared     = &session.DeclaredModel{}
+		declaredSeen bool
 		mu           sync.Mutex
 	)
 
@@ -132,6 +135,12 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				mu.Unlock()
 				fmt.Fprintln(&metricLines, line)
 				fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (line %d)\n", claim.Metric, claim.Value, lineNum)
+				continue
+			}
+
+			if parser.ParseDeclared(line, declared) {
+				declaredSeen = true
+				fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (line %d)\n", lineNum)
 				continue
 			}
 
@@ -200,6 +209,9 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	rec.Seeds = allSeeds
 	rec.MetricHash = digestBuf(metricLines.Bytes())
 	rec.HardwareSamples = hwSamples
+	if declaredSeen {
+		rec.Declared = declared
+	}
 
 	// Post-run: hash files, env digest, and source indexing concurrently.
 	var postHashes map[string]string

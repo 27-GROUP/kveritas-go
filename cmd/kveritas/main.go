@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mamadouk/kveritas/internal/bundle"
 	"github.com/mamadouk/kveritas/internal/client"
+	"github.com/mamadouk/kveritas/internal/compute"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
 	"github.com/mamadouk/kveritas/internal/hmca"
@@ -43,10 +44,12 @@ Workflow:
   kveritas update            Update to the latest version.
 
 Protocol lines your script can emit:
-  KVERITAS_METRIC name=<id> value=<float> [step=<label>]
-  KVERITAS_PHASE  name=<phase>
-  KVERITAS_CLAIM  metric=<id> value=<float> [phase=<phase>]
-  KVERITAS_INPUT  src=seed:<value>`,
+  KVERITAS_METRIC   name=<id> value=<float> [step=<label>]
+  KVERITAS_PHASE    name=<phase>
+  KVERITAS_CLAIM    metric=<id> value=<float> [phase=<phase>]
+  KVERITAS_INPUT    src=seed:<value>
+  KVERITAS_MODEL    params=<int> arch=<name> precision=<fp16|bf16|fp32>
+  KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]`,
 	SilenceUsage: true,
 }
 
@@ -76,13 +79,9 @@ func main() {
 	}
 }
 
-// --- init ---
-
 var (
-	initServer   string
-	initLocal    bool
-	initOrgToken string
-	initUser     string
+	initServer string
+	initLocal  bool
 )
 
 var cmdInit = &cobra.Command{
@@ -108,27 +107,15 @@ var cmdInit = &cobra.Command{
 
 		var token string
 		serverURL := initServer
-		orgToken := initOrgToken
-
-		// If no org-token flag was provided, prompt the user.
-		if orgToken == "" && !initLocal {
-			fmt.Fprint(os.Stderr, "[kveritas] Enter activation code (or press Enter to continue without): ")
-			var input string
-			fmt.Scanln(&input)
-			orgToken = strings.TrimSpace(input)
-		}
 
 		if !initLocal {
 			c := client.New(serverURL)
-			initResp, err := c.Init(sessionID, machineID, time.Now(), orgToken, initUser)
+			initResp, err := c.Init(sessionID, machineID, time.Now())
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
 			token = initResp.Token
-			if initResp.OrgName != "" {
-				fmt.Fprintf(os.Stderr, "[kveritas] Session registered for %s\n", initResp.OrgName)
-			}
 		} else {
 			token = "local"
 			serverURL = "local"
@@ -141,8 +128,6 @@ var cmdInit = &cobra.Command{
 			MachineID:  machineID,
 			Token:      token,
 			ServerURL:  serverURL,
-			OrgToken:   orgToken,
-			UserEmail:  initUser,
 			Runs:       []string{},
 		}
 
@@ -158,11 +143,7 @@ var cmdInit = &cobra.Command{
 func init() {
 	cmdInit.Flags().StringVar(&initServer, "server", defaultServer, "attestation server URL")
 	cmdInit.Flags().BoolVar(&initLocal, "local", false, "local mode: sign with a local key, no server")
-	cmdInit.Flags().StringVar(&initOrgToken, "org-token", "", "organization/class token (links reports to a class or track)")
-	cmdInit.Flags().StringVar(&initUser, "user", "", "user email (identifies the submitter for class-mode tokens)")
 }
-
-// --- run ---
 
 var runFiles []string
 
@@ -251,8 +232,6 @@ func init() {
 	cmdRun.Flags().StringSliceVar(&runFiles, "files", nil, "source files to hash (comma-separated)")
 }
 
-// --- seal ---
-
 var (
 	sealOutput  string
 	sealKeyPath string
@@ -303,7 +282,6 @@ var cmdSeal = &cobra.Command{
 			}
 		}
 
-		// Run Hardware-Metric Consistency Analyzer.
 		var allSamples []session.HardwareSample
 		for _, r := range runs {
 			allSamples = append(allSamples, r.HardwareSamples...)
@@ -347,7 +325,6 @@ var cmdSeal = &cobra.Command{
 		seal.SourceBundleHash = bundleHash
 		seal.CanonicalJSON = string(canonicalBytes)
 
-		// Pull run history from the server ledger.
 		if sess.ServerURL != "local" {
 			c := client.New(sess.ServerURL)
 			history, err := c.RunHistory(sess)
@@ -369,7 +346,6 @@ var cmdSeal = &cobra.Command{
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Copy bundle.zip alongside the PDF.
 		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
 		if _, err := os.Stat(bundleSrc); err == nil {
 			bundleDst := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "_bundle.zip"
@@ -380,7 +356,6 @@ var cmdSeal = &cobra.Command{
 			}
 		}
 
-		// Session complete. Clean up the .kveritas directory.
 		if removeErr := os.RemoveAll(kvDir); removeErr != nil {
 			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not remove session directory: %v\n", removeErr)
 		} else {
@@ -427,9 +402,29 @@ var cmdSeal = &cobra.Command{
 					fmt.Printf("    %s (line %d)\n", s.Source, s.Line)
 				}
 			}
+			reportComputeCert(compute.Analyze(r))
 		}
 		return nil
 	},
+}
+
+// reportComputeCert prints a run's compute-cost certificate to stdout.
+func reportComputeCert(c session.ComputeCert) {
+	if c.Verdict == "" || c.Verdict == "N/A" {
+		return
+	}
+	fmt.Printf("  Compute [%s]", c.Verdict)
+	if c.FDeclaredFLOPs > 0 {
+		fmt.Printf(" declared=%.2e FLOPs  active=%.0fs  energy=%.0fJ  peakmem=%.0fMB",
+			c.FDeclaredFLOPs, c.GPUActiveSec, c.EnergyJoules, c.PeakGPUMemMB)
+		if c.ImpliedMFU > 0 {
+			fmt.Printf("  MFU=%.3f", c.ImpliedMFU)
+		}
+	}
+	fmt.Println()
+	for _, n := range c.Notes {
+		fmt.Printf("    ! %s\n", n)
+	}
 }
 
 func init() {
@@ -462,6 +457,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		MetricHash     string                  `json:"metric_hash,omitempty"`
 		DurationFmt    string                  `json:"duration_fmt,omitempty"`
 		SourceCodeHash string                  `json:"source_code_hash,omitempty"`
+		Declared       *session.DeclaredModel  `json:"declared,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -489,8 +485,23 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			MetricHash:     r.MetricHash,
 			DurationFmt:    r.DurationFmt,
 			SourceCodeHash: r.SourceCodeHash,
+			Declared:       r.Declared,
 		}
 		runPayloads = append(runPayloads, rp)
+	}
+
+	// Compute-cost certificates are derived deterministically per run, so they are
+	// recomputed identically at seal and verify; binding them into the signed data
+	// makes any declared-card or sample tampering break the signature. They are
+	// bound only when at least one run declares a model card, so reports without one
+	// (including those from older versions) hash exactly as before.
+	certs := make([]session.ComputeCert, 0, len(runs))
+	anyDeclared := false
+	for _, r := range runs {
+		certs = append(certs, compute.Analyze(r))
+		if r.Declared != nil {
+			anyDeclared = true
+		}
 	}
 
 	signingData := map[string]interface{}{
@@ -505,6 +516,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	}
 	if hmcaResult != nil {
 		signingData["hmca"] = hmcaResult
+	}
+	if anyDeclared {
+		signingData["compute"] = certs
 	}
 
 	return kvcrypto.CanonicalHashWithBytes(signingData)
@@ -573,8 +587,6 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 	}, nil
 }
 
-// --- verify ---
-
 var verifyKeyPath string
 
 var cmdVerify = &cobra.Command{
@@ -593,7 +605,6 @@ var cmdVerify = &cobra.Command{
 		sess := meta.Session
 		runs := meta.Runs
 
-		// Recompute HMCA for verification.
 		var verifySamples []session.HardwareSample
 		for _, r := range runs {
 			verifySamples = append(verifySamples, r.HardwareSamples...)
@@ -673,6 +684,15 @@ var cmdVerify = &cobra.Command{
 		if seedCount > 0 {
 			fmt.Printf("Seeds:      %d commitments\n", seedCount)
 		}
+
+		for i, r := range runs {
+			if r.Declared == nil {
+				continue
+			}
+			cert := compute.Analyze(r)
+			fmt.Printf("Run %d compute:\n", i+1)
+			reportComputeCert(cert)
+		}
 		return nil
 	},
 }
@@ -680,8 +700,6 @@ var cmdVerify = &cobra.Command{
 func init() {
 	cmdVerify.Flags().StringVar(&verifyKeyPath, "public-key", "", "path to public key PEM (default: use key embedded in report)")
 }
-
-// --- check ---
 
 type claimsFile struct {
 	Claims []claim `json:"claims"`
@@ -807,8 +825,6 @@ func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bo
 	return false, 0, false
 }
 
-// --- status ---
-
 var cmdStatus = &cobra.Command{
 	Use:   "status",
 	Short: "Show current session state",
@@ -854,8 +870,6 @@ var cmdStatus = &cobra.Command{
 		return nil
 	},
 }
-
-// --- generate-claims ---
 
 var generateClaimsReportPath string
 

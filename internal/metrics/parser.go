@@ -47,6 +47,13 @@ var (
 		`^KVERITAS_INPUT\s+src=seed:(\S+)`,
 	)
 
+	// modelRe and workloadRe match the declared model card directives.
+	modelRe    = regexp.MustCompile(`^KVERITAS_MODEL\b`)
+	workloadRe = regexp.MustCompile(`^KVERITAS_WORKLOAD\b`)
+
+	// kvTokenRe extracts key=value tokens from a declared-card line.
+	kvTokenRe = regexp.MustCompile(`([a-zA-Z_]+)=(\S+)`)
+
 	// kerasRe matches Keras/PyTorch Lightning style: "loss: 0.24 - val_acc: 0.94"
 	kerasRe = regexp.MustCompile(
 		`([a-zA-Z][a-zA-Z0-9_]*):\s*([+-]?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?)`,
@@ -160,6 +167,49 @@ func (p *Parser) ParseSeed(line string) (string, bool) {
 	}
 	p.seedCount++
 	return m[1], true
+}
+
+// ParseDeclared checks a line for the KVERITAS_MODEL or KVERITAS_WORKLOAD
+// directive and merges any declared fields into d. Returns true if the line was
+// a declared-card directive. Both directives contribute to the same model card.
+func (p *Parser) ParseDeclared(line string, d *session.DeclaredModel) bool {
+	if !modelRe.MatchString(line) && !workloadRe.MatchString(line) {
+		return false
+	}
+	for _, kv := range kvTokenRe.FindAllStringSubmatch(line, -1) {
+		key, val := kv[1], kv[2]
+		switch key {
+		case "params":
+			d.Params = parseCountToken(val)
+		case "arch":
+			d.Arch = val
+		case "precision":
+			d.Precision = val
+		case "dataset_size":
+			d.DatasetSize = parseCountToken(val)
+		case "epochs":
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				d.Epochs = f
+			}
+		case "batch_size":
+			d.BatchSize = parseCountToken(val)
+		case "seq_len":
+			d.SeqLen = parseCountToken(val)
+		}
+	}
+	return true
+}
+
+// parseCountToken parses an integer count that may be written in scientific or
+// decimal notation (e.g. 25600000, 25.6e6). Returns 0 on failure.
+func parseCountToken(v string) int64 {
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return n
+	}
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		return int64(f)
+	}
+	return 0
 }
 
 // ParseHeuristic runs best-effort detection on a line.

@@ -22,8 +22,6 @@ type Session struct {
 	MachineID  string    `json:"machine_id"`
 	Token      string    `json:"token"`
 	ServerURL  string    `json:"server_url"`
-	OrgToken   string    `json:"org_token,omitempty"`
-	UserEmail  string    `json:"user_email,omitempty"`
 	Runs         []string          `json:"runs"`
 	Sealed       bool              `json:"sealed"`
 	SourceHashes map[string]string `json:"source_hashes,omitempty"`
@@ -61,6 +59,8 @@ type RunRecord struct {
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
 	// Aggregate hash of all tracked source files
 	SourceCodeHash string `json:"source_code_hash,omitempty"`
+	// Author-declared model card (KVERITAS_MODEL / KVERITAS_WORKLOAD)
+	Declared *DeclaredModel `json:"declared,omitempty"`
 }
 
 type Metric struct {
@@ -132,6 +132,38 @@ type HMCAResult struct {
 	Score   float64  `json:"hmca_score"`
 	Flags   []string `json:"hmca_flags,omitempty"`
 	Verdict string   `json:"hmca_verdict"`
+}
+
+// DeclaredModel is the author-committed model card for a run, declared via the
+// KVERITAS_MODEL and KVERITAS_WORKLOAD stdout directives. It is the WRITTEN claim
+// that the compute-cost certificate checks against the hardware evidence.
+type DeclaredModel struct {
+	Params      int64   `json:"params,omitempty"`
+	Arch        string  `json:"arch,omitempty"`
+	Precision   string  `json:"precision,omitempty"`
+	DatasetSize int64   `json:"dataset_size,omitempty"`
+	Epochs      float64 `json:"epochs,omitempty"`
+	BatchSize   int64   `json:"batch_size,omitempty"`
+	SeqLen      int64   `json:"seq_len,omitempty"`
+}
+
+// ComputeCert is the per-run compute-cost attestation certificate: a non-deniable
+// check that the declared work was physically performed on the reported hardware.
+// It is derived from the declared model card and the hardware samples, and is
+// recomputed at verify time so any sample or claim tampering breaks the signature.
+type ComputeCert struct {
+	FDeclaredFLOPs   float64  `json:"f_declared_flops,omitempty"`
+	GPUActiveSec     float64  `json:"gpu_active_sec,omitempty"`
+	EnergyJoules     float64  `json:"energy_joules,omitempty"`
+	PeakGPUMemMB     float64  `json:"peak_gpu_mem_mb,omitempty"`
+	FPeakGenerous    float64  `json:"f_peak_generous,omitempty"`
+	MinPJPerFLOP     float64  `json:"min_pj_per_flop,omitempty"`
+	ImpliedMFU       float64  `json:"implied_mfu,omitempty"`
+	TimeBoundOK      bool     `json:"time_bound_ok"`
+	EnergyBoundOK    bool     `json:"energy_bound_ok"`
+	MemoryBoundOK    bool     `json:"memory_bound_ok"`
+	Verdict          string   `json:"verdict"`
+	Notes            []string `json:"notes,omitempty"`
 }
 
 // LedgerRunEntry is a run record from the server ledger (no actual metric values).
