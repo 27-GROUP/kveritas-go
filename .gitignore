@@ -3,3 +3,8 @@ dist/
 keys/private.pem
 **/.kveritas/
 *.pdf
+
+# only README markdown is versioned
+*.md
+!README.md
+!**/README.md
