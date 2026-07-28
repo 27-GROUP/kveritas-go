@@ -2,7 +2,7 @@
 
 Standalone binary for tamper-evident verification of ML experiments. Cryptographically binds published results to the exact code, hardware, and time that produced them.
 
-Works with any language -- Python, R, Julia, C++, shell scripts. Zero runtime dependencies. Single static binary.
+Works with any language -- Python, R, Julia, C++, shell scripts, etc. Zero runtime dependencies. Single static binary.
 
 ---
 
