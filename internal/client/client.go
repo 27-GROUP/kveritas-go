@@ -84,6 +84,39 @@ func (c *Client) Init(sessionID, machineID string, initAt time.Time) (*InitRespo
 	return &resp, nil
 }
 
+type harnessInitRequest struct {
+	SessionID   string `json:"session_id"`
+	MachineID   string `json:"machine_id"`
+	InitAt      string `json:"init_at"`
+	GenesisHash string `json:"genesis_hash"`
+}
+
+// GenesisResponse carries the session token and the server signature over the
+// genesis hash, which binds the designation D at the start of a harness session.
+type GenesisResponse struct {
+	Token            string `json:"token"`
+	GenesisSignature string `json:"genesis_signature"`
+	GenesisNonce     string `json:"genesis_nonce"`
+	GenesisSignedAt  string `json:"genesis_signed_at"`
+	PublicKeyPEM     string `json:"public_key_pem"`
+}
+
+// HarnessInit registers a harness session and asks the server to sign the
+// genesis hash.
+func (c *Client) HarnessInit(sessionID, machineID string, initAt time.Time, genesisHash string) (*GenesisResponse, error) {
+	var resp GenesisResponse
+	err := c.post("/api/v1/init", harnessInitRequest{
+		SessionID:   sessionID,
+		MachineID:   machineID,
+		InitAt:      initAt.UTC().Format(time.RFC3339Nano),
+		GenesisHash: genesisHash,
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // Seal submits a data hash to the server and receives a cryptographic attestation.
 func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*SealResponse, error) {
 	var resp SealResponse

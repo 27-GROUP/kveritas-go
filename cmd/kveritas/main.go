@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/mamadouk/kveritas/internal/compute"
 	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
 	"github.com/mamadouk/kveritas/internal/hardware"
+	"github.com/mamadouk/kveritas/internal/harness"
 	"github.com/mamadouk/kveritas/internal/hmca"
 	"github.com/mamadouk/kveritas/internal/pdf"
 	"github.com/mamadouk/kveritas/internal/runner"
@@ -73,16 +75,22 @@ This action is irreversible -- the session token is lost.`,
 }
 
 func main() {
-	root.AddCommand(cmdInit, cmdRun, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
+	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
 var (
-	initServer string
-	initLocal  bool
+	initServer    string
+	initLocal     bool
+	initHarness   bool
+	initDesignate string
+	initAgent     string
+	initOperator  string
 )
+
+const defaultDesignation = `{"designate":["tool_call","file_effect","model_turn","spawn","self_claim","approval"]}`
 
 var cmdInit = &cobra.Command{
 	Use:   "init",
@@ -104,6 +112,14 @@ var cmdInit = &cobra.Command{
 
 		machineID := hardware.MachineID()
 		sessionID := uuid.New().String()
+
+		if initHarness {
+			if err := harnessInit(kvDir, wd, machineID, sessionID); err != nil {
+				_ = os.RemoveAll(kvDir)
+				return err
+			}
+			return nil
+		}
 
 		var token string
 		serverURL := initServer
@@ -143,6 +159,508 @@ var cmdInit = &cobra.Command{
 func init() {
 	cmdInit.Flags().StringVar(&initServer, "server", defaultServer, "attestation server URL")
 	cmdInit.Flags().BoolVar(&initLocal, "local", false, "local mode: sign with a local key, no server")
+	cmdInit.Flags().BoolVar(&initHarness, "harness", false, "harness mode: record a hash-chained log of designated agent actions")
+	cmdInit.Flags().StringVar(&initDesignate, "designate", "", "path to a designation policy file (default: all consequential actions)")
+	cmdInit.Flags().StringVar(&initAgent, "agent", "unknown-agent", "agent identity (e.g. claude-code/<model>)")
+	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
+}
+
+// harnessInit registers a harness session and binds the designation D at genesis,
+// signed by the attestation server so it cannot be altered after the session.
+func harnessInit(kvDir, wd, machineID, sessionID string) error {
+	designation := defaultDesignation
+	if initDesignate != "" {
+		data, err := os.ReadFile(initDesignate)
+		if err != nil {
+			return fmt.Errorf("reading designation policy: %w", err)
+		}
+		designation = string(data)
+	}
+
+	operator := initOperator
+	if operator == "" {
+		if u := os.Getenv("USER"); u != "" {
+			operator = u
+		} else {
+			operator = "local"
+		}
+	}
+
+	nonce, err := kvcrypto.RandomNonce()
+	if err != nil {
+		return err
+	}
+
+	g := &harness.Genesis{
+		SessionID:       sessionID,
+		MachineID:       machineID,
+		AgentIdentity:   initAgent,
+		OperatorID:      operator,
+		Designation:     designation,
+		DesignationHash: kvcrypto.HashBytes([]byte(designation)),
+		StartAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		Nonce:           nonce,
+	}
+	gHash, err := g.CoreHash()
+	if err != nil {
+		return err
+	}
+	g.Hash = gHash
+
+	serverURL := initServer
+	token := "local"
+	if initLocal {
+		serverURL = "local"
+		sig, err := localSignGenesis(gHash, sealKeyPath)
+		if err != nil {
+			return err
+		}
+		g.Server = *sig
+	} else {
+		c := client.New(serverURL)
+		resp, err := c.HarnessInit(sessionID, machineID, time.Now(), gHash)
+		if err != nil {
+			return fmt.Errorf("server genesis registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
+		}
+		token = resp.Token
+		g.Server = harness.ServerSig{
+			Signature:    resp.GenesisSignature,
+			Nonce:        resp.GenesisNonce,
+			SignedAt:     resp.GenesisSignedAt,
+			PublicKeyPEM: resp.PublicKeyPEM,
+		}
+	}
+
+	sess := &session.Session{
+		ID:         sessionID,
+		InitAt:     time.Now().UTC(),
+		ProjectDir: wd,
+		MachineID:  machineID,
+		Token:      token,
+		ServerURL:  serverURL,
+		Type:       "harness",
+		Runs:       []string{},
+	}
+	if err := sess.Save(kvDir); err != nil {
+		return err
+	}
+	if err := harness.SaveGenesis(kvDir, g); err != nil {
+		return err
+	}
+
+	hooksInstalled := true
+	if err := installClaudeHooks(wd); err != nil {
+		hooksInstalled = false
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not install Claude Code hooks: %v\n", err)
+	}
+
+	fmt.Printf("Harness session initialized: %s\n", sessionID)
+	fmt.Printf("Agent:       %s\n", g.AgentIdentity)
+	fmt.Printf("Operator:    %s\n", g.OperatorID)
+	fmt.Printf("Designation: %s (server-signed at genesis)\n", g.DesignationHash[:16])
+	if hooksInstalled {
+		fmt.Printf("Chokepoint:  Claude Code hooks installed in .claude/settings.json\n")
+	}
+	return nil
+}
+
+// installClaudeHooks registers the recording hooks in the project's Claude Code
+// settings so every designated tool call and prompt is committed to the chain
+// before it takes effect. Existing hooks are preserved.
+func installClaudeHooks(projectDir string) error {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = "kveritas"
+	}
+	claudeDir := filepath.Join(projectDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return err
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+
+	settings := map[string]interface{}{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = map[string]interface{}{}
+	}
+	entry := func(cmd string) interface{} {
+		return map[string]interface{}{
+			"matcher": "*",
+			"hooks":   []interface{}{map[string]interface{}{"type": "command", "command": cmd}},
+		}
+	}
+	ours := map[string]string{
+		"PreToolUse":       exe + " record --hook pre",
+		"PostToolUse":      exe + " record --hook post",
+		"UserPromptSubmit": exe + " record --hook prompt",
+	}
+	for event, cmd := range ours {
+		arr, _ := hooks[event].([]interface{})
+		hooks[event] = append(arr, entry(cmd))
+	}
+	settings["hooks"] = hooks
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, data, 0644)
+}
+
+func localSignGenesis(gHash, keyPath string) (*harness.ServerSig, error) {
+	if keyPath == "" {
+		keyPath = "keys/private.pem"
+	}
+	keyData, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading private key %s: %w", keyPath, err)
+	}
+	privKey, err := kvcrypto.LoadPrivateKey(keyData)
+	if err != nil {
+		return nil, err
+	}
+	nonce, err := kvcrypto.RandomNonce()
+	if err != nil {
+		return nil, err
+	}
+	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	sig, err := kvcrypto.SignPSS(privKey, kvcrypto.Payload(gHash, nonce, signedAt))
+	if err != nil {
+		return nil, err
+	}
+	pubPEM, err := kvcrypto.MarshalPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return &harness.ServerSig{Signature: sig, Nonce: nonce, SignedAt: signedAt, PublicKeyPEM: string(pubPEM)}, nil
+}
+
+var (
+	recordActor      string
+	recordParent     string
+	recordType       string
+	recordInput      string
+	recordInputFile  string
+	recordOutput     string
+	recordOutputFile string
+	recordHook       string
+)
+
+var cmdRecord = &cobra.Command{
+	Use:   "record",
+	Short: "Append a designated agent action to the harness session chain",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if recordHook != "" {
+			return runHookRecord(recordHook)
+		}
+		kvDir, err := session.Find()
+		if err != nil {
+			return err
+		}
+		sess, err := session.Load(kvDir)
+		if err != nil {
+			return err
+		}
+		if sess.Type != "harness" {
+			return fmt.Errorf("record is only valid for harness sessions; use 'kveritas init --harness'")
+		}
+		if sess.Sealed {
+			return fmt.Errorf("session is already sealed; cannot record more actions")
+		}
+		if recordType == "" {
+			return fmt.Errorf("--type is required")
+		}
+		inHash, err := contentHash(recordInput, recordInputFile)
+		if err != nil {
+			return err
+		}
+		outHash, err := contentHash(recordOutput, recordOutputFile)
+		if err != nil {
+			return err
+		}
+		committed, err := harness.AppendEntry(kvDir, harness.Entry{
+			Actor:       recordActor,
+			ParentActor: recordParent,
+			Type:        recordType,
+			InputHash:   inHash,
+			OutputHash:  outHash,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Recorded entry %d: actor=%s type=%s\n", committed.Index, committed.Actor, committed.Type)
+		return nil
+	},
+}
+
+func contentHash(inline, file string) (string, error) {
+	if file != "" {
+		return kvcrypto.HashFile(file)
+	}
+	return kvcrypto.HashBytes([]byte(inline)), nil
+}
+
+func init() {
+	cmdRecord.Flags().StringVar(&recordActor, "actor", "agent", "identity of the acting agent")
+	cmdRecord.Flags().StringVar(&recordParent, "parent", "", "parent actor (for sub-agent actions)")
+	cmdRecord.Flags().StringVar(&recordType, "type", "", "action type (tool_call, file_effect, model_turn, spawn, self_claim)")
+	cmdRecord.Flags().StringVar(&recordInput, "input", "", "inline input content to hash")
+	cmdRecord.Flags().StringVar(&recordInputFile, "input-file", "", "file whose content is the input")
+	cmdRecord.Flags().StringVar(&recordOutput, "output", "", "inline output content to hash")
+	cmdRecord.Flags().StringVar(&recordOutputFile, "output-file", "", "file whose content is the output")
+	cmdRecord.Flags().StringVar(&recordHook, "hook", "", "Claude Code hook mode: pre, post, or prompt (reads the hook payload from stdin)")
+}
+
+type hookInput struct {
+	SessionID     string          `json:"session_id"`
+	HookEventName string          `json:"hook_event_name"`
+	ToolName      string          `json:"tool_name"`
+	ToolInput     json.RawMessage `json:"tool_input"`
+	ToolResponse  json.RawMessage `json:"tool_response"`
+	ToolUseID     string          `json:"tool_use_id"`
+	AgentID       string          `json:"agent_id"`
+	AgentType     string          `json:"agent_type"`
+	Prompt        string          `json:"prompt"`
+}
+
+// hookActor names the agent that took an action. Claude Code tags a sub-agent's
+// tool calls with agent_type and agent_id; the main agent's calls carry neither,
+// so their absence is what identifies the main agent.
+func hookActor(h hookInput) string {
+	if h.AgentType != "" {
+		id := h.AgentID
+		if len(id) > 8 {
+			id = id[:8]
+		}
+		return h.AgentType + "/" + id
+	}
+	return "main"
+}
+
+// spawnedAgentID pulls the child agent's id out of an Agent tool result, which
+// is how a spawn is tied to the sub-agent it created.
+func spawnedAgentID(resp json.RawMessage) string {
+	var r struct {
+		AgentID string `json:"agentId"`
+	}
+	_ = json.Unmarshal(resp, &r)
+	return r.AgentID
+}
+
+// runHookRecord is invoked by a Claude Code hook. It reads the hook payload from
+// stdin and commits a designated action to the chain before the tool is allowed
+// to run. If a designated action cannot be recorded, the pre hook exits 2 to
+// block the tool, so a designated effect cannot occur without its entry.
+func runHookRecord(event string) error {
+	data, _ := io.ReadAll(os.Stdin)
+	var h hookInput
+	_ = json.Unmarshal(data, &h)
+
+	kvDir, err := session.Find()
+	if err != nil {
+		return nil
+	}
+	sess, err := session.Load(kvDir)
+	if err != nil {
+		// A session directory exists but cannot be read. Fail safe: block a pre
+		// hook so a designated action cannot proceed while recording is disabled.
+		if event == "pre" {
+			fmt.Fprintf(os.Stderr, "kveritas: session unreadable; blocking tool to preserve the audit chain: %v\n", err)
+			os.Exit(2)
+		}
+		return nil
+	}
+	if sess.Type != "harness" || sess.Sealed {
+		return nil
+	}
+
+	actor := hookActor(h)
+	var e harness.Entry
+	switch event {
+	case "pre":
+		if h.ToolName == "" {
+			return nil
+		}
+		e = harness.Entry{Actor: actor, AgentID: h.AgentID, Type: mapToolType(h.ToolName), ToolUseID: h.ToolUseID, InputHash: kvcrypto.HashBytes(h.ToolInput)}
+	case "post":
+		if h.ToolName == "" {
+			return nil
+		}
+		e = harness.Entry{Actor: actor, AgentID: h.AgentID, Type: mapToolType(h.ToolName) + ".result", ToolUseID: h.ToolUseID, OutputHash: kvcrypto.HashBytes(h.ToolResponse)}
+		if h.ToolName == "Agent" || h.ToolName == "Task" {
+			e.SpawnedID = spawnedAgentID(h.ToolResponse)
+		}
+	case "prompt":
+		e = harness.Entry{Actor: "operator", Type: "prompt", InputHash: kvcrypto.HashBytes([]byte(h.Prompt))}
+	default:
+		return nil
+	}
+
+	if _, err := harness.AppendEntry(kvDir, e); err != nil {
+		if event == "pre" {
+			fmt.Fprintf(os.Stderr, "kveritas: could not record action; blocking tool to preserve the audit chain: %v\n", err)
+			os.Exit(2)
+		}
+		return err
+	}
+	return nil
+}
+
+func mapToolType(tool string) string {
+	switch tool {
+	case "Agent", "Task":
+		return "spawn"
+	case "Write", "Edit", "MultiEdit", "NotebookEdit":
+		return "file_effect"
+	case "Bash":
+		return "tool_call.exec"
+	case "WebFetch", "WebSearch":
+		return "tool_call.net"
+	case "Read", "Glob", "Grep":
+		return "tool_call.read"
+	default:
+		return "tool_call"
+	}
+}
+
+// harnessSeal signs the final chain head and writes the verifiable session report.
+func harnessSeal(kvDir string, sess *session.Session) error {
+	g, err := harness.LoadGenesis(kvDir)
+	if err != nil {
+		return fmt.Errorf("loading genesis: %w", err)
+	}
+	entries, err := harness.LoadChain(kvDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("no actions recorded; use 'kveritas record' first")
+	}
+	chainHead := entries[len(entries)-1].Link
+
+	var sealSig harness.ServerSig
+	if sess.ServerURL == "local" || sealKeyPath != "" {
+		s, err := localSignGenesis(chainHead, sealKeyPath)
+		if err != nil {
+			return err
+		}
+		sealSig = *s
+	} else {
+		c := client.New(sess.ServerURL)
+		resp, err := c.Seal(sess, chainHead, len(entries))
+		if err != nil {
+			return fmt.Errorf("server seal failed: %w", err)
+		}
+		sealSig = harness.ServerSig{
+			Signature:    resp.Signature,
+			Nonce:        resp.Nonce,
+			SignedAt:     resp.SignedAt,
+			PublicKeyPEM: resp.PublicKeyPEM,
+		}
+	}
+
+	report := harness.Report{
+		Version: "1.0",
+		Genesis: *g,
+		Entries: entries,
+		Seal: harness.Seal{
+			ChainHead:  chainHead,
+			EntryCount: len(entries),
+			SealedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+			Server:     sealSig,
+		},
+	}
+
+	outPath := sealOutput
+	if outPath == "" {
+		outPath = fmt.Sprintf("kveritas-session-%s.json", sess.ID[:8])
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(outPath, data, 0644); err != nil {
+		return err
+	}
+
+	sess.Sealed = true
+	if err := sess.Save(kvDir); err != nil {
+		return err
+	}
+
+	actors := map[string]int{}
+	for _, e := range entries {
+		actors[e.Actor]++
+	}
+	fmt.Printf("Session sealed: %s\n", outPath)
+	fmt.Printf("Entries:     %d\n", len(entries))
+	fmt.Printf("Chain head:  %s\n", chainHead)
+	fmt.Printf("Attribution: %s\n", formatActorCounts(actors))
+	return nil
+}
+
+func formatActorCounts(counts map[string]int) string {
+	actors := make([]string, 0, len(counts))
+	for a := range counts {
+		actors = append(actors, a)
+	}
+	sort.Strings(actors)
+	parts := make([]string, 0, len(actors))
+	for _, a := range actors {
+		parts = append(parts, fmt.Sprintf("%s=%d", a, counts[a]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func loadHarnessReport(path string) (*harness.Report, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var report harness.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, false
+	}
+	if report.Genesis.SessionID == "" || report.Seal.ChainHead == "" {
+		return nil, false
+	}
+	return &report, true
+}
+
+func verifyHarnessReport(report *harness.Report) error {
+	res := harness.Verify(report)
+	g := report.Genesis
+
+	fmt.Println(res.Verdict)
+	if res.Verdict != "VERIFIED" {
+		fmt.Printf("Reason: %s\n", res.Detail)
+		if res.FailAtIndex > 0 {
+			fmt.Printf("Localized: entry %d (actor %s)\n", res.FailAtIndex, res.FailAtActor)
+		}
+		return nil
+	}
+
+	fmt.Printf("Session:     %s\n", g.SessionID)
+	fmt.Printf("Agent:       %s\n", g.AgentIdentity)
+	fmt.Printf("Operator:    %s\n", g.OperatorID)
+	fmt.Printf("Designation: %s (server-signed)\n", g.DesignationHash[:16])
+	fmt.Printf("Started:     %s\n", g.StartAt)
+	fmt.Printf("Sealed:      %s\n", report.Seal.SealedAt)
+	fmt.Printf("Entries:     %d\n", res.EntryCount)
+	fmt.Println("Actor tree:")
+	renderActorTree(harness.ActorTree(report.Entries), 1)
+	return nil
+}
+
+func renderActorTree(nodes []*harness.ActorNode, depth int) {
+	for _, n := range nodes {
+		fmt.Printf("%s%s (%d)\n", strings.Repeat("  ", depth), n.Name, n.Count)
+		renderActorTree(n.Children, depth+1)
+	}
 }
 
 var runFiles []string
@@ -251,6 +769,9 @@ var cmdSeal = &cobra.Command{
 		}
 		if sess.Sealed {
 			return fmt.Errorf("session is already sealed")
+		}
+		if sess.Type == "harness" {
+			return harnessSeal(kvDir, sess)
 		}
 		if len(sess.Runs) == 0 {
 			return fmt.Errorf("no runs recorded; use 'kveritas run' first")
@@ -595,6 +1116,10 @@ var cmdVerify = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reportPath := args[0]
+
+		if report, ok := loadHarnessReport(reportPath); ok {
+			return verifyHarnessReport(report)
+		}
 
 		meta, err := pdf.ExtractMetadata(reportPath)
 		if err != nil {

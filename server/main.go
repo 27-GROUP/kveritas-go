@@ -148,9 +148,10 @@ func newServer(keysDir string) (*srv, error) {
 // POST /api/v1/init
 func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		MachineID string `json:"machine_id"`
-		InitAt    string `json:"init_at"`
+		SessionID   string `json:"session_id"`
+		MachineID   string `json:"machine_id"`
+		InitAt      string `json:"init_at"`
+		GenesisHash string `json:"genesis_hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -166,7 +167,7 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "nonce generation failed")
 		return
 	}
-	token := nonce // token is a single-use random value
+	token := nonce
 
 	initAt := time.Now().UTC()
 	if req.InitAt != "" {
@@ -184,8 +185,31 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 	s.tokens[token] = req.SessionID
 	s.mu.Unlock()
 
+	resp := map[string]string{"token": token}
+
+	// Harness mode: sign the genesis hash so the designation is bound at the
+	// start of the session and cannot be altered afterward.
+	if req.GenesisHash != "" {
+		if len(req.GenesisHash) != 64 {
+			writeError(w, http.StatusBadRequest, "genesis_hash must be 64 hex characters (SHA-256)")
+			return
+		}
+		signedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		payload := crypto.Payload(req.GenesisHash, nonce, signedAt)
+		sig, err := crypto.SignPSS(s.privKey, payload)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "genesis signing failed")
+			return
+		}
+		resp["genesis_signature"] = sig
+		resp["genesis_nonce"] = nonce
+		resp["genesis_signed_at"] = signedAt
+		resp["public_key_pem"] = s.pubKeyPEM
+		log.Printf("Genesis signed: session=%s hash=%s...", req.SessionID, req.GenesisHash[:8])
+	}
+
 	log.Printf("Session registered: %s machine=%s", req.SessionID, req.MachineID)
-	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // POST /api/v1/record-run
