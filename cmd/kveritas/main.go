@@ -427,18 +427,33 @@ type hookInput struct {
 	Prompt        string          `json:"prompt"`
 }
 
-// hookActor names the agent that took an action. Claude Code tags a sub-agent's
-// tool calls with agent_type and agent_id; the main agent's calls carry neither,
-// so their absence is what identifies the main agent.
+// topAgent names the independent top-level agent an action belongs to. Several
+// agents can run under one chokepoint, so we take the name the launcher set in
+// KVERITAS_AGENT_NAME, fall back to the harness session id (distinct per agent
+// process), and finally to "main" for a lone agent.
+func topAgent(h hookInput) string {
+	if name := os.Getenv("KVERITAS_AGENT_NAME"); name != "" {
+		return name
+	}
+	if h.SessionID != "" {
+		return h.SessionID
+	}
+	return "main"
+}
+
+// hookActor names the agent that took an action, scoped under its top-level
+// agent. Claude Code tags a sub-agent's tool calls with agent_type and agent_id;
+// a top-level agent's own calls carry neither, so it is named by its top-level id.
 func hookActor(h hookInput) string {
+	top := topAgent(h)
 	if h.AgentType != "" {
 		id := h.AgentID
 		if len(id) > 8 {
 			id = id[:8]
 		}
-		return h.AgentType + "/" + id
+		return top + "/" + h.AgentType + "/" + id
 	}
-	return "main"
+	return top
 }
 
 // spawnedAgentID pulls the child agent's id out of an Agent tool result, which
@@ -479,23 +494,24 @@ func runHookRecord(event string) error {
 	}
 
 	actor := hookActor(h)
+	top := topAgent(h)
 	var e harness.Entry
 	switch event {
 	case "pre":
 		if h.ToolName == "" {
 			return nil
 		}
-		e = harness.Entry{Actor: actor, AgentID: h.AgentID, Type: mapToolType(h.ToolName), ToolUseID: h.ToolUseID, InputHash: kvcrypto.HashBytes(h.ToolInput)}
+		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName), ToolUseID: h.ToolUseID, InputHash: kvcrypto.HashBytes(h.ToolInput)}
 	case "post":
 		if h.ToolName == "" {
 			return nil
 		}
-		e = harness.Entry{Actor: actor, AgentID: h.AgentID, Type: mapToolType(h.ToolName) + ".result", ToolUseID: h.ToolUseID, OutputHash: kvcrypto.HashBytes(h.ToolResponse)}
+		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName) + ".result", ToolUseID: h.ToolUseID, OutputHash: kvcrypto.HashBytes(h.ToolResponse)}
 		if h.ToolName == "Agent" || h.ToolName == "Task" {
 			e.SpawnedID = spawnedAgentID(h.ToolResponse)
 		}
 	case "prompt":
-		e = harness.Entry{Actor: "operator", Type: "prompt", InputHash: kvcrypto.HashBytes([]byte(h.Prompt))}
+		e = harness.Entry{Actor: "operator", TopAgent: top, Type: "prompt", InputHash: kvcrypto.HashBytes([]byte(h.Prompt))}
 	default:
 		return nil
 	}

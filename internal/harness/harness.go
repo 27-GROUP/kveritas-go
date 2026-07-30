@@ -50,14 +50,17 @@ type Genesis struct {
 	Server          ServerSig `json:"server"`
 }
 
-// Entry is one designated action in the session order. AgentID identifies the
-// acting agent (empty for the main agent and the operator); SpawnedID, set on a
-// spawn result, names the sub-agent that action created. Together they let the
-// parent-child tree be rebuilt from signed facts rather than trusted at record
-// time, which is what makes nested attribution tamper-evident.
+// Entry is one designated action in the session order. TopAgent names the
+// independent top-level agent the action belongs to (several may share one
+// session); AgentID identifies a sub-agent within that top-level agent, and
+// SpawnedID, set on a spawn result, names the sub-agent that action created.
+// Together they let the whole forest of agents be rebuilt from signed facts
+// rather than trusted at record time, which is what makes attribution
+// tamper-evident even across many agents and their sub-agents.
 type Entry struct {
 	Index       int    `json:"index"`
 	Actor       string `json:"actor"`
+	TopAgent    string `json:"top_agent,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
 	SpawnedID   string `json:"spawned_id,omitempty"`
 	ParentActor string `json:"parent_actor,omitempty"`
@@ -78,13 +81,25 @@ type ActorNode struct {
 	Children []*ActorNode `json:"children,omitempty"`
 }
 
-// ActorTree reconstructs who-spawned-whom from the entries and returns the roots
-// (the main agent and the operator). Each sub-agent hangs under the agent that
-// actually spawned it, so nesting of any depth is preserved. Spawn edges come
-// from the signed AgentID/SpawnedID pairs; a manually recorded ParentActor is
-// used as a fallback for callers that are not the Claude Code hook.
+// ActorTree reconstructs the forest of agents from the entries. Each independent
+// top-level agent is a root; a sub-agent hangs under whichever agent actually
+// spawned it, within that top-level agent's own subtree, so several top-level
+// agents can each have their own sub-agents nested to any depth. Spawn edges and
+// the agent namespace come from the signed TopAgent/AgentID/SpawnedID fields, so
+// re-attributing or hiding an agent is detectable; a manually recorded
+// ParentActor is honored as a fallback for callers that are not the hook.
 func ActorTree(entries []Entry) []*ActorNode {
+	topName := func(e Entry) string {
+		if e.TopAgent != "" {
+			return e.TopAgent
+		}
+		return "main"
+	}
+	key := func(top, id string) string { return top + "\x00" + id }
+
 	counts := map[string]int{}
+	topOf := map[string]string{}
+	agentOf := map[string]string{}
 	displayOf := map[string]string{}
 	spawnerOf := map[string]string{}
 	manualParent := map[string]string{}
@@ -97,20 +112,18 @@ func ActorTree(entries []Entry) []*ActorNode {
 			seen[e.Actor] = true
 			order = append(order, e.Actor)
 		}
+		top := topName(e)
+		topOf[e.Actor] = top
 		if e.AgentID != "" {
-			displayOf[e.AgentID] = e.Actor
+			agentOf[e.Actor] = e.AgentID
+			displayOf[key(top, e.AgentID)] = e.Actor
 		}
 		if e.SpawnedID != "" {
-			spawnerOf[e.SpawnedID] = e.AgentID
+			spawnerOf[key(top, e.SpawnedID)] = e.AgentID
 		}
 		if e.ParentActor != "" {
 			manualParent[e.Actor] = e.ParentActor
 		}
-	}
-
-	agentIDOf := map[string]string{}
-	for id, name := range displayOf {
-		agentIDOf[name] = id
 	}
 
 	nodes := map[string]*ActorNode{}
@@ -123,21 +136,23 @@ func ActorTree(entries []Entry) []*ActorNode {
 		return n
 	}
 
-	parentOf := func(name string) string {
-		if p, ok := manualParent[name]; ok {
+	parentOf := func(actor string) string {
+		if p, ok := manualParent[actor]; ok {
 			return p
 		}
-		if id, ok := agentIDOf[name]; ok {
-			spawner := spawnerOf[id]
-			if spawner == "" {
-				return "main"
-			}
-			if d, ok := displayOf[spawner]; ok {
-				return d
-			}
-			return "main"
+		aid, isSub := agentOf[actor]
+		if !isSub {
+			return ""
 		}
-		return ""
+		top := topOf[actor]
+		spawner := spawnerOf[key(top, aid)]
+		if spawner == "" {
+			return top
+		}
+		if d, ok := displayOf[key(top, spawner)]; ok {
+			return d
+		}
+		return top
 	}
 
 	var roots []*ActorNode
@@ -146,8 +161,7 @@ func ActorTree(entries []Entry) []*ActorNode {
 		if parent := parentOf(name); parent == "" {
 			roots = append(roots, n)
 		} else {
-			p := get(parent)
-			p.Children = append(p.Children, n)
+			get(parent).Children = append(get(parent).Children, n)
 		}
 	}
 	return roots
