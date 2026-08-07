@@ -1,4 +1,4 @@
-module github.com/mamadouk/kveritas
+module github.com/Mamadou2727/kveritas-go
 
 go 1.22
 

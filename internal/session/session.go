@@ -16,13 +16,13 @@ const (
 )
 
 type Session struct {
-	ID         string    `json:"id"`
-	InitAt     time.Time `json:"init_at"`
-	ProjectDir string    `json:"project_dir"`
-	MachineID  string    `json:"machine_id"`
-	Token      string    `json:"token"`
-	ServerURL  string    `json:"server_url"`
-	Type       string    `json:"type,omitempty"`
+	ID           string            `json:"id"`
+	InitAt       time.Time         `json:"init_at"`
+	ProjectDir   string            `json:"project_dir"`
+	MachineID    string            `json:"machine_id"`
+	Token        string            `json:"token"`
+	ServerURL    string            `json:"server_url"`
+	Type         string            `json:"type,omitempty"`
 	Runs         []string          `json:"runs"`
 	Sealed       bool              `json:"sealed"`
 	SourceHashes map[string]string `json:"source_hashes,omitempty"`
@@ -49,19 +49,50 @@ type RunRecord struct {
 	EnvDigest   string            `json:"env_digest"`
 
 	// Per-phase hardware snapshots
-	Phases     []PhaseEvent   `json:"phases,omitempty"`
+	Phases []PhaseEvent `json:"phases,omitempty"`
 	// Inline claims committed in stdout
-	Claims     []InlineClaim  `json:"claims,omitempty"`
+	Claims []InlineClaim `json:"claims,omitempty"`
 	// Seed commitments declared in stdout
-	Seeds      []SeedCommitment `json:"seeds,omitempty"`
+	Seeds []SeedCommitment `json:"seeds,omitempty"`
 	// Hash of only the metric lines for ledger
-	MetricHash string          `json:"metric_hash,omitempty"`
+	MetricHash string `json:"metric_hash,omitempty"`
 	// Background hardware samples taken during the run
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
 	// Aggregate hash of all tracked source files
 	SourceCodeHash string `json:"source_code_hash,omitempty"`
 	// Author-declared model card (KVERITAS_MODEL / KVERITAS_WORKLOAD)
 	Declared *DeclaredModel `json:"declared,omitempty"`
+	// File and subprocess activity observed during the run (Linux only for now)
+	Trace *RunTrace `json:"trace,omitempty"`
+}
+
+// FileEvent is one file the run touched, as seen by the activity tracer. Op is
+// "read" for a file that was opened but not written, or "write" for a file the
+// run created or modified. Reads are coalesced to the first open of each path;
+// writes carry the final content hash.
+type FileEvent struct {
+	Op        string    `json:"op"`
+	Path      string    `json:"path"`
+	Hash      string    `json:"hash,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// ProcEvent is one subprocess the run spawned, as seen by the activity tracer.
+type ProcEvent struct {
+	PID     int       `json:"pid"`
+	PPID    int       `json:"ppid"`
+	Command string    `json:"command"`
+	StartAt time.Time `json:"start_at"`
+}
+
+// RunTrace is the file and subprocess activity captured during a single run.
+// It is reconstructed into an event tree and timeline at seal time so a reviewer
+// can see what the run read, produced, and spawned, and when. Truncated is set
+// when the number of distinct files exceeded the capture cap.
+type RunTrace struct {
+	Files     []FileEvent `json:"files,omitempty"`
+	Procs     []ProcEvent `json:"procs,omitempty"`
+	Truncated bool        `json:"truncated,omitempty"`
 }
 
 type Metric struct {
@@ -73,14 +104,14 @@ type Metric struct {
 }
 
 type HardwareInfo struct {
-	Hostname string  `json:"hostname"`
-	OS       string  `json:"os"`
-	Arch     string  `json:"arch"`
-	CPUCores int     `json:"cpu_cores"`
-	CPUModel string  `json:"cpu_model,omitempty"`
-	MemGB    float64 `json:"mem_gb"`
-	GPUInfo  string  `json:"gpu_info,omitempty"`
-	GPUCount int     `json:"gpu_count,omitempty"`
+	Hostname string   `json:"hostname"`
+	OS       string   `json:"os"`
+	Arch     string   `json:"arch"`
+	CPUCores int      `json:"cpu_cores"`
+	CPUModel string   `json:"cpu_model,omitempty"`
+	MemGB    float64  `json:"mem_gb"`
+	GPUInfo  string   `json:"gpu_info,omitempty"`
+	GPUCount int      `json:"gpu_count,omitempty"`
 	GPUNames []string `json:"gpu_names,omitempty"`
 }
 
@@ -117,8 +148,8 @@ type InlineClaim struct {
 // SeedCommitment records a KVERITAS_INPUT seed declaration.
 type SeedCommitment struct {
 	Source    string    `json:"source"`
-	Value    string    `json:"value"`
-	Line     int       `json:"line"`
+	Value     string    `json:"value"`
+	Line      int       `json:"line"`
 	Timestamp time.Time `json:"timestamp"`
 }
 
@@ -153,18 +184,18 @@ type DeclaredModel struct {
 // It is derived from the declared model card and the hardware samples, and is
 // recomputed at verify time so any sample or claim tampering breaks the signature.
 type ComputeCert struct {
-	FDeclaredFLOPs   float64  `json:"f_declared_flops,omitempty"`
-	GPUActiveSec     float64  `json:"gpu_active_sec,omitempty"`
-	EnergyJoules     float64  `json:"energy_joules,omitempty"`
-	PeakGPUMemMB     float64  `json:"peak_gpu_mem_mb,omitempty"`
-	FPeakGenerous    float64  `json:"f_peak_generous,omitempty"`
-	MinPJPerFLOP     float64  `json:"min_pj_per_flop,omitempty"`
-	ImpliedMFU       float64  `json:"implied_mfu,omitempty"`
-	TimeBoundOK      bool     `json:"time_bound_ok"`
-	EnergyBoundOK    bool     `json:"energy_bound_ok"`
-	MemoryBoundOK    bool     `json:"memory_bound_ok"`
-	Verdict          string   `json:"verdict"`
-	Notes            []string `json:"notes,omitempty"`
+	FDeclaredFLOPs float64  `json:"f_declared_flops,omitempty"`
+	GPUActiveSec   float64  `json:"gpu_active_sec,omitempty"`
+	EnergyJoules   float64  `json:"energy_joules,omitempty"`
+	PeakGPUMemMB   float64  `json:"peak_gpu_mem_mb,omitempty"`
+	FPeakGenerous  float64  `json:"f_peak_generous,omitempty"`
+	MinPJPerFLOP   float64  `json:"min_pj_per_flop,omitempty"`
+	ImpliedMFU     float64  `json:"implied_mfu,omitempty"`
+	TimeBoundOK    bool     `json:"time_bound_ok"`
+	EnergyBoundOK  bool     `json:"energy_bound_ok"`
+	MemoryBoundOK  bool     `json:"memory_bound_ok"`
+	Verdict        string   `json:"verdict"`
+	Notes          []string `json:"notes,omitempty"`
 }
 
 // LedgerRunEntry is a run record from the server ledger (no actual metric values).
@@ -179,25 +210,25 @@ type LedgerRunEntry struct {
 }
 
 type SealRecord struct {
-	SessionID        string    `json:"session_id"`
-	SealedAt         time.Time `json:"sealed_at"`
-	DataHash         string    `json:"data_hash"`
-	Nonce            string    `json:"nonce"`
-	SignedAt         string    `json:"signed_at"`
-	Signature        string    `json:"signature"`
-	SignedMessageHash string `json:"signed_message_hash"`
-	PublicKeyPEM      string `json:"public_key_pem"`
-	ServerURL         string `json:"server_url"`
-	SourceBundleHash  string `json:"source_bundle_hash,omitempty"`
+	SessionID         string    `json:"session_id"`
+	SealedAt          time.Time `json:"sealed_at"`
+	DataHash          string    `json:"data_hash"`
+	Nonce             string    `json:"nonce"`
+	SignedAt          string    `json:"signed_at"`
+	Signature         string    `json:"signature"`
+	SignedMessageHash string    `json:"signed_message_hash"`
+	PublicKeyPEM      string    `json:"public_key_pem"`
+	ServerURL         string    `json:"server_url"`
+	SourceBundleHash  string    `json:"source_bundle_hash,omitempty"`
 	// CanonicalJSON is the exact bytes that were hashed to produce DataHash.
 	// Verifiers re-hash this directly instead of reconstructing the signing
 	// data structure, making verification immune to future field additions.
-	CanonicalJSON    string `json:"canonical_json,omitempty"`
-	VisualPDFHash    string `json:"visual_pdf_hash,omitempty"`
-	SealBlockHash    string `json:"seal_block_hash,omitempty"`
+	CanonicalJSON string `json:"canonical_json,omitempty"`
+	VisualPDFHash string `json:"visual_pdf_hash,omitempty"`
+	SealBlockHash string `json:"seal_block_hash,omitempty"`
 	// Run history from server ledger, embedded at seal time
-	RunHistory       []LedgerRunEntry `json:"run_history,omitempty"`
-	TotalRunCount    int              `json:"total_run_count,omitempty"`
+	RunHistory    []LedgerRunEntry `json:"run_history,omitempty"`
+	TotalRunCount int              `json:"total_run_count,omitempty"`
 }
 
 // Find walks up from the working directory to find a .kveritas directory.

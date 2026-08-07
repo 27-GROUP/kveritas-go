@@ -24,8 +24,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/mamadouk/kveritas/internal/compute"
-	"github.com/mamadouk/kveritas/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/compute"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
 const (
@@ -43,10 +43,10 @@ const (
 
 // EmbeddedData is the complete session state stored inside the PDF.
 type EmbeddedData struct {
-	Version string              `json:"version"`
-	Session *session.Session    `json:"session"`
+	Version string               `json:"version"`
+	Session *session.Session     `json:"session"`
 	Runs    []*session.RunRecord `json:"runs"`
-	Seal    *session.SealRecord `json:"seal"`
+	Seal    *session.SealRecord  `json:"seal"`
 }
 
 // Generate writes a signed K-Veritas report to outPath.
@@ -56,6 +56,7 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	b.addCoverPage(sess, seal, runs)
 	for i, r := range runs {
 		b.addRunPage(i+1, r)
+		b.addTracePage(i+1, r)
 	}
 	b.addRunHistoryPage(seal)
 	if hmcaResult != nil {
@@ -371,6 +372,150 @@ func (b *builder) addRunPage(idx int, r *session.RunRecord) {
 	if r.MetricHash != "" {
 		b.mono("metrics SHA-256: " + r.MetricHash)
 	}
+}
+
+var (
+	colRoot  = [3]float64{0.20, 0.20, 0.22}
+	colGroup = [3]float64{0.60, 0.48, 0.16}
+	colRead  = [3]float64{0.28, 0.44, 0.72}
+	colWrite = [3]float64{0.24, 0.56, 0.34}
+	colProc  = [3]float64{0.64, 0.34, 0.30}
+)
+
+func (b *builder) drawText(x, y float64, s, font string, size float64) {
+	b.cur.content.WriteString(fmt.Sprintf(
+		"BT /%s %.1f Tf %.2f %.2f Td (%s) Tj ET\n", font, size, x, y, pdfEscape(s)))
+}
+
+func (b *builder) drawTextGray(x, y float64, s, font string, size float64) {
+	b.cur.content.WriteString(fmt.Sprintf(
+		"q 0.5 0.5 0.5 rg BT /%s %.1f Tf %.2f %.2f Td (%s) Tj ET Q\n", font, size, x, y, pdfEscape(s)))
+}
+
+func (b *builder) fillRect(x, y, w, h float64, c [3]float64) {
+	b.cur.content.WriteString(fmt.Sprintf(
+		"q %.2f %.2f %.2f rg %.2f %.2f %.2f %.2f re f Q\n", c[0], c[1], c[2], x, y, w, h))
+}
+
+func (b *builder) elbow(spineX, fromY, toY, markerX float64) {
+	b.cur.content.WriteString(fmt.Sprintf(
+		"q 0.65 0.65 0.65 RG %.2f %.2f m %.2f %.2f l %.2f %.2f l S Q\n",
+		spineX, pageH-fromY, spineX, pageH-toY, markerX, pageH-toY))
+}
+
+// traceRow draws one node of the diagram at the given depth and returns the
+// vertical center of its marker (measured from the top, like curY).
+func (b *builder) traceRow(depth int, c [3]float64, label, hash string) float64 {
+	const rowH = 15.0
+	b.checkSpace(rowH)
+	cy := b.curY + rowH/2
+	x := mL + float64(depth)*22
+	b.fillRect(x-3, pageH-(cy+3), 6, 6, c)
+	limit := 74 - depth*8
+	b.drawText(x+9, pageH-(cy+3.2), truncStr(label, limit), "H", 9)
+	if hash != "" {
+		if len(hash) > 12 {
+			hash = hash[:12]
+		}
+		b.drawTextGray(pageW-mR-72, pageH-(cy+3.2), hash, "C", 8)
+	}
+	b.curY += rowH
+	return cy
+}
+
+// addTracePage draws the run's activity as a node-and-connector tree: the command
+// at the root, then what it read, what it wrote (with content hashes), and the
+// subprocesses it spawned.
+func (b *builder) addTracePage(idx int, r *session.RunRecord) {
+	t := r.Trace
+	if t == nil {
+		return
+	}
+	var reads, writes []session.FileEvent
+	for _, f := range t.Files {
+		if f.Op == "write" {
+			writes = append(writes, f)
+		} else {
+			reads = append(reads, f)
+		}
+	}
+
+	b.newPage()
+	b.gap(10)
+	b.writeLine("Experiment Activity Map", "Hb", 15, mL)
+	b.gap(4)
+	b.body("Reconstructed from the file and process activity observed during the run. " +
+		"Every node below is bound into the report signature, so the map cannot be edited after sealing.")
+	b.gap(10)
+	b.heading(fmt.Sprintf("Run %d", idx))
+	b.gap(4)
+
+	const spine = mL + 7
+	rootCy := b.traceRow(0, colRoot, strings.Join(r.Command, " "), "")
+
+	prevGroup := rootCy
+	group := func(title string, header [3]float64, leaf [3]float64, rows [][2]string) {
+		if len(rows) == 0 {
+			return
+		}
+		gcy := b.traceRow(1, header, fmt.Sprintf("%s (%d)", title, len(rows)), "")
+		b.elbow(spine, prevGroup, gcy, mL+22-3)
+		prevGroup = gcy
+
+		const subSpine = mL + 22 + 7
+		prevLeaf := gcy
+		shown := rows
+		extra := 0
+		if len(shown) > 35 {
+			extra = len(shown) - 35
+			shown = shown[:35]
+		}
+		for _, row := range shown {
+			lcy := b.traceRow(2, leaf, row[0], row[1])
+			b.elbow(subSpine, prevLeaf, lcy, mL+44-3)
+			prevLeaf = lcy
+		}
+		if extra > 0 {
+			lcy := b.traceRow(2, leaf, fmt.Sprintf("... +%d more (all bound in the signed data)", extra), "")
+			b.elbow(subSpine, prevLeaf, lcy, mL+44-3)
+		}
+	}
+
+	readRows := make([][2]string, 0, len(reads))
+	for _, f := range reads {
+		readRows = append(readRows, [2]string{f.Path, ""})
+	}
+	writeRows := make([][2]string, 0, len(writes))
+	for _, f := range writes {
+		writeRows = append(writeRows, [2]string{f.Path, f.Hash})
+	}
+	procRows := make([][2]string, 0, len(t.Procs))
+	for _, p := range t.Procs {
+		cmd := p.Command
+		if cmd == "" {
+			cmd = fmt.Sprintf("pid %d", p.PID)
+		}
+		procRows = append(procRows, [2]string{cmd, ""})
+	}
+
+	group("read", colGroup, colRead, readRows)
+	group("wrote", colGroup, colWrite, writeRows)
+	group("subprocesses", colGroup, colProc, procRows)
+
+	if t.Truncated {
+		b.gap(6)
+		b.body("Note: file capture reached its cap; some paths are omitted.")
+	}
+}
+
+func truncStr(s string, max int) string {
+	if max < 8 {
+		max = 8
+	}
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }
 
 func (b *builder) addRunHistoryPage(seal *session.SealRecord) {

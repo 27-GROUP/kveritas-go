@@ -15,11 +15,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mamadouk/kveritas/internal/bundle"
-	"github.com/mamadouk/kveritas/internal/crypto"
-	"github.com/mamadouk/kveritas/internal/hardware"
-	"github.com/mamadouk/kveritas/internal/metrics"
-	"github.com/mamadouk/kveritas/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/bundle"
+	"github.com/Mamadou2727/kveritas-go/internal/crypto"
+	"github.com/Mamadou2727/kveritas-go/internal/hardware"
+	"github.com/Mamadou2727/kveritas-go/internal/metrics"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/tracer"
 )
 
 // Run executes command as a monitored subprocess.
@@ -101,9 +102,16 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, err
 	}
 
+	// Start watching the project tree before the child runs so early file opens
+	// (the interpreter loading the script and its imports) are captured.
+	obs := tracer.New(sess.ProjectDir)
+	obs.Start()
+
 	if err := cmd.Start(); err != nil {
+		obs.Stop()
 		return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
 	}
+	obs.SetPID(cmd.Process.Pid)
 
 	var wg sync.WaitGroup
 
@@ -194,6 +202,12 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	hwSamples := sampler.Stop()
 	if len(hwSamples) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
+	}
+
+	rec.Trace = obs.Stop()
+	if rec.Trace != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Activity trace: %d files, %d subprocesses\n",
+			len(rec.Trace.Files), len(rec.Trace.Procs))
 	}
 
 	rec.EndAt = time.Now().UTC()

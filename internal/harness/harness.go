@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mamadouk/kveritas/internal/crypto"
+	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 )
 
 const (

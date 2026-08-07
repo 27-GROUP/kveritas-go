@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mamadouk/kveritas/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
 // Analyze runs the Hardware-Metric Consistency Analyzer against a set of runs

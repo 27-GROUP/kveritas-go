@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mamadouk/kveritas/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
 // Sampler periodically captures hardware state in the background.

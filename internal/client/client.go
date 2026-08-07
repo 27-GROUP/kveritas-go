@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mamadouk/kveritas/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
 // Client communicates with the K-Veritas attestation server.

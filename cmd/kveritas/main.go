@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mamadou2727/kveritas-go/internal/bundle"
+	"github.com/Mamadou2727/kveritas-go/internal/client"
+	"github.com/Mamadou2727/kveritas-go/internal/compute"
+	kvcrypto "github.com/Mamadou2727/kveritas-go/internal/crypto"
+	"github.com/Mamadou2727/kveritas-go/internal/hardware"
+	"github.com/Mamadou2727/kveritas-go/internal/harness"
+	"github.com/Mamadou2727/kveritas-go/internal/hmca"
+	"github.com/Mamadou2727/kveritas-go/internal/pdf"
+	"github.com/Mamadou2727/kveritas-go/internal/runner"
+	"github.com/Mamadou2727/kveritas-go/internal/session"
 	"github.com/google/uuid"
-	"github.com/mamadouk/kveritas/internal/bundle"
-	"github.com/mamadouk/kveritas/internal/client"
-	"github.com/mamadouk/kveritas/internal/compute"
-	kvcrypto "github.com/mamadouk/kveritas/internal/crypto"
-	"github.com/mamadouk/kveritas/internal/hardware"
-	"github.com/mamadouk/kveritas/internal/harness"
-	"github.com/mamadouk/kveritas/internal/hmca"
-	"github.com/mamadouk/kveritas/internal/pdf"
-	"github.com/mamadouk/kveritas/internal/runner"
-	"github.com/mamadouk/kveritas/internal/session"
 	"github.com/spf13/cobra"
 )
 
@@ -679,6 +679,51 @@ func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	}
 }
 
+// renderRunTrace prints the file and subprocess activity of a run as an event
+// tree: what it read, what it produced, and what it spawned, in the order the
+// events were observed.
+func renderRunTrace(idx int, command []string, t *session.RunTrace) {
+	var reads, writes []session.FileEvent
+	for _, f := range t.Files {
+		if f.Op == "write" {
+			writes = append(writes, f)
+		} else {
+			reads = append(reads, f)
+		}
+	}
+
+	fmt.Printf("\nRun %d activity: %s\n", idx, strings.Join(command, " "))
+	if len(reads) > 0 {
+		fmt.Printf("  read (%d):\n", len(reads))
+		for _, f := range reads {
+			fmt.Printf("    %s\n", f.Path)
+		}
+	}
+	if len(writes) > 0 {
+		fmt.Printf("  wrote (%d):\n", len(writes))
+		for _, f := range writes {
+			h := f.Hash
+			if len(h) > 12 {
+				h = h[:12]
+			}
+			fmt.Printf("    %s  %s\n", f.Path, h)
+		}
+	}
+	if len(t.Procs) > 0 {
+		fmt.Printf("  subprocesses (%d):\n", len(t.Procs))
+		for _, p := range t.Procs {
+			cmd := p.Command
+			if cmd == "" {
+				cmd = "(unknown)"
+			}
+			fmt.Printf("    [pid %d] %s\n", p.PID, cmd)
+		}
+	}
+	if t.Truncated {
+		fmt.Printf("  (trace truncated at %d files)\n", 10000)
+	}
+}
+
 var runFiles []string
 
 var cmdRun = &cobra.Command{
@@ -971,30 +1016,31 @@ func init() {
 
 func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
 	type runPayload struct {
-		ID             string            `json:"id"`
-		Index          int               `json:"index"`
-		Command        []string          `json:"command"`
-		StartAt        string            `json:"start_at"`
-		EndAt          string            `json:"end_at"`
-		DurationSec    float64           `json:"duration_sec"`
-		ExitCode       int               `json:"exit_code"`
-		PreHashes      map[string]string `json:"pre_hashes"`
-		PostHashes     map[string]string `json:"post_hashes"`
-		Modified       []string          `json:"modified_files"`
-		StdoutHash     string            `json:"stdout_hash"`
-		StderrHash     string            `json:"stderr_hash"`
-		StdoutLines    int               `json:"stdout_lines"`
-		Metrics        []session.Metric  `json:"metrics"`
-		Hardware       session.HardwareInfo `json:"hardware"`
-		EnvDigest      string            `json:"env_digest"`
+		ID          string               `json:"id"`
+		Index       int                  `json:"index"`
+		Command     []string             `json:"command"`
+		StartAt     string               `json:"start_at"`
+		EndAt       string               `json:"end_at"`
+		DurationSec float64              `json:"duration_sec"`
+		ExitCode    int                  `json:"exit_code"`
+		PreHashes   map[string]string    `json:"pre_hashes"`
+		PostHashes  map[string]string    `json:"post_hashes"`
+		Modified    []string             `json:"modified_files"`
+		StdoutHash  string               `json:"stdout_hash"`
+		StderrHash  string               `json:"stderr_hash"`
+		StdoutLines int                  `json:"stdout_lines"`
+		Metrics     []session.Metric     `json:"metrics"`
+		Hardware    session.HardwareInfo `json:"hardware"`
+		EnvDigest   string               `json:"env_digest"`
 		// New fields (omitted when empty for backward compat with old verifier)
-		Phases         []session.PhaseEvent    `json:"phases,omitempty"`
-		Claims         []session.InlineClaim   `json:"claims,omitempty"`
+		Phases         []session.PhaseEvent     `json:"phases,omitempty"`
+		Claims         []session.InlineClaim    `json:"claims,omitempty"`
 		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
-		MetricHash     string                  `json:"metric_hash,omitempty"`
-		DurationFmt    string                  `json:"duration_fmt,omitempty"`
-		SourceCodeHash string                  `json:"source_code_hash,omitempty"`
-		Declared       *session.DeclaredModel  `json:"declared,omitempty"`
+		MetricHash     string                   `json:"metric_hash,omitempty"`
+		DurationFmt    string                   `json:"duration_fmt,omitempty"`
+		SourceCodeHash string                   `json:"source_code_hash,omitempty"`
+		Declared       *session.DeclaredModel   `json:"declared,omitempty"`
+		Trace          *session.RunTrace        `json:"trace,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -1023,6 +1069,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			DurationFmt:    r.DurationFmt,
 			SourceCodeHash: r.SourceCodeHash,
 			Declared:       r.Declared,
+			Trace:          r.Trace,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -1069,15 +1116,15 @@ func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash strin
 	}
 
 	return &session.SealRecord{
-		SessionID:        sess.ID,
-		SealedAt:         time.Now().UTC(),
-		DataHash:         dataHash,
-		Nonce:            resp.Nonce,
-		SignedAt:         resp.SignedAt,
-		Signature:        resp.Signature,
+		SessionID:         sess.ID,
+		SealedAt:          time.Now().UTC(),
+		DataHash:          dataHash,
+		Nonce:             resp.Nonce,
+		SignedAt:          resp.SignedAt,
+		Signature:         resp.Signature,
 		SignedMessageHash: resp.SignedMessageHash,
-		PublicKeyPEM:     resp.PublicKeyPEM,
-		ServerURL:        sess.ServerURL,
+		PublicKeyPEM:      resp.PublicKeyPEM,
+		ServerURL:         sess.ServerURL,
 	}, nil
 }
 
@@ -1112,15 +1159,15 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 	}
 
 	return &session.SealRecord{
-		SessionID:        sess.ID,
-		SealedAt:         time.Now().UTC(),
-		DataHash:         dataHash,
-		Nonce:            nonce,
-		SignedAt:         signedAt,
-		Signature:        sig,
+		SessionID:         sess.ID,
+		SealedAt:          time.Now().UTC(),
+		DataHash:          dataHash,
+		Nonce:             nonce,
+		SignedAt:          signedAt,
+		Signature:         sig,
 		SignedMessageHash: kvcrypto.HashBytes([]byte(payload)),
-		PublicKeyPEM:     string(pubPEM),
-		ServerURL:        "local",
+		PublicKeyPEM:      string(pubPEM),
+		ServerURL:         "local",
 	}, nil
 }
 
@@ -1224,6 +1271,12 @@ var cmdVerify = &cobra.Command{
 		}
 		if seedCount > 0 {
 			fmt.Printf("Seeds:      %d commitments\n", seedCount)
+		}
+
+		for i, r := range runs {
+			if r.Trace != nil {
+				renderRunTrace(i+1, r.Command, r.Trace)
+			}
 		}
 
 		for i, r := range runs {
