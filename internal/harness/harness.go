@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
@@ -76,9 +77,48 @@ type Entry struct {
 // ActorNode is a node in the attribution tree: an actor, how many designated
 // actions it took, and the sub-agents it spawned.
 type ActorNode struct {
-	Name     string       `json:"name"`
-	Count    int          `json:"count"`
-	Children []*ActorNode `json:"children,omitempty"`
+	Name     string        `json:"name"`
+	Count    int           `json:"count"`
+	Actions  []ActorAction `json:"actions,omitempty"`
+	Children []*ActorNode  `json:"children,omitempty"`
+}
+
+// ActorAction is a bucketed count of what an actor did (reads, writes, spawns,
+// and so on), for the per-agent breakdown in the session tree.
+type ActorAction struct {
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+// actionOrder fixes the display order of the action buckets.
+var actionOrder = []string{"turns", "reads", "writes", "commands", "spawns", "tools", "claims", "approvals", "other"}
+
+// bucket groups a ledger entry type into a human category. The ".result" half of
+// a call is folded into its action so counts reflect what was done.
+func bucket(t string) string {
+	if strings.HasSuffix(t, ".result") {
+		return ""
+	}
+	switch {
+	case t == "prompt" || t == "model_turn" || strings.HasSuffix(t, ".turn"):
+		return "turns"
+	case t == "spawn":
+		return "spawns"
+	case strings.Contains(t, "exec") || strings.Contains(t, "bash"):
+		return "commands"
+	case strings.Contains(t, "write") || strings.Contains(t, "edit") || t == "file_effect":
+		return "writes"
+	case strings.Contains(t, "read") || strings.Contains(t, "list") || strings.Contains(t, "grep") || strings.Contains(t, "glob"):
+		return "reads"
+	case strings.Contains(t, "claim"):
+		return "claims"
+	case strings.Contains(t, "approval"):
+		return "approvals"
+	case strings.HasPrefix(t, "tool_call"):
+		return "tools"
+	default:
+		return "other"
+	}
 }
 
 // ActorTree reconstructs the forest of agents from the entries. Each independent
@@ -98,6 +138,7 @@ func ActorTree(entries []Entry) []*ActorNode {
 	key := func(top, id string) string { return top + "\x00" + id }
 
 	counts := map[string]int{}
+	actions := map[string]map[string]int{}
 	topOf := map[string]string{}
 	agentOf := map[string]string{}
 	displayOf := map[string]string{}
@@ -108,6 +149,12 @@ func ActorTree(entries []Entry) []*ActorNode {
 
 	for _, e := range entries {
 		counts[e.Actor]++
+		if b := bucket(e.Type); b != "" {
+			if actions[e.Actor] == nil {
+				actions[e.Actor] = map[string]int{}
+			}
+			actions[e.Actor][b]++
+		}
 		if !seen[e.Actor] {
 			seen[e.Actor] = true
 			order = append(order, e.Actor)
@@ -132,6 +179,11 @@ func ActorTree(entries []Entry) []*ActorNode {
 			return n
 		}
 		n := &ActorNode{Name: name, Count: counts[name]}
+		for _, label := range actionOrder {
+			if c := actions[name][label]; c > 0 {
+				n.Actions = append(n.Actions, ActorAction{Label: label, Count: c})
+			}
+		}
 		nodes[name] = n
 		return n
 	}
@@ -322,12 +374,12 @@ func lock(kvDir string) (func(), error) {
 // exactly which entry and which actor it went wrong at so an auditor can go
 // straight to it.
 type Result struct {
-	Verdict      string
-	Detail       string
-	FailAtIndex  int
-	FailAtActor  string
-	EntryCount   int
-	ActorCounts  map[string]int
+	Verdict     string
+	Detail      string
+	FailAtIndex int
+	FailAtActor string
+	EntryCount  int
+	ActorCounts map[string]int
 }
 
 // Verify checks the genesis signature, the full chain, and the seal signature,

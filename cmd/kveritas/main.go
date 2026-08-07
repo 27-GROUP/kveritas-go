@@ -675,6 +675,13 @@ func verifyHarnessReport(report *harness.Report) error {
 func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	for _, n := range nodes {
 		fmt.Printf("%s%s (%d)\n", strings.Repeat("  ", depth), n.Name, n.Count)
+		if len(n.Actions) > 0 {
+			parts := make([]string, 0, len(n.Actions))
+			for _, a := range n.Actions {
+				parts = append(parts, fmt.Sprintf("%s:%d", a.Label, a.Count))
+			}
+			fmt.Printf("%s%s\n", strings.Repeat("  ", depth+1), strings.Join(parts, "  "))
+		}
 		renderActorTree(n.Children, depth+1)
 	}
 }
