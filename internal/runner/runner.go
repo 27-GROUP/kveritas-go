@@ -14,13 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 	"github.com/Mamadou2727/kveritas-go/internal/hardware"
 	"github.com/Mamadou2727/kveritas-go/internal/metrics"
+	"github.com/Mamadou2727/kveritas-go/internal/provenance"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 	"github.com/Mamadou2727/kveritas-go/internal/tracer"
+	"github.com/google/uuid"
 )
 
 // Run executes command as a monitored subprocess.
@@ -113,6 +114,13 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}
 	obs.SetPID(cmd.Process.Pid)
 
+	// Provenance records a content-addressed snapshot at the start, at each phase,
+	// and at the end, so the run becomes a tamper-evident state timeline.
+	provLevel := provenance.ParseLevel(sess.Disclosure)
+	salt := decodeSalt(sess.ProvSalt)
+	prov := provenance.New(sess.ProjectDir, sess.Disclosure, salt)
+	prov.Snapshot("run_start", "")
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -133,6 +141,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				mu.Lock()
 				allPhases = append(allPhases, pe)
 				mu.Unlock()
+				prov.Snapshot("phase", phaseName)
 				fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (line %d, hardware snapshot captured)\n", phaseName, lineNum)
 				continue
 			}
@@ -204,10 +213,23 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
 	}
 
-	rec.Trace = obs.Stop()
-	if rec.Trace != nil {
-		fmt.Fprintf(os.Stderr, "[kveritas] Activity trace: %d files, %d subprocesses\n",
-			len(rec.Trace.Files), len(rec.Trace.Procs))
+	prov.Snapshot("run_end", "")
+	rec.Provenance = prov.Result()
+	if rec.Provenance != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Provenance: %d snapshots, %d files, %d withheld (%s)\n",
+			len(rec.Provenance.Commits), rec.Provenance.FileCount,
+			len(rec.Provenance.Withheld), rec.Provenance.Disclosure)
+	}
+
+	// The cleartext activity map exposes real file names, so it only ships once the
+	// author has chosen to disclose names.
+	trace := obs.Stop()
+	if provLevel >= provenance.Names {
+		rec.Trace = trace
+		if trace != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Activity trace: %d files, %d subprocesses\n",
+				len(trace.Files), len(trace.Procs))
+		}
 	}
 
 	rec.EndAt = time.Now().UTC()
@@ -304,6 +326,13 @@ func hashFiles(paths []string) (map[string]string, error) {
 func digestBuf(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func decodeSalt(s string) []byte {
+	if b, err := hex.DecodeString(s); err == nil && len(b) > 0 {
+		return b
+	}
+	return []byte(s)
 }
 
 func envDigest() (string, error) {

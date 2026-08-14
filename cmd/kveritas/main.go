@@ -19,6 +19,7 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/harness"
 	"github.com/Mamadou2727/kveritas-go/internal/hmca"
 	"github.com/Mamadou2727/kveritas-go/internal/pdf"
+	"github.com/Mamadou2727/kveritas-go/internal/provenance"
 	"github.com/Mamadou2727/kveritas-go/internal/runner"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 	"github.com/google/uuid"
@@ -82,12 +83,13 @@ func main() {
 }
 
 var (
-	initServer    string
-	initLocal     bool
-	initHarness   bool
-	initDesignate string
-	initAgent     string
-	initOperator  string
+	initServer     string
+	initLocal      bool
+	initHarness    bool
+	initDesignate  string
+	initAgent      string
+	initOperator   string
+	initDisclosure string
 )
 
 const defaultDesignation = `{"designate":["tool_call","file_effect","model_turn","spawn","self_claim","approval"]}`
@@ -137,6 +139,11 @@ var cmdInit = &cobra.Command{
 			serverURL = "local"
 		}
 
+		salt, err := kvcrypto.RandomNonce()
+		if err != nil {
+			return err
+		}
+
 		sess := &session.Session{
 			ID:         sessionID,
 			InitAt:     time.Now().UTC(),
@@ -145,6 +152,8 @@ var cmdInit = &cobra.Command{
 			Token:      token,
 			ServerURL:  serverURL,
 			Runs:       []string{},
+			Disclosure: initDisclosure,
+			ProvSalt:   salt,
 		}
 
 		if err := sess.Save(kvDir); err != nil {
@@ -152,6 +161,7 @@ var cmdInit = &cobra.Command{
 		}
 
 		fmt.Printf("Session initialized: %s\n", sessionID)
+		fmt.Printf("Disclosure: %s\n", initDisclosure)
 		return nil
 	},
 }
@@ -163,6 +173,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initDesignate, "designate", "", "path to a designation policy file (default: all consequential actions)")
 	cmdInit.Flags().StringVar(&initAgent, "agent", "unknown-agent", "agent identity (e.g. claude-code/<model>)")
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
+	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 }
 
 // harnessInit registers a harness session and binds the designation D at genesis,
@@ -686,6 +697,57 @@ func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	}
 }
 
+// sanitizeForReport returns a copy of the session safe to embed in the report.
+// The provenance salt never leaves the machine, and the source file listing (real
+// paths) is dropped unless the author disclosed names.
+func sanitizeForReport(s *session.Session) *session.Session {
+	clean := *s
+	clean.ProvSalt = ""
+	if provenance.ParseLevel(s.Disclosure) < provenance.Names {
+		clean.SourceHashes = nil
+	}
+	return &clean
+}
+
+// renderProvenance prints the state timeline of a run: each snapshot, the event
+// that produced it, and what changed since the previous one. At the redacted
+// level file names are pseudonyms. Withheld files are listed so a reviewer sees
+// what the author kept out of any bundle.
+func renderProvenance(idx int, p *session.Provenance) {
+	fmt.Printf("\nRun %d provenance (%s, %d files):\n", idx, p.Disclosure, p.FileCount)
+	for _, c := range p.Commits {
+		label := c.Event.Kind
+		if c.Event.Name != "" {
+			label += " " + c.Event.Name
+		}
+		root := c.Root
+		if len(root) > 12 {
+			root = root[:12]
+		}
+		fmt.Printf("  [%d] %-16s root %s", c.Index, label, root)
+		if len(c.Changed) > 0 {
+			fmt.Printf("  (%d changed)", len(c.Changed))
+		}
+		fmt.Println()
+		for _, ch := range c.Changed {
+			fmt.Printf("        %-6s %s\n", ch.Op, ch.Path)
+		}
+	}
+	if len(p.Withheld) > 0 {
+		fmt.Printf("  withheld by .kveritasignore (%d):\n", len(p.Withheld))
+		for _, w := range p.Withheld {
+			h := w.Hash
+			if len(h) > 12 {
+				h = h[:12]
+			}
+			fmt.Printf("        %s  %s  %s\n", w.Path, w.SizeBucket, h)
+		}
+	}
+	if p.Truncated {
+		fmt.Printf("  (provenance truncated at %d snapshots)\n", 512)
+	}
+}
+
 // renderRunTrace prints the file and subprocess activity of a run as an event
 // tree: what it read, what it produced, and what it spawned, in the order the
 // events were observed.
@@ -931,7 +993,7 @@ var cmdSeal = &cobra.Command{
 			outPath = fmt.Sprintf("kveritas-report-%s.pdf", sess.ID[:8])
 		}
 
-		if err := pdf.Generate(sess, runs, seal, &hmcaResult, outPath); err != nil {
+		if err := pdf.Generate(sanitizeForReport(sess), runs, seal, &hmcaResult, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
@@ -1048,6 +1110,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		SourceCodeHash string                   `json:"source_code_hash,omitempty"`
 		Declared       *session.DeclaredModel   `json:"declared,omitempty"`
 		Trace          *session.RunTrace        `json:"trace,omitempty"`
+		Provenance     *session.Provenance      `json:"provenance,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -1077,6 +1140,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			SourceCodeHash: r.SourceCodeHash,
 			Declared:       r.Declared,
 			Trace:          r.Trace,
+			Provenance:     r.Provenance,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -1281,6 +1345,9 @@ var cmdVerify = &cobra.Command{
 		}
 
 		for i, r := range runs {
+			if r.Provenance != nil {
+				renderProvenance(i+1, r.Provenance)
+			}
 			if r.Trace != nil {
 				renderRunTrace(i+1, r.Command, r.Trace)
 			}

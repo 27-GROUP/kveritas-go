@@ -26,6 +26,10 @@ type Session struct {
 	Runs         []string          `json:"runs"`
 	Sealed       bool              `json:"sealed"`
 	SourceHashes map[string]string `json:"source_hashes,omitempty"`
+	// Disclosure level for provenance: redacted (default), names, or open.
+	Disclosure string `json:"disclosure,omitempty"`
+	// Per-session salt for provenance leaf hashes. Kept local, never published.
+	ProvSalt string `json:"prov_salt,omitempty"`
 }
 
 type RunRecord struct {
@@ -64,6 +68,58 @@ type RunRecord struct {
 	Declared *DeclaredModel `json:"declared,omitempty"`
 	// File and subprocess activity observed during the run (Linux only for now)
 	Trace *RunTrace `json:"trace,omitempty"`
+	// Content-addressed state history of the run (Merkle snapshots at boundaries)
+	Provenance *Provenance `json:"provenance,omitempty"`
+}
+
+// Provenance is the signed state history of a run: a hash-chained series of
+// content-addressed snapshots taken at run boundaries. At the default disclosure
+// level file names are redacted, so the timeline proves what changed and when
+// without revealing code, data, or filenames.
+type Provenance struct {
+	Disclosure string         `json:"disclosure"`
+	Root       string         `json:"root"`
+	Head       string         `json:"head"`
+	FileCount  int            `json:"file_count"`
+	Commits    []ProvCommit   `json:"commits"`
+	Withheld   []WithheldFile `json:"withheld,omitempty"`
+	Truncated  bool           `json:"truncated,omitempty"`
+}
+
+// ProvEvent is what triggered a snapshot: run_start, phase, or run_end.
+type ProvEvent struct {
+	Kind string `json:"kind"`
+	Name string `json:"name,omitempty"`
+}
+
+// ProvChange is one file that changed between two snapshots. Path is a stable
+// pseudonym unless the author disclosed real names.
+type ProvChange struct {
+	Op   string `json:"op"`
+	Path string `json:"path"`
+}
+
+// ProvCommit is one state transition: the Merkle root of the tracked files at
+// this moment, the event that produced it, and a link that binds it to the prior
+// commit so the order and content cannot be altered.
+type ProvCommit struct {
+	Index     int          `json:"index"`
+	Timestamp time.Time    `json:"timestamp"`
+	PrevRoot  string       `json:"prev_root"`
+	Root      string       `json:"root"`
+	Event     ProvEvent    `json:"event"`
+	Changed   []ProvChange `json:"changed,omitempty"`
+	PrevLink  string       `json:"prev_link"`
+	Link      string       `json:"link"`
+}
+
+// WithheldFile is a file the author kept out of any bundle via .kveritasignore.
+// Its hash is still committed, so it is disclosed here (redacted) rather than
+// silently dropped.
+type WithheldFile struct {
+	Path       string `json:"path"`
+	Hash       string `json:"hash"`
+	SizeBucket string `json:"size_bucket"`
 }
 
 // FileEvent is one file the run touched, as seen by the activity tracer. Op is
