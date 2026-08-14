@@ -298,6 +298,8 @@ type SealRecord struct {
 	CanonicalJSON string `json:"canonical_json,omitempty"`
 	VisualPDFHash string `json:"visual_pdf_hash,omitempty"`
 	SealBlockHash string `json:"seal_block_hash,omitempty"`
+	// SHA-256 of the combined multi-run checkout bundle, bound into the signature.
+	CheckoutBundleHash string `json:"checkout_bundle_hash,omitempty"`
 	// Run history from server ledger, embedded at seal time
 	RunHistory    []LedgerRunEntry `json:"run_history,omitempty"`
 	TotalRunCount int              `json:"total_run_count,omitempty"`

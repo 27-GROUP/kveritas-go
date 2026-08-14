@@ -160,7 +160,7 @@ var checkoutReport string
 
 // cmdCheckout materializes a snapshot's files from an open-disclosure bundle.
 var cmdCheckout = &cobra.Command{
-	Use:   "checkout <bundle.zip> <phase|index> <outdir>",
+	Use:   "checkout <bundle.zip> <[run:]phase|index> <outdir>",
 	Short: "Reconstruct the files of a snapshot from a checkout bundle",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -182,8 +182,8 @@ func provKeyPath(reportPath string) string {
 	return reportPath + ".provkey.json"
 }
 
-func runBundlePath(reportPath string, run int) string {
-	return fmt.Sprintf("%s.run%d.kvbundle.zip", reportPath, run)
+func provBundlePath(reportPath string) string {
+	return reportPath + ".kvbundle.zip"
 }
 
 // rootInSignedReport reports whether a snapshot root appears in the signed
@@ -237,11 +237,8 @@ func checkBundleBinding(reportPath, bundlePath string) error {
 	if err != nil {
 		return err
 	}
-	got := kvcrypto.HashBytes(data)
-	for _, r := range meta.Runs {
-		if r.ProvBundleHash == got {
-			return nil
-		}
+	if kvcrypto.HashBytes(data) == meta.Seal.CheckoutBundleHash {
+		return nil
 	}
 	return fmt.Errorf("TAMPERED: bundle hash does not match the signed report")
 }
@@ -1135,12 +1132,31 @@ var cmdSeal = &cobra.Command{
 		}
 
 		// The source bundle ships file contents, so it is only built when the author
-		// The checkout bundle (open disclosure only) is now the single bundle. It
-		// carries the content and is bound per run by prov_bundle_hash, so the older
-		// flat source bundle is no longer produced.
+		// The checkout bundle (open disclosure only) is the single bundle now; the
+		// older flat source bundle is gone. Every run's store is merged into one zip
+		// and its hash is bound into the signature below.
 		var bundleHash string
+		var combinedBundle []byte
+		var checkoutBundleHash string
+		var bundleInputs []provenance.BundleInput
+		for _, r := range runs {
+			if r.ProvBundleHash != "" {
+				bundleInputs = append(bundleInputs, provenance.BundleInput{
+					Run:  r.Index + 1,
+					Path: filepath.Join(kvDir, "bundle-"+r.ID+".zip"),
+				})
+			}
+		}
+		if len(bundleInputs) > 0 {
+			b, h, err := provenance.MergeBundles(bundleInputs)
+			if err != nil {
+				return fmt.Errorf("merging checkout bundles: %w", err)
+			}
+			combinedBundle = b
+			checkoutBundleHash = h
+		}
 
-		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
+		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, checkoutBundleHash, &hmcaResult)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -1156,6 +1172,7 @@ var cmdSeal = &cobra.Command{
 			return err
 		}
 		seal.SourceBundleHash = bundleHash
+		seal.CheckoutBundleHash = checkoutBundleHash
 		seal.CanonicalJSON = string(canonicalBytes)
 
 		if sess.ServerURL != "local" {
@@ -1179,11 +1196,9 @@ var cmdSeal = &cobra.Command{
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Save the proof keystore and (open disclosure only) the checkout bundle next
-		// to the report before the session directory is cleaned up. Single-run reports
-		// are supported for now.
 		// Merge every run's proof keystore into one sidecar so a proof can reveal a
-		// file from any run, and write a checkout bundle per run that produced one.
+		// file from any run, and write the single combined checkout bundle. Both are
+		// kept next to the report before the session directory is cleaned up.
 		merged := &provenance.Keystore{SessionID: sess.ID}
 		for _, r := range runs {
 			if k, err := provenance.LoadKeystore(filepath.Join(kvDir, "keystore-"+r.ID+".json")); err == nil {
@@ -1192,13 +1207,10 @@ var cmdSeal = &cobra.Command{
 				}
 				merged.Commits = append(merged.Commits, k.Commits...)
 			}
-			if r.ProvBundleHash != "" {
-				if bz, err := os.ReadFile(filepath.Join(kvDir, "bundle-"+r.ID+".zip")); err == nil {
-					dst := runBundlePath(outPath, r.Index+1)
-					if err := os.WriteFile(dst, bz, 0644); err == nil {
-						fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle: %s\n", dst)
-					}
-				}
+		}
+		if len(combinedBundle) > 0 {
+			if err := os.WriteFile(provBundlePath(outPath), combinedBundle, 0644); err == nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle: %s (%d runs)\n", provBundlePath(outPath), len(bundleInputs))
 			}
 		}
 		if len(merged.Commits) > 0 {
@@ -1283,7 +1295,7 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
 	type runPayload struct {
 		ID          string               `json:"id"`
 		Index       int                  `json:"index"`
@@ -1372,6 +1384,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	}
 	if bundleHash != "" {
 		signingData["source_bundle_hash"] = bundleHash
+	}
+	if checkoutBundleHash != "" {
+		signingData["checkout_bundle_hash"] = checkoutBundleHash
 	}
 	if hmcaResult != nil {
 		signingData["hmca"] = hmcaResult
@@ -1475,7 +1490,7 @@ var cmdVerify = &cobra.Command{
 		verifyHMCA := hmca.Analyze(runs, verifySamples)
 
 		// Step 1: recompute and verify the data hash.
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &verifyHMCA)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, &verifyHMCA)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -1615,7 +1630,7 @@ var cmdCheck = &cobra.Command{
 			checkSamples = append(checkSamples, r.HardwareSamples...)
 		}
 		checkHMCA := hmca.Analyze(runs, checkSamples)
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, &checkHMCA)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, &checkHMCA)
 		if err != nil {
 			return err
 		}
