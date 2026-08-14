@@ -254,6 +254,7 @@ var (
 	initAgent      string
 	initOperator   string
 	initDisclosure string
+	initShowNames  bool
 )
 
 const defaultDesignation = `{"designate":["tool_call","file_effect","model_turn","spawn","self_claim","approval"]}`
@@ -303,6 +304,11 @@ var cmdInit = &cobra.Command{
 			serverURL = "local"
 		}
 
+		// --show-names keeps real file names in the report without bundling content.
+		if initShowNames && initDisclosure == "redacted" {
+			initDisclosure = "names"
+		}
+
 		salt, err := kvcrypto.RandomNonce()
 		if err != nil {
 			return err
@@ -338,6 +344,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initAgent, "agent", "unknown-agent", "agent identity (e.g. claude-code/<model>)")
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
+	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the file (default: current directory)")
 	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
