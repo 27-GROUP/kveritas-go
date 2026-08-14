@@ -4,6 +4,8 @@ Standalone binary for tamper-evident verification of ML experiments. Cryptograph
 
 Works with any language -- Python, R, Julia, C++, shell scripts, etc. Zero runtime dependencies. Single static binary.
 
+**Platform support.** Core features -- verify, seal, proofs, checkout, benchmark artifacts, the provenance timeline and disclosure levels -- are cross-platform (Linux, macOS, Windows). The fine-grained **activity map** (file reads/writes and subprocesses) and **per-process hardware attribution** are **Linux only** today; on other platforms they fall back gracefully (system-wide hardware, no activity map). macOS and Windows support for these is coming.
+
 ---
 
 ## Installation
@@ -55,9 +57,9 @@ kveritas init
 kveritas run -- python train.py --epochs 90
 kveritas run -- python evaluate.py --checkpoint best
 
-# 3. Seal the session: produces a signed PDF + source bundle
+# 3. Seal the session: produces a signed PDF (redacted by default)
 kveritas seal --output report.pdf
-# Output: report.pdf + report-bundle.zip
+# Output: report.pdf  (+ report.pdf.kvbundle.zip when sealed at --disclosure open)
 
 # 4. Verify the report (no server, no internet required)
 kveritas verify report.pdf
@@ -84,6 +86,7 @@ KVERITAS_CLAIM <metric> <op> <value>
 KVERITAS_INPUT src=seed:<value>
 KVERITAS_MODEL params=<int> arch=<name> precision=<fp16|bf16|fp32>
 KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]
+KVERITAS_ARTIFACT role=model|dataset [name=<ref>] path=<file> visibility=public|private
 ```
 
 **KVERITAS_METRIC** -- Records a metric value at a specific line. The entire stdout is SHA-256 hashed byte-by-byte.
@@ -95,6 +98,8 @@ KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<i
 **KVERITAS_INPUT** -- Commits a PRNG seed to the record. Proves the seed was declared before results appeared.
 
 **KVERITAS_MODEL** and **KVERITAS_WORKLOAD** -- Declare the model card (parameter count, architecture, precision) and the training workload (dataset size, epochs, batch size). These feed the compute-cost certificate, which checks that the declared work was physically performed on the reported hardware. Counts accept scientific notation (e.g. `params=25.6e6`).
+
+**KVERITAS_ARTIFACT** -- Attest a model or dataset. A `public` artifact records its canonical content hash (matchable against a published reference, e.g. a standard benchmark); a `private` one records only a salted commitment that reveals nothing. See [Benchmark Artifacts](#benchmark-artifacts).
 
 ---
 
@@ -114,9 +119,13 @@ At session start, K-Veritas captures a full hardware snapshot:
 
 Multi-GPU setups report each GPU individually. The GPU count and names array are included in the signed data.
 
-### Hardware Sampler
+### Hardware Sampler (per-process)
 
-During `kveritas run`, a background goroutine polls hardware counters every 15 seconds: CPU time, memory usage, GPU utilization, GPU memory, CPU temperature, and disk I/O. These samples are included in the signed data, providing a time-series trace of actual compute activity.
+During `kveritas run`, a background goroutine samples hardware counters every 2 seconds: CPU time, memory, GPU utilization, GPU memory, and GPU power. These are included in the signed data as a time-series trace of actual compute activity.
+
+Sampling is scoped to the run's **own process tree** -- CPU and memory from the tree, GPU memory and utilization filtered to its PIDs, GPU power scaled by its share of utilization. So another app on the machine (a browser, a second job) does **not** inflate the run's evidence.
+
+> Per-process attribution is **Linux only** (it uses `/proc` and `nvidia-smi`). On macOS and Windows the sampler falls back to system-wide readings; per-OS support is coming.
 
 ---
 
@@ -167,17 +176,64 @@ print("KVERITAS_WORKLOAD dataset_size=1281167 epochs=90 batch_size=256")
 
 ---
 
-## Source Code Integrity
+## Provenance & Disclosure Levels
 
-K-Veritas prevents code modification after experiments are run.
+Every run is recorded as a signed timeline of content-addressed snapshots -- the state of the tracked source at run start, at each phase, and at run end, plus what changed between them. Each snapshot is a Merkle root linked to the previous one, so the timeline is tamper-evident and bound into the report signature.
 
-On the first `kveritas run`, all source files are indexed and SHA-256 hashed. During `kveritas seal`:
+You choose, per session, how much the report reveals. This controls disclosure only -- integrity is always committed.
 
-1. Re-hashes all tracked source files and compares against stored hashes
-2. Refuses to seal if any file was modified after the runs
-3. Computes an aggregate source code hash (SHA-256 over sorted file hashes)
-4. Bundles all source files into `bundle.zip`
-5. Includes both the source code hash and bundle hash in the signed data
+| Level | Flag | Report shows |
+|---|---|---|
+| redacted (default) | `kveritas init` | Pseudonyms (`file#1`...), no names, no content |
+| names | `kveritas init --show-names` | Real file names, no content bundled |
+| open | `kveritas init --disclosure open` | Real names + a checkout bundle (code contents) |
+
+A redacted report reveals **nothing sensitive**: no code, file names, datasets, weights, command line, or salt. The attestation server is zero-knowledge -- it only ever receives a hash. Leaf hashes are salted with a per-file key kept on your machine.
+
+### Withholding files: `.kveritasignore`
+
+Patterns in a `.kveritasignore` (gitignore-style) keep files out of any bundle -- e.g. a `secrets/` directory. A withheld file is still committed as a hash-only leaf (so it can never be silently dropped) and is listed as withheld, but its content is in no report and no bundle. Secrets like `.env` and key files are excluded by default.
+
+---
+
+## Selective-Disclosure Proofs
+
+Reveal one file was part of a signed snapshot without exposing any other file:
+
+```bash
+kveritas prove report.pdf src/train.py          # -> kveritas-proof-train.py.json
+kveritas verify-proof report.pdf kveritas-proof-train.py.json
+```
+
+The proof discloses only that file; the others appear as opaque commitments. It works across every run of a multi-run session. The `report.pdf.provkey.json` written at seal time is a **local** keystore (real paths + salts) that powers `prove` -- keep it private.
+
+---
+
+## Checkout Bundle
+
+Sealing at `--disclosure open` writes one bundle, `report.pdf.kvbundle.zip`, that reconstructs the code at any snapshot. A multi-run session merges every run into that single zip.
+
+```bash
+kveritas checkout report.pdf.kvbundle.zip run_end /tmp/out --report report.pdf
+kveritas checkout report.pdf.kvbundle.zip run2:train /tmp/out --report report.pdf
+```
+
+The bundle holds source contents (content-addressed, deduplicated) plus a manifest per snapshot; never datasets, weights, or withheld files. Its hash is bound in the signed report, and each file is re-hashed against its manifest on checkout, so tampering is rejected. Always pass `--report` to verify against the signature.
+
+---
+
+## Benchmark Artifacts
+
+Attest a benchmark score without exposing the model or the data. Declare each artifact and mark it public or private:
+
+```python
+print("KVERITAS_ARTIFACT role=model  path=weights/model.pt visibility=private")
+print("KVERITAS_ARTIFACT role=dataset name=MMLU path=data/mmlu.bin visibility=public")
+```
+
+A `public` artifact records its canonical content hash, so a verifier can match it against an independently published reference (a standard benchmark, a released model) without you exposing it. A `private` artifact records only a salted commitment. The compute-cost certificate cross-checks that the evaluation actually consumed the compute a real forward pass requires.
+
+It proves the evaluation ran as committed and produced that score. It does not prove a *private* eval set is fair, and it does not detect train/test contamination (future work).
 
 ---
 
@@ -210,16 +266,21 @@ Canonical JSON format: sorted keys at every level, compact separators (no spaces
 ### `kveritas init`
 
 ```
---server URL          Attestation server URL (default: hosted service)
---local               Offline mode, skip server registration
+--server URL                     Attestation server URL (default: hosted service)
+--local                          Offline mode, skip server registration
+--harness                        Record a hash-chained agent session (installs hooks)
+--disclosure redacted|names|open How much the report reveals (default: redacted)
+--show-names                     Keep real file names (same as --disclosure names)
 ```
 
 Creates a `.kveritas/` session directory. Registers with the attestation server and binds a single-use token to the machine fingerprint.
 
 Usage examples:
 ```bash
-kveritas init                # register with the hosted attestation server
-kveritas init --local        # offline mode, sign with a local key
+kveritas init                    # redacted (default), hosted attestation
+kveritas init --local            # offline mode, sign with a local key
+kveritas init --show-names       # real file names, no content bundled
+kveritas init --disclosure open  # real names + a checkout bundle
 ```
 
 ### `kveritas run`
@@ -237,15 +298,27 @@ Executes the command as a monitored subprocess. Stdout/stderr are teed to the te
 --local-key path    Path to a local RSA private key PEM for offline signing
 ```
 
-Runs HMCA analysis, computes aggregate source hash, creates bundle.zip, computes canonical hash, gets server signature, and generates a multi-page PDF report with all data and crypto proof embedded.
+Runs HMCA analysis, builds the provenance chain, computes the canonical hash, gets the server signature, and generates a multi-page PDF report with all data and crypto proof embedded. At `--disclosure open` it also writes `report.pdf.kvbundle.zip`. A local `report.pdf.provkey.json` keystore (for proofs) is written next to the report; keep it private.
 
-### `kveritas verify <report.pdf>`
+### `kveritas verify <report.pdf | session.json>`
 
 ```
 --public-key path   Override the embedded public key
 ```
 
-Fully offline. Five-layer verification: data hash match, signed message hash match, RSA-PSS signature verification, visual PDF hash match, seal block hash match.
+Fully offline, no account. For an experiment PDF: data hash, RSA-PSS signature, visual PDF hash, provenance chain, and (if provided) the checkout bundle hash. For an agent session `.json`: server-signed genesis, full hash chain, and server-signed seal, localizing any inconsistency to the exact entry.
+
+### `kveritas prove <report.pdf> <file>` / `kveritas verify-proof <report.pdf> <proof.json>`
+
+Produce and check a selective-disclosure proof that one file was part of a signed snapshot, revealing nothing about the others. `prove` uses the local `.provkey.json` keystore.
+
+### `kveritas checkout <bundle.zip> <[run:]snapshot> <outdir>`
+
+```
+--report path   Verify the bundle against the signed report first
+```
+
+Reconstruct a snapshot's files from an open-disclosure checkout bundle. The snapshot is a phase name, `run_start`/`run_end`, or an index, optionally prefixed with `run<N>:`.
 
 ### `kveritas check`
 
@@ -280,12 +353,12 @@ Manually removes the `.kveritas/` directory to abandon a session.
 
 ## Web Verification
 
-Reports are fully compatible with the [K-Veritas Web Verifier](https://kveritas.org/verify). Reviewers can upload the report PDF, source bundle ZIP, and manuscript PDF for a complete AI-powered audit:
+Reports are fully compatible with the [K-Veritas Web Verifier](https://kveritas.org/verify). Reviewers can upload the report PDF, optionally the checkout bundle (`.kvbundle.zip`, open disclosure), and a manuscript PDF for a complete AI-powered audit:
 
 1. Go to [kveritas.org/verify](https://kveritas.org/verify)
-2. Upload report PDF, bundle ZIP, and manuscript PDF
+2. Upload the report PDF (and, for a code audit, the checkout bundle + manuscript)
 3. Click Verify
-4. See the Review Summary: crypto status, HMCA score, recorded metrics, code audit verdict, claim mismatches
+4. See the Review Summary: crypto status, provenance timeline, attested artifacts, HMCA score, metrics, code audit verdict, claim mismatches
 
 ---
 
@@ -305,11 +378,16 @@ kveritas-go/
 │   ├── client/client.go         HTTP client for attestation server
 │   ├── hardware/
 │   │   ├── hardware.go          Hardware snapshot + machine fingerprint
-│   │   └── sampler.go           Background hardware sampling goroutine
+│   │   ├── sampler.go           Background hardware sampling goroutine
+│   │   └── process_linux.go     Per-process CPU/mem/GPU attribution (Linux)
+│   ├── provenance/             Merkle snapshots, disclosure, proofs, checkout bundle
+│   ├── tracer/                 File + subprocess activity map (Linux)
+│   ├── harness/                Hash-chained agent sessions
+│   ├── compute/                Compute-cost certificate
 │   ├── hmca/
-│   │   ├── hmca.go              Hardware-Metric Consistency Analyzer (5 rules)
-│   │   └── hmca_test.go         HMCA unit tests (8 tests)
-│   └── bundle/bundle.go         Source file collection, hashing, zip bundling
+│   │   ├── hmca.go              Hardware-Metric Consistency Analyzer
+│   │   └── hmca_test.go         HMCA unit tests
+│   └── bundle/bundle.go         Source file collection + hashing
 ├── tests/
 │   ├── run_tests.sh             Integration test suite
 │   └── *.py, *.json             Mock experiments and claim fixtures
@@ -344,13 +422,11 @@ bash tests/run_tests.sh
 
 ## Related Repositories
 
-| Repo | Purpose | Live URL |
-|---|---|---|
-| [kveritas-api](https://github.com/27-GROUP/kveritas-api) | FastAPI backend (signing, verification, AI audit) | [kveritas-api-production.up.railway.app](https://kveritas-api-production.up.railway.app) |
-| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Next.js frontend (web verifier) | [kveritas.org](https://kveritas.org) |
-| [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) | Pre-built binaries for all platforms | |
-
-The frontend and API also have private mirrors (`Mamadou2727/kveritas-web`, `Mamadou2727/kveritas-api`) connected to Vercel and Railway for auto-deploy. The Go CLI repo stays on 27-GROUP only.
+| Repo | Purpose |
+|---|---|
+| [kveritas-api](https://github.com/27-GROUP/kveritas-api) | Attestation backend (signing, verification, AI audit) |
+| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Web verifier ([kveritas.org](https://kveritas.org)) |
+| [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) | Pre-built binaries for all platforms |
 
 ---
 
