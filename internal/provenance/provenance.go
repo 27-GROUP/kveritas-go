@@ -184,10 +184,13 @@ func (r *Recorder) Snapshot(kind, name string) {
 		entries = append(entries, [2]string{nc, lh})
 		keyFiles = append(keyFiles, KeyEntry{Path: rel, Salt: hex.EncodeToString(salt), NameCommit: nc, Leaf: lh})
 
-		if r.ignore.match(rel) {
+		withheld := r.ignore.match(rel)
+		if withheld {
 			r.withheld[rel] = withheldInfo{hash: lh, size: info.Size()}
 		}
-		if r.level >= Open {
+		// A withheld file's hash is committed above, but its content never enters the
+		// bundle, so a .kveritasignore file can never be reconstructed via checkout.
+		if r.level >= Open && !withheld {
 			ch := contentHash(content)
 			r.objects[ch] = content
 			manifest[rel] = ch
