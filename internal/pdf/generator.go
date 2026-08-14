@@ -56,6 +56,7 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	b.addCoverPage(sess, seal, runs)
 	for i, r := range runs {
 		b.addRunPage(i+1, r)
+		b.addProvenancePage(i+1, r.Provenance)
 		b.addTracePage(i+1, r)
 	}
 	b.addRunHistoryPage(seal)
@@ -516,6 +517,74 @@ func truncStr(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func provEventColor(kind string) [3]float64 {
+	switch kind {
+	case "phase":
+		return colGroup
+	case "run_end":
+		return colWrite
+	case "metric":
+		return colRead
+	default:
+		return colRoot
+	}
+}
+
+func provOpColor(op string) [3]float64 {
+	switch op {
+	case "add":
+		return colWrite
+	case "delete":
+		return colProc
+	default:
+		return colGroup
+	}
+}
+
+// addProvenancePage draws the state timeline of a run: each snapshot, what
+// changed since the previous one, and the files the author withheld. At the
+// redacted level names are pseudonyms, so the page exposes no code or filenames.
+func (b *builder) addProvenancePage(idx int, p *session.Provenance) {
+	if p == nil {
+		return
+	}
+	b.newPage()
+	b.gap(10)
+	b.writeLine("Provenance Timeline", "Hb", 15, mL)
+	b.gap(4)
+	b.body(fmt.Sprintf("Disclosure: %s. The state of the tracked files at run start, at each phase, "+
+		"and at run end, and what changed between them. Every node is bound into the signature.", p.Disclosure))
+	b.gap(8)
+	b.heading(fmt.Sprintf("Run %d  (%d files)", idx, p.FileCount))
+
+	for _, c := range p.Commits {
+		label := c.Event.Kind
+		if c.Event.Name != "" {
+			label += " " + c.Event.Name
+		}
+		root := c.Root
+		if len(root) > 10 {
+			root = root[:10]
+		}
+		b.traceRow(0, provEventColor(c.Event.Kind), fmt.Sprintf("%s    root %s", label, root), "")
+		for _, ch := range c.Changed {
+			b.traceRow(1, provOpColor(ch.Op), ch.Op+"  "+ch.Path, "")
+		}
+	}
+
+	if len(p.Withheld) > 0 {
+		b.gap(6)
+		b.heading(fmt.Sprintf("Withheld by .kveritasignore (%d)", len(p.Withheld)))
+		for _, w := range p.Withheld {
+			b.traceRow(0, colProc, fmt.Sprintf("%s    %s", w.Path, w.SizeBucket), w.Hash)
+		}
+	}
+	if p.Truncated {
+		b.gap(4)
+		b.body("Note: provenance truncated at the snapshot cap.")
+	}
 }
 
 func (b *builder) addRunHistoryPage(seal *session.SealRecord) {

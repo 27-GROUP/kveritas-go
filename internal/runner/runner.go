@@ -121,6 +121,10 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	prov := provenance.New(sess.ProjectDir, sess.Disclosure, salt)
 	prov.Snapshot("run_start", "")
 
+	// The command line can name a private script or dataset, so at the redacted
+	// level only the interpreter is kept in the signed record.
+	rec.Command = redactCommand(command, provLevel)
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -301,6 +305,14 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		fmt.Fprintf(os.Stderr, "[kveritas] Warning: files modified during run: %v\n", rec.Modified)
 	}
 
+	// The file-hint hashes are keyed by real paths, and provenance already covers
+	// these files, so they are dropped at the redacted level.
+	if provLevel < provenance.Names {
+		rec.PreHashes = nil
+		rec.PostHashes = nil
+		rec.Modified = nil
+	}
+
 	parser.WarnIfEmpty()
 	fmt.Fprintf(os.Stderr, "[kveritas] Run complete (%s, exit %d)\n",
 		rec.DurationFmt, rec.ExitCode)
@@ -333,6 +345,13 @@ func decodeSalt(s string) []byte {
 		return b
 	}
 	return []byte(s)
+}
+
+func redactCommand(cmd []string, level provenance.Level) []string {
+	if level >= provenance.Names || len(cmd) < 2 {
+		return cmd
+	}
+	return []string{cmd[0], "<redacted>"}
 }
 
 func envDigest() (string, error) {
