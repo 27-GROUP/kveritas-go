@@ -20,8 +20,11 @@ type KeyEntry struct {
 	Leaf       string `json:"leaf"`
 }
 
-// KeyCommit mirrors a published commit but keeps the real file list.
+// KeyCommit mirrors a published commit but keeps the real file list. Run labels
+// which run of the session it came from, so a merged multi-run keystore stays
+// unambiguous.
 type KeyCommit struct {
+	Run   int               `json:"run,omitempty"`
 	Index int               `json:"index"`
 	Root  string            `json:"root"`
 	Event session.ProvEvent `json:"event"`
@@ -60,6 +63,7 @@ func LoadKeystore(path string) (*Keystore, error) {
 // that snapshot appear only as their salted commitments, so nothing else leaks.
 type Proof struct {
 	SessionID   string            `json:"session_id"`
+	Run         int               `json:"run,omitempty"`
 	CommitIndex int               `json:"commit_index"`
 	Root        string            `json:"root"`
 	Event       session.ProvEvent `json:"event"`
@@ -95,6 +99,7 @@ func (k *Keystore) BuildProof(projectDir, rel string) (*Proof, error) {
 			}
 			return &Proof{
 				SessionID:   k.SessionID,
+				Run:         c.Run,
 				CommitIndex: c.Index,
 				Root:        c.Root,
 				Event:       c.Event,

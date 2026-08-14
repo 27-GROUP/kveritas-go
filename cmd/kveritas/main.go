@@ -114,8 +114,8 @@ var cmdProve = &cobra.Command{
 			return err
 		}
 		fmt.Printf("Proof written: %s\n", out)
-		fmt.Printf("Reveals %s in snapshot %d (%s). Share this file to prove it; the others stay hidden.\n",
-			rel, proof.CommitIndex, proof.Event.Kind)
+		fmt.Printf("Reveals %s in run %d snapshot %d (%s). Share this file to prove it; the others stay hidden.\n",
+			rel, proof.Run, proof.CommitIndex, proof.Event.Kind)
 		return nil
 	},
 }
@@ -150,7 +150,7 @@ var cmdVerifyProof = &cobra.Command{
 		}
 		content, _ := base64.StdEncoding.DecodeString(proof.ContentB64)
 		fmt.Printf("VERIFIED\n")
-		fmt.Printf("File %s was part of signed snapshot %d (%s).\n", proof.Path, proof.CommitIndex, proof.Event.Kind)
+		fmt.Printf("File %s was part of signed run %d snapshot %d (%s).\n", proof.Path, proof.Run, proof.CommitIndex, proof.Event.Kind)
 		fmt.Printf("Revealed content: %d bytes.\n", len(content))
 		return nil
 	},
@@ -182,8 +182,8 @@ func provKeyPath(reportPath string) string {
 	return reportPath + ".provkey.json"
 }
 
-func provBundlePath(reportPath string) string {
-	return reportPath + ".kvbundle.zip"
+func runBundlePath(reportPath string, run int) string {
+	return fmt.Sprintf("%s.run%d.kvbundle.zip", reportPath, run)
 }
 
 // rootInSignedReport reports whether a snapshot root appears in the signed
@@ -1187,18 +1187,28 @@ var cmdSeal = &cobra.Command{
 		// Save the proof keystore and (open disclosure only) the checkout bundle next
 		// to the report before the session directory is cleaned up. Single-run reports
 		// are supported for now.
-		if len(runs) > 0 {
-			if ks, err := os.ReadFile(filepath.Join(kvDir, "keystore-"+runs[0].ID+".json")); err == nil {
-				if err := os.WriteFile(provKeyPath(outPath), ks, 0600); err == nil {
-					fmt.Fprintf(os.Stderr, "[kveritas] Proof keystore: %s (keep local)\n", provKeyPath(outPath))
+		// Merge every run's proof keystore into one sidecar so a proof can reveal a
+		// file from any run, and write a checkout bundle per run that produced one.
+		merged := &provenance.Keystore{SessionID: sess.ID}
+		for _, r := range runs {
+			if k, err := provenance.LoadKeystore(filepath.Join(kvDir, "keystore-"+r.ID+".json")); err == nil {
+				for i := range k.Commits {
+					k.Commits[i].Run = r.Index + 1
 				}
+				merged.Commits = append(merged.Commits, k.Commits...)
 			}
-			if runs[0].ProvBundleHash != "" {
-				if bz, err := os.ReadFile(filepath.Join(kvDir, "bundle-"+runs[0].ID+".zip")); err == nil {
-					if err := os.WriteFile(provBundlePath(outPath), bz, 0644); err == nil {
-						fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle: %s\n", provBundlePath(outPath))
+			if r.ProvBundleHash != "" {
+				if bz, err := os.ReadFile(filepath.Join(kvDir, "bundle-"+r.ID+".zip")); err == nil {
+					dst := runBundlePath(outPath, r.Index+1)
+					if err := os.WriteFile(dst, bz, 0644); err == nil {
+						fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle: %s\n", dst)
 					}
 				}
+			}
+		}
+		if len(merged.Commits) > 0 {
+			if err := merged.Save(provKeyPath(outPath)); err == nil {
+				fmt.Fprintf(os.Stderr, "[kveritas] Proof keystore: %s (keep local)\n", provKeyPath(outPath))
 			}
 		}
 
