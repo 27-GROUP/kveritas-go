@@ -63,13 +63,18 @@ func DetailedCounters() session.HardwareCounters {
 	return c
 }
 
-// CapturePhaseEvent creates a PhaseEvent with current hardware counters.
-func CapturePhaseEvent(name string, line int) session.PhaseEvent {
+// CapturePhaseEvent creates a PhaseEvent with current hardware counters. When pid
+// is non-zero the counters are scoped to that process tree, matching the sampler.
+func CapturePhaseEvent(name string, line, pid int) session.PhaseEvent {
+	counters := DetailedCounters()
+	if pid != 0 {
+		counters = ProcessCounters(pid)
+	}
 	return session.PhaseEvent{
 		Name:      name,
 		Line:      line,
 		Timestamp: time.Now().UTC(),
-		Counters:  DetailedCounters(),
+		Counters:  counters,
 	}
 }
 

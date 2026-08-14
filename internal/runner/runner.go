@@ -115,6 +115,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
 	}
 	obs.SetPID(cmd.Process.Pid)
+	sampler.SetPID(cmd.Process.Pid)
 
 	// Provenance records a content-addressed snapshot at the start, at each phase,
 	// and at the end, so the run becomes a tamper-evident state timeline.
@@ -143,7 +144,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 			fmt.Fprintln(&stdoutBuf, line)
 
 			if phaseName, ok := parser.ParsePhase(line); ok {
-				pe := hardware.CapturePhaseEvent(phaseName, lineNum)
+				pe := hardware.CapturePhaseEvent(phaseName, lineNum, cmd.Process.Pid)
 				mu.Lock()
 				allPhases = append(allPhases, pe)
 				mu.Unlock()
