@@ -1135,22 +1135,10 @@ var cmdSeal = &cobra.Command{
 		}
 
 		// The source bundle ships file contents, so it is only built when the author
-		// opted into open disclosure. At redacted and names levels the provenance
-		// roots stand in for it and nothing sensitive leaves the machine.
+		// The checkout bundle (open disclosure only) is now the single bundle. It
+		// carries the content and is bound per run by prov_bundle_hash, so the older
+		// flat source bundle is no longer produced.
 		var bundleHash string
-		if provenance.ParseLevel(sess.Disclosure) >= provenance.Open && len(sess.SourceHashes) > 0 {
-			files := make([]string, 0, len(sess.SourceHashes))
-			for f := range sess.SourceHashes {
-				files = append(files, f)
-			}
-			sort.Strings(files)
-			bundlePath := filepath.Join(kvDir, "kveritas_bundle.zip")
-			bundleHash, err = bundle.CreateBundle(sess.ProjectDir, files, bundlePath)
-			if err != nil {
-				return fmt.Errorf("creating source bundle: %w", err)
-			}
-			fmt.Fprintf(os.Stderr, "[kveritas] Source bundle: %s (%d files)\n", bundlePath, len(files))
-		}
 
 		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, &hmcaResult)
 		if err != nil {
@@ -1216,16 +1204,6 @@ var cmdSeal = &cobra.Command{
 		if len(merged.Commits) > 0 {
 			if err := merged.Save(provKeyPath(outPath)); err == nil {
 				fmt.Fprintf(os.Stderr, "[kveritas] Proof keystore: %s (keep local)\n", provKeyPath(outPath))
-			}
-		}
-
-		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
-		if _, err := os.Stat(bundleSrc); err == nil {
-			bundleDst := strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "_bundle.zip"
-			if data, err := os.ReadFile(bundleSrc); err == nil {
-				if err := os.WriteFile(bundleDst, data, 0644); err == nil {
-					fmt.Fprintf(os.Stderr, "[kveritas] Bundle saved: %s\n", bundleDst)
-				}
 			}
 		}
 
