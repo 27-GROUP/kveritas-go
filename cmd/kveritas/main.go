@@ -168,6 +168,8 @@ var cmdCheckout = &cobra.Command{
 			if err := checkBundleBinding(checkoutReport, args[0]); err != nil {
 				return err
 			}
+		} else {
+			fmt.Fprintln(os.Stderr, "[kveritas] Note: pass --report <report.pdf> to verify the bundle against the signature.")
 		}
 		n, err := provenance.Checkout(args[0], args[1], args[2])
 		if err != nil {

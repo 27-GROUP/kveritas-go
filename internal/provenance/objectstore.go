@@ -226,6 +226,9 @@ func Checkout(bundlePath, which, outDir string) (int, error) {
 		if err != nil {
 			return count, err
 		}
+		if contentHash(content) != ch {
+			return count, fmt.Errorf("bundle tampered: contents of %s do not match their hash", rel)
+		}
 		dest := filepath.Join(outDir, filepath.FromSlash(rel))
 		if !strings.HasPrefix(filepath.Clean(dest), filepath.Clean(outDir)) {
 			return count, fmt.Errorf("unsafe path in bundle: %s", rel)
