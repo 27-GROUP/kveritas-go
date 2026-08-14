@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,9 +78,172 @@ This action is irreversible -- the session token is lost.`,
 
 func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
+	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+var proveProject string
+
+// cmdProve reveals one file against a signed snapshot without exposing the others.
+var cmdProve = &cobra.Command{
+	Use:   "prove <report.pdf> <file>",
+	Short: "Prove one file was part of a signed snapshot, revealing nothing else",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		reportPath, rel := args[0], args[1]
+		ks, err := provenance.LoadKeystore(provKeyPath(reportPath))
+		if err != nil {
+			return fmt.Errorf("reading proof keystore next to the report: %w", err)
+		}
+		project := proveProject
+		if project == "" {
+			project, _ = os.Getwd()
+		}
+		proof, err := ks.BuildProof(project, rel)
+		if err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(proof, "", "  ")
+		if err != nil {
+			return err
+		}
+		out := "kveritas-proof-" + filepath.Base(rel) + ".json"
+		if err := os.WriteFile(out, data, 0644); err != nil {
+			return err
+		}
+		fmt.Printf("Proof written: %s\n", out)
+		fmt.Printf("Reveals %s in snapshot %d (%s). Share this file to prove it; the others stay hidden.\n",
+			rel, proof.CommitIndex, proof.Event.Kind)
+		return nil
+	},
+}
+
+// cmdVerifyProof checks a proof against the signed roots in a report.
+var cmdVerifyProof = &cobra.Command{
+	Use:   "verify-proof <report.pdf> <proof.json>",
+	Short: "Check a selective-disclosure proof against a signed report",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		meta, err := pdf.ExtractMetadata(args[0])
+		if err != nil {
+			return err
+		}
+		if err := verifyReportSignature(meta.Seal); err != nil {
+			return fmt.Errorf("report signature: %w", err)
+		}
+		var proof provenance.Proof
+		data, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(data, &proof); err != nil {
+			return err
+		}
+		if !rootInSignedReport(meta.Seal.CanonicalJSON, proof.Root) {
+			return fmt.Errorf("TAMPERED: the proof's snapshot is not in this signed report")
+		}
+		if err := provenance.VerifyProof(&proof, proof.Root); err != nil {
+			fmt.Printf("REJECTED\n%s\n", err)
+			return fmt.Errorf("proof did not verify")
+		}
+		content, _ := base64.StdEncoding.DecodeString(proof.ContentB64)
+		fmt.Printf("VERIFIED\n")
+		fmt.Printf("File %s was part of signed snapshot %d (%s).\n", proof.Path, proof.CommitIndex, proof.Event.Kind)
+		fmt.Printf("Revealed content: %d bytes.\n", len(content))
+		return nil
+	},
+}
+
+var checkoutReport string
+
+// cmdCheckout materializes a snapshot's files from an open-disclosure bundle.
+var cmdCheckout = &cobra.Command{
+	Use:   "checkout <bundle.zip> <phase|index> <outdir>",
+	Short: "Reconstruct the files of a snapshot from a checkout bundle",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if checkoutReport != "" {
+			if err := checkBundleBinding(checkoutReport, args[0]); err != nil {
+				return err
+			}
+		}
+		n, err := provenance.Checkout(args[0], args[1], args[2])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Checked out %d files from snapshot %q into %s\n", n, args[1], args[2])
+		return nil
+	},
+}
+
+func provKeyPath(reportPath string) string {
+	return reportPath + ".provkey.json"
+}
+
+func provBundlePath(reportPath string) string {
+	return reportPath + ".kvbundle.zip"
+}
+
+// rootInSignedReport reports whether a snapshot root appears in the signed
+// provenance of the report's canonical JSON.
+func rootInSignedReport(canonicalJSON, root string) bool {
+	var doc struct {
+		Runs []struct {
+			Provenance *session.Provenance `json:"provenance"`
+		} `json:"runs"`
+	}
+	if json.Unmarshal([]byte(canonicalJSON), &doc) != nil {
+		return false
+	}
+	for _, r := range doc.Runs {
+		if r.Provenance == nil {
+			continue
+		}
+		for _, c := range r.Provenance.Commits {
+			if c.Root == root {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func verifyReportSignature(seal *session.SealRecord) error {
+	if seal == nil || seal.CanonicalJSON == "" {
+		return fmt.Errorf("report has no signed data")
+	}
+	if kvcrypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
+		return fmt.Errorf("data hash mismatch")
+	}
+	pub, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
+	if err != nil {
+		return err
+	}
+	payload := kvcrypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
+	return kvcrypto.VerifyPSS(pub, payload, seal.Signature)
+}
+
+func checkBundleBinding(reportPath, bundlePath string) error {
+	meta, err := pdf.ExtractMetadata(reportPath)
+	if err != nil {
+		return err
+	}
+	if err := verifyReportSignature(meta.Seal); err != nil {
+		return fmt.Errorf("report signature: %w", err)
+	}
+	data, err := os.ReadFile(bundlePath)
+	if err != nil {
+		return err
+	}
+	got := kvcrypto.HashBytes(data)
+	for _, r := range meta.Runs {
+		if r.ProvBundleHash == got {
+			return nil
+		}
+	}
+	return fmt.Errorf("TAMPERED: bundle hash does not match the signed report")
 }
 
 var (
@@ -174,6 +338,8 @@ func init() {
 	cmdInit.Flags().StringVar(&initAgent, "agent", "unknown-agent", "agent identity (e.g. claude-code/<model>)")
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
+	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the file (default: current directory)")
+	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
 
 // harnessInit registers a harness session and binds the designation D at genesis,
@@ -748,6 +914,24 @@ func renderProvenance(idx int, p *session.Provenance) {
 	}
 }
 
+// renderArtifacts prints the attested models and datasets. A public artifact
+// shows its name and content hash (comparable to a published reference); a private
+// one shows only a salted commitment.
+func renderArtifacts(idx int, arts []session.Artifact) {
+	fmt.Printf("\nRun %d attested artifacts:\n", idx)
+	for _, a := range arts {
+		name := a.Name
+		if name == "" {
+			name = "(private)"
+		}
+		h := a.Hash
+		if len(h) > 16 {
+			h = h[:16]
+		}
+		fmt.Printf("  %-8s %-18s %-8s %-6s %s\n", a.Role, name, a.Visibility, a.SizeBucket, h)
+	}
+}
+
 // renderRunTrace prints the file and subprocess activity of a run as an event
 // tree: what it read, what it produced, and what it spawned, in the order the
 // events were observed.
@@ -943,8 +1127,11 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
 		}
 
+		// The source bundle ships file contents, so it is only built when the author
+		// opted into open disclosure. At redacted and names levels the provenance
+		// roots stand in for it and nothing sensitive leaves the machine.
 		var bundleHash string
-		if len(sess.SourceHashes) > 0 {
+		if provenance.ParseLevel(sess.Disclosure) >= provenance.Open && len(sess.SourceHashes) > 0 {
 			files := make([]string, 0, len(sess.SourceHashes))
 			for f := range sess.SourceHashes {
 				files = append(files, f)
@@ -995,6 +1182,24 @@ var cmdSeal = &cobra.Command{
 
 		if err := pdf.Generate(sanitizeForReport(sess), runs, seal, &hmcaResult, outPath); err != nil {
 			return fmt.Errorf("PDF generation: %w", err)
+		}
+
+		// Save the proof keystore and (open disclosure only) the checkout bundle next
+		// to the report before the session directory is cleaned up. Single-run reports
+		// are supported for now.
+		if len(runs) > 0 {
+			if ks, err := os.ReadFile(filepath.Join(kvDir, "keystore-"+runs[0].ID+".json")); err == nil {
+				if err := os.WriteFile(provKeyPath(outPath), ks, 0600); err == nil {
+					fmt.Fprintf(os.Stderr, "[kveritas] Proof keystore: %s (keep local)\n", provKeyPath(outPath))
+				}
+			}
+			if runs[0].ProvBundleHash != "" {
+				if bz, err := os.ReadFile(filepath.Join(kvDir, "bundle-"+runs[0].ID+".zip")); err == nil {
+					if err := os.WriteFile(provBundlePath(outPath), bz, 0644); err == nil {
+						fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle: %s\n", provBundlePath(outPath))
+					}
+				}
+			}
 		}
 
 		bundleSrc := filepath.Join(kvDir, "kveritas_bundle.zip")
@@ -1111,6 +1316,8 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		Declared       *session.DeclaredModel   `json:"declared,omitempty"`
 		Trace          *session.RunTrace        `json:"trace,omitempty"`
 		Provenance     *session.Provenance      `json:"provenance,omitempty"`
+		ProvBundleHash string                   `json:"prov_bundle_hash,omitempty"`
+		Artifacts      []session.Artifact       `json:"artifacts,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -1141,6 +1348,8 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			Declared:       r.Declared,
 			Trace:          r.Trace,
 			Provenance:     r.Provenance,
+			ProvBundleHash: r.ProvBundleHash,
+			Artifacts:      r.Artifacts,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
@@ -1347,6 +1556,9 @@ var cmdVerify = &cobra.Command{
 		for i, r := range runs {
 			if r.Provenance != nil {
 				renderProvenance(i+1, r.Provenance)
+			}
+			if len(r.Artifacts) > 0 {
+				renderArtifacts(i+1, r.Artifacts)
 			}
 			if r.Trace != nil {
 				renderRunTrace(i+1, r.Command, r.Trace)

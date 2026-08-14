@@ -158,6 +158,44 @@ func (p *Parser) ParseClaim(line string, lineNum int) (*session.InlineClaim, boo
 	return claim, true
 }
 
+// ArtifactDecl is a KVERITAS_ARTIFACT declaration: a model or dataset the run
+// wants attested, and whether its identity is public or private.
+type ArtifactDecl struct {
+	Role       string
+	Name       string
+	Path       string
+	Visibility string
+}
+
+// ParseArtifact checks a line for KVERITAS_ARTIFACT and pulls its key=value fields.
+func (p *Parser) ParseArtifact(line string) (*ArtifactDecl, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || fields[0] != "KVERITAS_ARTIFACT" {
+		return nil, false
+	}
+	d := &ArtifactDecl{Role: "other", Visibility: "private"}
+	for _, f := range fields[1:] {
+		k, v, ok := strings.Cut(f, "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "role":
+			d.Role = v
+		case "name":
+			d.Name = v
+		case "path":
+			d.Path = v
+		case "visibility":
+			d.Visibility = v
+		}
+	}
+	if d.Path == "" {
+		return nil, false
+	}
+	return d, true
+}
+
 // ParseSeed checks a line for KVERITAS_INPUT src=seed:<value>.
 // Returns the seed value and true if found.
 func (p *Parser) ParseSeed(line string) (string, bool) {

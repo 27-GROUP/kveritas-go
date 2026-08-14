@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 
 	"sync"
@@ -86,6 +87,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		allPhases    []session.PhaseEvent
 		allClaims    []session.InlineClaim
 		allSeeds     []session.SeedCommitment
+		allArtifacts []session.Artifact
 		declared     = &session.DeclaredModel{}
 		declaredSeen bool
 		mu           sync.Mutex
@@ -118,7 +120,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	// and at the end, so the run becomes a tamper-evident state timeline.
 	provLevel := provenance.ParseLevel(sess.Disclosure)
 	salt := decodeSalt(sess.ProvSalt)
-	prov := provenance.New(sess.ProjectDir, sess.Disclosure, salt)
+	prov := provenance.New(sess.ProjectDir, sess.Disclosure, sess.ID, salt)
 	prov.Snapshot("run_start", "")
 
 	// The command line can name a private script or dataset, so at the redacted
@@ -179,6 +181,16 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 				continue
 			}
 
+			if decl, ok := parser.ParseArtifact(line); ok {
+				if art := buildArtifact(decl, sess.ProjectDir, salt, provLevel); art != nil {
+					mu.Lock()
+					allArtifacts = append(allArtifacts, *art)
+					mu.Unlock()
+					fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, line %d)\n", decl.Role, art.Visibility, lineNum)
+				}
+				continue
+			}
+
 			if m, ok := parser.Parse(line, lineNum); ok {
 				mu.Lock()
 				allMetrics = append(allMetrics, *m)
@@ -219,10 +231,24 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 
 	prov.Snapshot("run_end", "")
 	rec.Provenance = prov.Result()
+	if len(allArtifacts) > 0 {
+		rec.Artifacts = allArtifacts
+	}
 	if rec.Provenance != nil {
 		fmt.Fprintf(os.Stderr, "[kveritas] Provenance: %d snapshots, %d files, %d withheld (%s)\n",
 			len(rec.Provenance.Commits), rec.Provenance.FileCount,
 			len(rec.Provenance.Withheld), rec.Provenance.Disclosure)
+		kvDir := filepath.Join(sess.ProjectDir, session.DirName)
+		if err := prov.Keystore().Save(filepath.Join(kvDir, "keystore-"+rec.ID+".json")); err != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not write proof keystore: %v\n", err)
+		}
+		if provLevel >= provenance.Open {
+			bundlePath := filepath.Join(kvDir, "bundle-"+rec.ID+".zip")
+			if h, err := prov.WriteBundle(bundlePath); err == nil && h != "" {
+				rec.ProvBundleHash = h
+				fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle written (%s)\n", bundlePath)
+			}
+		}
 	}
 
 	// The cleartext activity map exposes real file names, so it only ships once the
@@ -352,6 +378,28 @@ func redactCommand(cmd []string, level provenance.Level) []string {
 		return cmd
 	}
 	return []string{cmd[0], "<redacted>"}
+}
+
+// buildArtifact hashes a declared model or dataset. A public artifact gets its
+// plain content hash so it can be matched to a published reference; a private one
+// gets a salted commitment, and its name is only kept once names are disclosed.
+func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, level provenance.Level) *session.Artifact {
+	content, err := os.ReadFile(filepath.Join(projectDir, d.Path))
+	if err != nil {
+		return nil
+	}
+	art := &session.Artifact{Role: d.Role, Visibility: d.Visibility, SizeBucket: provenance.SizeBucket(int64(len(content)))}
+	if d.Visibility == "public" {
+		art.Hash = provenance.ContentHash(content)
+		art.Name = d.Name
+	} else {
+		art.Visibility = "private"
+		art.Hash = provenance.SaltedLeaf(salt, d.Path, content)
+		if level >= provenance.Names {
+			art.Name = d.Name
+		}
+	}
+	return art
 }
 
 func envDigest() (string, error) {

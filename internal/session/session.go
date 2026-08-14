@@ -70,6 +70,22 @@ type RunRecord struct {
 	Trace *RunTrace `json:"trace,omitempty"`
 	// Content-addressed state history of the run (Merkle snapshots at boundaries)
 	Provenance *Provenance `json:"provenance,omitempty"`
+	// SHA-256 of the checkout bundle (open disclosure only), binding it to the report
+	ProvBundleHash string `json:"prov_bundle_hash,omitempty"`
+	// Attested benchmark artifacts declared via KVERITAS_ARTIFACT
+	Artifacts []Artifact `json:"artifacts,omitempty"`
+}
+
+// Artifact is a model or dataset the run declared for attestation. A public
+// artifact carries its plain content hash so a verifier can match it against an
+// independently published reference; a private one carries a salted commitment
+// that reveals nothing.
+type Artifact struct {
+	Role       string `json:"role"`
+	Name       string `json:"name,omitempty"`
+	Hash       string `json:"hash"`
+	Visibility string `json:"visibility"`
+	SizeBucket string `json:"size_bucket,omitempty"`
 }
 
 // Provenance is the signed state history of a run: a hash-chained series of

@@ -2,12 +2,15 @@
 // At each boundary (run start, a phase, run end) it hashes the tracked source
 // files into a Merkle root and links it to the previous one, so the result is a
 // tamper-evident timeline of what the working set looked like and what changed.
-// Leaves are salted and, at the default disclosure level, file names are replaced
-// with stable pseudonyms, so the history proves what happened without exposing
-// code or filenames.
+//
+// Each leaf is salted with a key derived from the session salt and the file path,
+// so a published hash cannot be guessed back to known content, and revealing one
+// file (a selective-disclosure proof) never exposes the others. At the default
+// disclosure level file names are shown as stable pseudonyms.
 package provenance
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -29,7 +32,7 @@ type Level int
 const (
 	Redacted Level = iota // pseudonyms, no names, no content
 	Names                 // real names, still no content
-	Open                  // names plus a bundle (content stored elsewhere)
+	Open                  // real names plus stored content (checkout-able)
 )
 
 func ParseLevel(s string) Level {
@@ -55,37 +58,94 @@ func (l Level) String() string {
 }
 
 type leaf struct {
-	hash     string
-	size     int64
-	withheld bool
+	hash    string
+	salt    []byte
+	size    int64
+	content []byte
 }
 
 // Recorder accumulates snapshots over the life of a run.
 type Recorder struct {
-	root   string
-	salt   []byte
-	level  Level
-	ignore *ignoreMatcher
+	root      string
+	salt      []byte
+	level     Level
+	ignore    *ignoreMatcher
+	sessionID string
 
-	names    map[string]string // real path -> pseudonym
+	names    map[string]string
 	nameSeq  int
-	prev     map[string]leaf // path -> leaf from the previous snapshot
+	prev     map[string]string // path -> leaf hash from the previous snapshot
 	prevRoot string
 	prevLink string
 	commits  []session.ProvCommit
-	withheld map[string]leaf
+	withheld map[string]withheldInfo
 	trunc    bool
+
+	keyCommits []KeyCommit         // local, holds real paths and salts for proofs
+	objects    map[string][]byte   // Open level: content by content hash
+	manifests  []map[string]string // Open level: per-commit path -> content hash
 }
 
-func New(root, level string, salt []byte) *Recorder {
-	return &Recorder{
-		root:     root,
-		salt:     salt,
-		level:    ParseLevel(level),
-		ignore:   loadIgnore(root),
-		names:    map[string]string{},
-		withheld: map[string]leaf{},
+type withheldInfo struct {
+	hash string
+	size int64
+}
+
+func New(root, level, sessionID string, salt []byte) *Recorder {
+	r := &Recorder{
+		root:      root,
+		salt:      salt,
+		level:     ParseLevel(level),
+		ignore:    loadIgnore(root),
+		sessionID: sessionID,
+		names:     map[string]string{},
+		withheld:  map[string]withheldInfo{},
 	}
+	if r.level >= Open {
+		r.objects = map[string][]byte{}
+	}
+	return r
+}
+
+// leafSalt derives a per-file salt from the session salt. Revealing one file's
+// salt does not reveal the session salt or any other file's salt.
+func (r *Recorder) leafSalt(rel string) []byte {
+	m := hmac.New(sha256.New, r.salt)
+	m.Write([]byte(rel))
+	return m.Sum(nil)
+}
+
+func leafHash(salt, content []byte) string {
+	h := sha256.New()
+	h.Write([]byte{0x00})
+	h.Write(salt)
+	h.Write(content)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func nameCommit(salt []byte, rel string) string {
+	h := sha256.New()
+	h.Write([]byte{0x03})
+	h.Write(salt)
+	h.Write([]byte(rel))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func contentHash(content []byte) string {
+	h := sha256.Sum256(content)
+	return hex.EncodeToString(h[:])
+}
+
+// ContentHash is the plain content hash used for public artifacts, so a verifier
+// can compare it against an independently published reference hash.
+func ContentHash(content []byte) string { return contentHash(content) }
+
+// SaltedLeaf is the salted commitment used for private artifacts: the same leaf
+// hashing as the tracked files, so nothing about the content leaks.
+func SaltedLeaf(sessionSalt []byte, path string, content []byte) string {
+	m := hmac.New(sha256.New, sessionSalt)
+	m.Write([]byte(path))
+	return leafHash(m.Sum(nil), content)
 }
 
 // Snapshot hashes the tracked files now and appends a commit describing the
@@ -102,22 +162,39 @@ func (r *Recorder) Snapshot(kind, name string) {
 	}
 	sort.Strings(files)
 
-	cur := make(map[string]leaf, len(files))
+	cur := make(map[string]string, len(files))
 	entries := make([][2]string, 0, len(files))
+	var keyFiles []KeyEntry
+	manifest := map[string]string{}
+
 	for _, rel := range files {
-		l, ok := r.hashLeaf(rel)
-		if !ok {
+		info, err := os.Stat(filepath.Join(r.root, rel))
+		if err != nil {
 			continue
 		}
-		if r.ignore.match(rel) {
-			l.withheld = true
-			r.withheld[rel] = l
+		content, err := os.ReadFile(filepath.Join(r.root, rel))
+		if err != nil {
+			continue
 		}
-		cur[rel] = l
-		entries = append(entries, [2]string{r.nameCommit(rel), l.hash})
+		salt := r.leafSalt(rel)
+		lh := leafHash(salt, content)
+		nc := nameCommit(salt, rel)
+
+		cur[rel] = lh
+		entries = append(entries, [2]string{nc, lh})
+		keyFiles = append(keyFiles, KeyEntry{Path: rel, Salt: hex.EncodeToString(salt), NameCommit: nc, Leaf: lh})
+
+		if r.ignore.match(rel) {
+			r.withheld[rel] = withheldInfo{hash: lh, size: info.Size()}
+		}
+		if r.level >= Open {
+			ch := contentHash(content)
+			r.objects[ch] = content
+			manifest[rel] = ch
+		}
 	}
 
-	root := r.treeRoot(entries)
+	root := treeRoot(entries)
 	changed := r.diff(r.prev, cur)
 
 	commit := session.ProvCommit{
@@ -129,9 +206,13 @@ func (r *Recorder) Snapshot(kind, name string) {
 		Changed:   changed,
 		PrevLink:  r.prevLink,
 	}
-	commit.Link = r.link(commit)
+	commit.Link = link(commit)
 
 	r.commits = append(r.commits, commit)
+	r.keyCommits = append(r.keyCommits, KeyCommit{Index: commit.Index, Root: root, Event: commit.Event, Files: keyFiles})
+	if r.level >= Open {
+		r.manifests = append(r.manifests, manifest)
+	}
 	r.prev = cur
 	r.prevRoot = root
 	r.prevLink = commit.Link
@@ -143,11 +224,11 @@ func (r *Recorder) Result() *session.Provenance {
 		return nil
 	}
 	withheld := make([]session.WithheldFile, 0, len(r.withheld))
-	for path, l := range r.withheld {
+	for path, w := range r.withheld {
 		withheld = append(withheld, session.WithheldFile{
 			Path:       r.display(path),
-			Hash:       l.hash,
-			SizeBucket: sizeBucket(l.size),
+			Hash:       w.hash,
+			SizeBucket: sizeBucket(w.size),
 		})
 	}
 	sort.Slice(withheld, func(i, j int) bool { return withheld[i].Path < withheld[j].Path })
@@ -163,35 +244,7 @@ func (r *Recorder) Result() *session.Provenance {
 	}
 }
 
-// hashLeaf reads and salts a file's content. The salt keeps a published hash from
-// being guessed back to known content.
-func (r *Recorder) hashLeaf(rel string) (leaf, bool) {
-	info, err := os.Stat(filepath.Join(r.root, rel))
-	if err != nil {
-		return leaf{}, false
-	}
-	content, err := os.ReadFile(filepath.Join(r.root, rel))
-	if err != nil {
-		return leaf{}, false
-	}
-	h := sha256.New()
-	h.Write([]byte{0x00})
-	h.Write(r.salt)
-	h.Write(content)
-	return leaf{hash: hex.EncodeToString(h.Sum(nil)), size: info.Size()}, true
-}
-
-// nameCommit is the salted path hash used inside the tree, so the root never
-// embeds a cleartext filename.
-func (r *Recorder) nameCommit(rel string) string {
-	h := sha256.New()
-	h.Write([]byte{0x03})
-	h.Write(r.salt)
-	h.Write([]byte(rel))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func (r *Recorder) treeRoot(entries [][2]string) string {
+func treeRoot(entries [][2]string) string {
 	sort.Slice(entries, func(i, j int) bool { return entries[i][0] < entries[j][0] })
 	_, canon, err := crypto.CanonicalHashWithBytes(entries)
 	if err != nil {
@@ -200,7 +253,7 @@ func (r *Recorder) treeRoot(entries [][2]string) string {
 	return crypto.HashBytes(append([]byte{0x01}, canon...))
 }
 
-func (r *Recorder) link(c session.ProvCommit) string {
+func link(c session.ProvCommit) string {
 	_, canon, err := crypto.CanonicalHashWithBytes(c)
 	if err != nil {
 		return ""
@@ -208,13 +261,13 @@ func (r *Recorder) link(c session.ProvCommit) string {
 	return crypto.HashBytes(append([]byte{0x02}, canon...))
 }
 
-func (r *Recorder) diff(old, cur map[string]leaf) []session.ProvChange {
+func (r *Recorder) diff(old map[string]string, cur map[string]string) []session.ProvChange {
 	var changes []session.ProvChange
-	for path, l := range cur {
+	for path, h := range cur {
 		prev, ok := old[path]
 		if !ok {
 			changes = append(changes, session.ProvChange{Op: "add", Path: r.display(path)})
-		} else if prev.hash != l.hash {
+		} else if prev != h {
 			changes = append(changes, session.ProvChange{Op: "modify", Path: r.display(path)})
 		}
 	}
@@ -241,6 +294,9 @@ func (r *Recorder) display(rel string) string {
 	r.names[rel] = p
 	return p
 }
+
+// SizeBucket coarsens a byte size so a report never reveals an exact file size.
+func SizeBucket(n int64) string { return sizeBucket(n) }
 
 func sizeBucket(n int64) string {
 	switch {
