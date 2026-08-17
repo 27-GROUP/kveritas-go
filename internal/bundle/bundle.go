@@ -32,6 +32,12 @@ var sourceExtensions = map[string]bool{
 	".rs":    true,
 	".m":     true,
 	".ipynb": true,
+	".yaml":  true,
+	".yml":   true,
+	".toml":  true,
+	".cfg":   true,
+	".ini":   true,
+	".json":  true,
 }
 
 var skipDirs = map[string]bool{
