@@ -21,8 +21,7 @@ type KeyEntry struct {
 }
 
 // KeyCommit mirrors a published commit but keeps the real file list. Run labels
-// which run of the session it came from, so a merged multi-run keystore stays
-// unambiguous.
+// which run of the session it came from.
 type KeyCommit struct {
 	Run   int               `json:"run,omitempty"`
 	Index int               `json:"index"`
@@ -59,23 +58,30 @@ func LoadKeystore(path string) (*Keystore, error) {
 	return &k, json.Unmarshal(data, &k)
 }
 
-// Proof reveals a single file against a signed snapshot root. The other files in
-// that snapshot appear only as their salted commitments, so nothing else leaks.
-type Proof struct {
-	SessionID   string            `json:"session_id"`
+// ProofFile is the disclosure of one file: its content plus the snapshot's entry
+// list. The other files in that snapshot appear only as their salted commitments.
+type ProofFile struct {
+	Path        string            `json:"path"`
 	Run         int               `json:"run,omitempty"`
 	CommitIndex int               `json:"commit_index"`
 	Root        string            `json:"root"`
 	Event       session.ProvEvent `json:"event"`
-	Path        string            `json:"path"`
 	Salt        string            `json:"salt"`
 	ContentB64  string            `json:"content_b64"`
 	Entries     [][2]string       `json:"entries"`
 }
 
-// BuildProof reveals rel against the newest snapshot whose committed leaf matches
-// the file's current content. It fails if the file changed since the run.
-func (k *Keystore) BuildProof(projectDir, rel string) (*Proof, error) {
+// Proof is a self-contained selective-disclosure proof. It embeds the report's
+// signed seal, so it can be checked on its own, and reveals one or more files.
+type Proof struct {
+	Kind  string              `json:"kind"`
+	Seal  *session.SealRecord `json:"seal,omitempty"`
+	Files []ProofFile         `json:"files"`
+}
+
+// BuildProofFile reveals rel against the newest snapshot whose committed leaf
+// matches the file's current content. It fails if the file changed since the run.
+func (k *Keystore) BuildProofFile(projectDir, rel string) (*ProofFile, error) {
 	content, err := os.ReadFile(filepath.Join(projectDir, rel))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", rel, err)
@@ -97,13 +103,12 @@ func (k *Keystore) BuildProof(projectDir, rel string) (*Proof, error) {
 			for _, e := range c.Files {
 				entries = append(entries, [2]string{e.NameCommit, e.Leaf})
 			}
-			return &Proof{
-				SessionID:   k.SessionID,
+			return &ProofFile{
+				Path:        rel,
 				Run:         c.Run,
 				CommitIndex: c.Index,
 				Root:        c.Root,
 				Event:       c.Event,
-				Path:        rel,
 				Salt:        f.Salt,
 				ContentB64:  base64.StdEncoding.EncodeToString(content),
 				Entries:     entries,
@@ -113,25 +118,25 @@ func (k *Keystore) BuildProof(projectDir, rel string) (*Proof, error) {
 	return nil, fmt.Errorf("%s is not a tracked file in this session", rel)
 }
 
-// VerifyProof checks that the revealed file was part of the signed root. signedRoot
-// is the root the report bound for this commit index.
-func VerifyProof(p *Proof, signedRoot string) error {
-	if p.Root != signedRoot {
-		return fmt.Errorf("proof root does not match the signed snapshot")
+// VerifyFile checks that a revealed file reconstructs its snapshot root, and that
+// the root is one the report actually signed.
+func VerifyFile(pf *ProofFile, signedRoots map[string]bool) error {
+	if !signedRoots[pf.Root] {
+		return fmt.Errorf("the proof's snapshot is not in the signed report")
 	}
-	salt, err := hex.DecodeString(p.Salt)
+	salt, err := hex.DecodeString(pf.Salt)
 	if err != nil {
 		return fmt.Errorf("bad salt: %w", err)
 	}
-	content, err := base64.StdEncoding.DecodeString(p.ContentB64)
+	content, err := base64.StdEncoding.DecodeString(pf.ContentB64)
 	if err != nil {
 		return fmt.Errorf("bad content: %w", err)
 	}
 	lh := leafHash(salt, content)
-	nc := nameCommit(salt, p.Path)
+	nc := nameCommit(salt, pf.Path)
 
 	found := false
-	for _, e := range p.Entries {
+	for _, e := range pf.Entries {
 		if e[0] == nc && e[1] == lh {
 			found = true
 			break
@@ -140,8 +145,31 @@ func VerifyProof(p *Proof, signedRoot string) error {
 	if !found {
 		return fmt.Errorf("the revealed file is not in this snapshot")
 	}
-	if treeRoot(p.Entries) != p.Root {
+	if treeRoot(pf.Entries) != pf.Root {
 		return fmt.Errorf("the snapshot entries do not reconstruct the signed root")
 	}
 	return nil
+}
+
+// SignedRoots collects every provenance root committed in a report's canonical
+// JSON, which is what a proof's root must belong to.
+func SignedRoots(canonicalJSON string) map[string]bool {
+	var doc struct {
+		Runs []struct {
+			Provenance *session.Provenance `json:"provenance"`
+		} `json:"runs"`
+	}
+	roots := map[string]bool{}
+	if json.Unmarshal([]byte(canonicalJSON), &doc) != nil {
+		return roots
+	}
+	for _, r := range doc.Runs {
+		if r.Provenance == nil {
+			continue
+		}
+		for _, c := range r.Provenance.Commits {
+			roots[c.Root] = true
+		}
+	}
+	return roots
 }

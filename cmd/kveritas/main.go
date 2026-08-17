@@ -85,14 +85,21 @@ func main() {
 }
 
 var proveProject string
+var proveOutput string
 
 // cmdProve reveals one file against a signed snapshot without exposing the others.
+// cmdProve reveals one or more files against a signed snapshot without exposing
+// the others, as a single self-contained proof that embeds the report's seal.
 var cmdProve = &cobra.Command{
-	Use:   "prove <report.pdf> <file>",
-	Short: "Prove one file was part of a signed snapshot, revealing nothing else",
-	Args:  cobra.ExactArgs(2),
+	Use:   "prove <report.pdf> <file> [file...]",
+	Short: "Prove one or more files were part of a signed snapshot, revealing nothing else",
+	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		reportPath, rel := args[0], args[1]
+		reportPath, files := args[0], args[1:]
+		meta, err := pdf.ExtractMetadata(reportPath)
+		if err != nil {
+			return err
+		}
 		ks, err := provenance.LoadKeystore(provKeyPath(reportPath))
 		if err != nil {
 			return fmt.Errorf("reading proof keystore next to the report: %w", err)
@@ -101,57 +108,82 @@ var cmdProve = &cobra.Command{
 		if project == "" {
 			project, _ = os.Getwd()
 		}
-		proof, err := ks.BuildProof(project, rel)
-		if err != nil {
-			return err
+
+		proof := &provenance.Proof{Kind: "kveritas-proof", Seal: meta.Seal}
+		for _, rel := range files {
+			pf, err := ks.BuildProofFile(project, rel)
+			if err != nil {
+				return err
+			}
+			proof.Files = append(proof.Files, *pf)
 		}
+
 		data, err := json.MarshalIndent(proof, "", "  ")
 		if err != nil {
 			return err
 		}
-		out := "kveritas-proof-" + filepath.Base(rel) + ".json"
+		out := proveOutput
+		if out == "" {
+			out = "kveritas-proof.json"
+		}
 		if err := os.WriteFile(out, data, 0644); err != nil {
 			return err
 		}
-		fmt.Printf("Proof written: %s\n", out)
-		fmt.Printf("Reveals %s in run %d snapshot %d (%s). Share this file to prove it; the others stay hidden.\n",
-			rel, proof.Run, proof.CommitIndex, proof.Event.Kind)
+		fmt.Printf("Proof written: %s (%d file(s))\n", out, len(proof.Files))
+		for _, pf := range proof.Files {
+			fmt.Printf("  %s  (run %d, %s)\n", pf.Path, pf.Run, pf.Event.Kind)
+		}
+		fmt.Println("Share this one file to prove those files; everything else stays hidden.")
 		return nil
 	},
 }
 
-// cmdVerifyProof checks a proof against the signed roots in a report.
+// cmdVerifyProof checks a self-contained proof, or a proof against a report.
 var cmdVerifyProof = &cobra.Command{
-	Use:   "verify-proof <report.pdf> <proof.json>",
-	Short: "Check a selective-disclosure proof against a signed report",
-	Args:  cobra.ExactArgs(2),
+	Use:   "verify-proof <proof.json> | <report.pdf> <proof.json>",
+	Short: "Check a selective-disclosure proof",
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		meta, err := pdf.ExtractMetadata(args[0])
+		proofPath := args[len(args)-1]
+		data, err := os.ReadFile(proofPath)
 		if err != nil {
 			return err
-		}
-		if err := verifyReportSignature(meta.Seal); err != nil {
-			return fmt.Errorf("report signature: %w", err)
 		}
 		var proof provenance.Proof
-		data, err := os.ReadFile(args[1])
-		if err != nil {
-			return err
-		}
 		if err := json.Unmarshal(data, &proof); err != nil {
 			return err
 		}
-		if !rootInSignedReport(meta.Seal.CanonicalJSON, proof.Root) {
-			return fmt.Errorf("TAMPERED: the proof's snapshot is not in this signed report")
+
+		seal := proof.Seal
+		if len(args) == 2 {
+			meta, err := pdf.ExtractMetadata(args[0])
+			if err != nil {
+				return err
+			}
+			seal = meta.Seal
 		}
-		if err := provenance.VerifyProof(&proof, proof.Root); err != nil {
-			fmt.Printf("REJECTED\n%s\n", err)
-			return fmt.Errorf("proof did not verify")
+		if seal == nil {
+			return fmt.Errorf("proof has no embedded seal; pass the report: verify-proof <report.pdf> <proof.json>")
 		}
-		content, _ := base64.StdEncoding.DecodeString(proof.ContentB64)
-		fmt.Printf("VERIFIED\n")
-		fmt.Printf("File %s was part of signed run %d snapshot %d (%s).\n", proof.Path, proof.Run, proof.CommitIndex, proof.Event.Kind)
-		fmt.Printf("Revealed content: %d bytes.\n", len(content))
+		if err := verifyReportSignature(seal); err != nil {
+			return fmt.Errorf("report signature: %w", err)
+		}
+
+		roots := provenance.SignedRoots(seal.CanonicalJSON)
+		ok := 0
+		for _, pf := range proof.Files {
+			if err := provenance.VerifyFile(&pf, roots); err != nil {
+				fmt.Printf("REJECTED  %s  (%s)\n", pf.Path, err)
+				continue
+			}
+			content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
+			fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, pf.Run, pf.Event.Kind, len(content))
+			ok++
+		}
+		fmt.Printf("%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
+		if ok != len(proof.Files) {
+			return fmt.Errorf("some files did not verify")
+		}
 		return nil
 	},
 }
@@ -186,30 +218,6 @@ func provKeyPath(reportPath string) string {
 
 func provBundlePath(reportPath string) string {
 	return reportPath + ".kvbundle.zip"
-}
-
-// rootInSignedReport reports whether a snapshot root appears in the signed
-// provenance of the report's canonical JSON.
-func rootInSignedReport(canonicalJSON, root string) bool {
-	var doc struct {
-		Runs []struct {
-			Provenance *session.Provenance `json:"provenance"`
-		} `json:"runs"`
-	}
-	if json.Unmarshal([]byte(canonicalJSON), &doc) != nil {
-		return false
-	}
-	for _, r := range doc.Runs {
-		if r.Provenance == nil {
-			continue
-		}
-		for _, c := range r.Provenance.Commits {
-			if c.Root == root {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func verifyReportSignature(seal *session.SealRecord) error {
@@ -344,7 +352,8 @@ func init() {
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
-	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the file (default: current directory)")
+	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
+	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
 	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
 
