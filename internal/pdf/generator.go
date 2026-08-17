@@ -224,7 +224,6 @@ func (b *builder) addCoverPage(sess *session.Session, seal *session.SealRecord, 
 	b.kv("Machine ID", sess.MachineID)
 	b.kv("Runs recorded", fmt.Sprintf("%d", len(runs)))
 	b.kv("Sealed", seal.SealedAt.UTC().Format(time.RFC3339))
-	b.kv("Server", seal.ServerURL)
 
 	b.heading("Run Summary")
 	for i, r := range runs {
