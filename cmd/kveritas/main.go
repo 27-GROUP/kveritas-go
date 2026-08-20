@@ -169,27 +169,46 @@ var cmdVerifyProof = &cobra.Command{
 		if seal == nil {
 			return fmt.Errorf("proof has no embedded seal; pass the report: verify-proof <report.pdf> <proof.json>")
 		}
-		if err := verifyReportSignature(seal); err != nil {
-			return fmt.Errorf("report signature: %w", err)
-		}
-
-		roots := provenance.SignedRoots(seal.CanonicalJSON)
-		ok := 0
-		for _, pf := range proof.Files {
-			if err := provenance.VerifyFile(&pf, roots); err != nil {
-				fmt.Printf("REJECTED  %s  (%s)\n", pf.Path, err)
-				continue
-			}
-			content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
-			fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, pf.Run, pf.Event.Kind, len(content))
-			ok++
-		}
-		fmt.Printf("%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
-		if ok != len(proof.Files) {
-			return fmt.Errorf("some files did not verify")
-		}
-		return nil
+		return verifyProofAgainstSeal(&proof, seal)
 	},
+}
+
+func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) error {
+	if err := verifyReportSignature(seal); err != nil {
+		return fmt.Errorf("report signature: %w", err)
+	}
+	roots := provenance.SignedRoots(seal.CanonicalJSON)
+	ok := 0
+	for _, pf := range proof.Files {
+		if err := provenance.VerifyFile(&pf, roots); err != nil {
+			fmt.Printf("REJECTED  %s  (%s)\n", pf.Path, err)
+			continue
+		}
+		content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
+		fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, pf.Run, pf.Event.Kind, len(content))
+		ok++
+	}
+	fmt.Printf("%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
+	if ok != len(proof.Files) {
+		return fmt.Errorf("some files did not verify")
+	}
+	return nil
+}
+
+// loadProofFile returns the proof if path is a self-contained proof JSON.
+func loadProofFile(path string) (*provenance.Proof, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var proof provenance.Proof
+	if err := json.Unmarshal(data, &proof); err != nil {
+		return nil, false
+	}
+	if proof.Kind != "kveritas-proof" {
+		return nil, false
+	}
+	return &proof, true
 }
 
 var checkoutReport string
@@ -1491,6 +1510,13 @@ var cmdVerify = &cobra.Command{
 
 		if report, ok := loadHarnessReport(reportPath); ok {
 			return verifyHarnessReport(report)
+		}
+
+		if proof, ok := loadProofFile(reportPath); ok {
+			if proof.Seal == nil {
+				return fmt.Errorf("proof has no embedded seal; use: kveritas verify-proof <report.pdf> <proof.json>")
+			}
+			return verifyProofAgainstSeal(proof, proof.Seal)
 		}
 
 		meta, err := pdf.ExtractMetadata(reportPath)
