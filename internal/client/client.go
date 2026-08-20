@@ -221,40 +221,91 @@ func (c *Client) post(path string, body, out interface{}) error {
 	return json.Unmarshal(respBody, out)
 }
 
-// ServerVerifyResult is the subset of the /api/verify response the CLI shows:
-// the server's own verdict and, when present, its ledger record for the hash.
-type ServerVerifyResult struct {
-	Valid  bool   `json:"valid"`
-	Reason string `json:"reason"`
-	Ledger *struct {
-		DataHash string `json:"data_hash"`
-		SignedAt string `json:"signed_at"`
-	} `json:"ledger"`
+// Anomaly is one code-audit finding.
+type Anomaly struct {
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
 }
 
-// VerifyReport uploads a report to the server's /api/verify endpoint and returns
-// the server's verdict, matching what the web verifier reports for the same file.
-func (c *Client) VerifyReport(reportPath string) (*ServerVerifyResult, error) {
-	f, err := os.Open(reportPath)
+// Mismatch is one paper-crosscheck finding.
+type Mismatch struct {
+	Category    string `json:"category"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+}
+
+// ServerAuditResult mirrors the /api/audit response the web verifier renders:
+// cryptographic status and ledger, hardware consistency, source-bundle match,
+// AI code audit, and paper crosscheck.
+type ServerAuditResult struct {
+	CryptoStatus struct {
+		Valid  bool   `json:"valid"`
+		Reason string `json:"reason"`
+		Ledger *struct {
+			SignedAt string `json:"signed_at"`
+		} `json:"ledger"`
+		HMCAScore   *float64 `json:"hmca_score"`
+		HMCAVerdict *string  `json:"hmca_verdict"`
+		HMCAFlags   []string `json:"hmca_flags"`
+	} `json:"crypto_status"`
+	CodeAudit struct {
+		Status    string    `json:"status"`
+		Verdict   string    `json:"verdict"`
+		Summary   string    `json:"summary"`
+		Reason    string    `json:"reason"`
+		Anomalies []Anomaly `json:"anomalies"`
+	} `json:"code_audit"`
+	PaperCrosscheck struct {
+		Status     string     `json:"status"`
+		Summary    string     `json:"summary"`
+		Reason     string     `json:"reason"`
+		Mismatches []Mismatch `json:"mismatches"`
+	} `json:"paper_crosscheck"`
+	BundleVerification struct {
+		Match *bool `json:"match"`
+	} `json:"bundle_verification"`
+}
+
+func addFilePart(w *multipart.Writer, field, path string) error {
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer f.Close()
+	part, err := w.CreateFormFile(field, filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(part, f)
+	return err
+}
 
+// AuditReport uploads a report (and optionally a source bundle and a manuscript)
+// to the server's /api/audit endpoint, returning the same full result the web
+// verifier shows for the same files.
+func (c *Client) AuditReport(reportPath, bundlePath, manuscriptPath string) (*ServerAuditResult, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	part, err := w.CreateFormFile("file", filepath.Base(reportPath))
-	if err != nil {
+	if err := addFilePart(w, "report", reportPath); err != nil {
 		return nil, err
 	}
-	if _, err := io.Copy(part, f); err != nil {
-		return nil, err
+	if bundlePath != "" {
+		if err := addFilePart(w, "bundle", bundlePath); err != nil {
+			return nil, err
+		}
+	}
+	if manuscriptPath != "" {
+		if err := addFilePart(w, "manuscript", manuscriptPath); err != nil {
+			return nil, err
+		}
 	}
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL+"/api/verify", &buf)
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/audit", &buf)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +323,7 @@ func (c *Client) VerifyReport(reportPath string) (*ServerVerifyResult, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	var out ServerVerifyResult
+	var out ServerAuditResult
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return nil, err
 	}

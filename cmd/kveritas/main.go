@@ -1479,10 +1479,12 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 var verifyKeyPath string
 var verifyOffline bool
 var verifyServer string
+var verifyBundle string
+var verifyManuscript string
 
 var cmdVerify = &cobra.Command{
 	Use:   "verify <report.pdf>",
-	Short: "Verify a signed K-Veritas report (offline checks plus a server ledger confirmation)",
+	Short: "Verify a signed K-Veritas report (offline checks plus the full server audit)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reportPath := args[0]
@@ -1601,28 +1603,113 @@ var cmdVerify = &cobra.Command{
 			reportComputeCert(cert)
 		}
 
-		if !verifyOffline {
-			fmt.Println()
-			res, err := client.New(verifyServer).VerifyReport(reportPath)
-			switch {
-			case err != nil:
-				fmt.Printf("Server ledger check: skipped (%v)\n", err)
-			case res.Valid && res.Ledger != nil && res.Ledger.SignedAt != "":
-				fmt.Printf("Server ledger check: AUTHENTIC (server signed this hash on %s)\n", res.Ledger.SignedAt)
-			case res.Valid:
-				fmt.Printf("Server ledger check: AUTHENTIC\n")
-			default:
-				fmt.Printf("Server ledger check: NOT AUTHENTIC -- %s\n", res.Reason)
+		if verifyOffline {
+			if verifyBundle != "" {
+				bundleData, err := os.ReadFile(verifyBundle)
+				if err != nil {
+					return fmt.Errorf("reading bundle: %w", err)
+				}
+				got := kvcrypto.HashBytes(bundleData)
+				switch {
+				case seal.CheckoutBundleHash == "" && seal.SourceBundleHash == "":
+					fmt.Printf("Source bundle: report has no bundle hash to match\n")
+				case got == seal.CheckoutBundleHash || got == seal.SourceBundleHash:
+					fmt.Printf("Source bundle: MATCH (this code is bound to the report)\n")
+				default:
+					fmt.Printf("Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
+				}
 			}
+			return nil
 		}
+
+		fmt.Println()
+		c := client.New(verifyServer)
+		c.HTTPClient.Timeout = 180 * time.Second
+		res, err := c.AuditReport(reportPath, verifyBundle, verifyManuscript)
+		if err != nil {
+			fmt.Printf("Server audit: skipped (%v)\n", err)
+			return nil
+		}
+		renderServerAudit(res)
 		return nil
 	},
+}
+
+func renderServerAudit(r *client.ServerAuditResult) {
+	fmt.Println("Server audit (same checks as the web verifier):")
+
+	cs := r.CryptoStatus
+	if cs.Valid {
+		fmt.Printf("  Cryptographic status: AUTHENTIC\n")
+	} else {
+		fmt.Printf("  Cryptographic status: NOT AUTHENTIC -- %s\n", cs.Reason)
+	}
+	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
+		fmt.Printf("  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
+	}
+	if cs.HMCAScore != nil {
+		verdict := ""
+		if cs.HMCAVerdict != nil {
+			verdict = " " + *cs.HMCAVerdict
+		}
+		fmt.Printf("  Hardware (HMCA):      %.0f%%%s\n", *cs.HMCAScore*100, verdict)
+	}
+	for _, f := range cs.HMCAFlags {
+		fmt.Printf("    flag: %s\n", f)
+	}
+
+	if r.BundleVerification.Match != nil {
+		if *r.BundleVerification.Match {
+			fmt.Printf("  Source bundle:        MATCH\n")
+		} else {
+			fmt.Printf("  Source bundle:        MISMATCH\n")
+		}
+	}
+
+	ca := r.CodeAudit
+	switch ca.Status {
+	case "", "skipped":
+	case "mismatch":
+		fmt.Printf("  Code audit:           wrong bundle -- %s\n", ca.Reason)
+	default:
+		if len(ca.Anomalies) == 0 {
+			fmt.Printf("  Code audit:           no issues found\n")
+		} else {
+			fmt.Printf("  Code audit:           %d issue(s) found\n", len(ca.Anomalies))
+		}
+		summary := ca.Summary
+		if summary == "" {
+			summary = ca.Reason
+		}
+		if summary != "" {
+			fmt.Printf("      %s\n", summary)
+		}
+		for _, a := range ca.Anomalies {
+			fmt.Printf("      [%s] %s:%d %s\n", a.Severity, a.File, a.Line, a.Description)
+		}
+	}
+
+	pc := r.PaperCrosscheck
+	switch pc.Status {
+	case "", "skipped":
+	default:
+		if len(pc.Mismatches) == 0 {
+			fmt.Printf("  Paper crosscheck:     no mismatches with the report\n")
+		} else {
+			fmt.Printf("  Paper crosscheck:     %d mismatch(es)\n", len(pc.Mismatches))
+			for _, m := range pc.Mismatches {
+				fmt.Printf("      [%s] %s: %s\n", m.Severity, m.Category, m.Description)
+			}
+		}
+	}
 }
 
 func init() {
 	cmdVerify.Flags().StringVar(&verifyKeyPath, "public-key", "", "path to public key PEM (default: use key embedded in report)")
 	cmdVerify.Flags().BoolVar(&verifyOffline, "offline", false, "verify locally only, skip the server ledger check")
 	cmdVerify.Flags().StringVar(&verifyServer, "server", publicVerifyServer, "attestation server for the ledger check")
+	cmdVerify.Flags().StringVar(&verifyBundle, "bundle", "", "source bundle (.kvbundle.zip): checks the code matches and runs the AI code audit")
+	cmdVerify.Flags().StringVar(&verifyManuscript, "paper", "", "manuscript PDF: crosschecks the paper's claims against the sealed telemetry")
 }
 
 type claimsFile struct {
