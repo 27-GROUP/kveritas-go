@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Mamadou2727/kveritas-go/internal/session"
@@ -215,4 +219,62 @@ func (c *Client) post(path string, body, out interface{}) error {
 		return fmt.Errorf("server error %d: %s", resp.StatusCode, respBody)
 	}
 	return json.Unmarshal(respBody, out)
+}
+
+// ServerVerifyResult is the subset of the /api/verify response the CLI shows:
+// the server's own verdict and, when present, its ledger record for the hash.
+type ServerVerifyResult struct {
+	Valid  bool   `json:"valid"`
+	Reason string `json:"reason"`
+	Ledger *struct {
+		DataHash string `json:"data_hash"`
+		SignedAt string `json:"signed_at"`
+	} `json:"ledger"`
+}
+
+// VerifyReport uploads a report to the server's /api/verify endpoint and returns
+// the server's verdict, matching what the web verifier reports for the same file.
+func (c *Client) VerifyReport(reportPath string) (*ServerVerifyResult, error) {
+	f, err := os.Open(reportPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("file", filepath.Base(reportPath))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/verify", &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("server unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var out ServerVerifyResult
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

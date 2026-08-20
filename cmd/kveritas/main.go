@@ -29,6 +29,10 @@ import (
 
 const defaultServer = "https://kveritas-api-production.up.railway.app"
 
+// publicVerifyServer is the public entry point reviewers use for the ledger
+// check. It fronts the attestation server, so the backend host is never exposed.
+const publicVerifyServer = "https://kveritas.org"
+
 var root = &cobra.Command{
 	Use:   "kveritas",
 	Short: "K-Veritas: tamper-evident experiment verification",
@@ -1473,10 +1477,12 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 }
 
 var verifyKeyPath string
+var verifyOffline bool
+var verifyServer string
 
 var cmdVerify = &cobra.Command{
 	Use:   "verify <report.pdf>",
-	Short: "Verify a signed K-Veritas report (no account required)",
+	Short: "Verify a signed K-Veritas report (offline checks plus a server ledger confirmation)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reportPath := args[0]
@@ -1594,12 +1600,29 @@ var cmdVerify = &cobra.Command{
 			fmt.Printf("Run %d compute:\n", i+1)
 			reportComputeCert(cert)
 		}
+
+		if !verifyOffline {
+			fmt.Println()
+			res, err := client.New(verifyServer).VerifyReport(reportPath)
+			switch {
+			case err != nil:
+				fmt.Printf("Server ledger check: skipped (%v)\n", err)
+			case res.Valid && res.Ledger != nil && res.Ledger.SignedAt != "":
+				fmt.Printf("Server ledger check: AUTHENTIC (server signed this hash on %s)\n", res.Ledger.SignedAt)
+			case res.Valid:
+				fmt.Printf("Server ledger check: AUTHENTIC\n")
+			default:
+				fmt.Printf("Server ledger check: NOT AUTHENTIC -- %s\n", res.Reason)
+			}
+		}
 		return nil
 	},
 }
 
 func init() {
 	cmdVerify.Flags().StringVar(&verifyKeyPath, "public-key", "", "path to public key PEM (default: use key embedded in report)")
+	cmdVerify.Flags().BoolVar(&verifyOffline, "offline", false, "verify locally only, skip the server ledger check")
+	cmdVerify.Flags().StringVar(&verifyServer, "server", publicVerifyServer, "attestation server for the ledger check")
 }
 
 type claimsFile struct {
