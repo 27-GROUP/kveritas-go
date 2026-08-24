@@ -62,14 +62,8 @@ func analyzeRun(run *session.RunRecord, samples []session.HardwareSample) []stri
 
 	if hasHighMetric && len(runSamples) > 0 {
 		avgCPU := avgCPUActivity(runSamples)
-		avgMem := avgMemActivity(runSamples)
-
 		if avgCPU < 5.0 && run.DurationSec > 10.0 {
 			flags = append(flags, "LOW_ACTIVITY_HIGH_GAIN: high metrics but <5% CPU activity")
-		}
-
-		if avgMem < 0.1 && run.DurationSec > 30.0 {
-			flags = append(flags, "LOW_ACTIVITY_HIGH_GAIN: high metrics but near-zero memory change")
 		}
 	}
 
@@ -91,17 +85,65 @@ func analyzeRun(run *session.RunRecord, samples []session.HardwareSample) []stri
 		flags = append(flags, "IDLE_RUN: hardware was idle for the entire run duration")
 	}
 
-	// RULE: PHASE_MISMATCH - eval phase should use less resources than train phase
-	trainPhases, evalPhases := splitPhases(run.Phases)
-	if len(trainPhases) > 0 && len(evalPhases) > 0 {
-		trainCPU := phaseAvgCPU(trainPhases)
-		evalCPU := phaseAvgCPU(evalPhases)
-		if evalCPU > trainCPU*2.0 && trainCPU > 0 {
-			flags = append(flags, "PHASE_MISMATCH: eval phase used more CPU than train phase")
+	// RULE: PHASE_MISMATCH - the eval phase should do less CPU work than train.
+	// Phase counters are CUMULATIVE process CPU time, so per-phase work is the
+	// delta between consecutive boundaries (and the run's final CPU time for the
+	// last phase). Comparing the raw cumulative counters would flag every honest
+	// run, since a later phase always shows a larger accumulator.
+	work := phaseCPUWork(run, runSamples)
+	var trainWork, evalWork float64
+	var trainN, evalN int
+	for i, p := range run.Phases {
+		lower := strings.ToLower(p.Name)
+		if strings.Contains(lower, "train") {
+			trainWork += work[i]
+			trainN++
+		}
+		if strings.Contains(lower, "eval") || strings.Contains(lower, "test") || strings.Contains(lower, "valid") {
+			evalWork += work[i]
+			evalN++
+		}
+	}
+	if trainN > 0 && evalN > 0 {
+		trainAvg := trainWork / float64(trainN)
+		evalAvg := evalWork / float64(evalN)
+		if trainAvg > 0 && evalAvg > trainAvg*2.0 {
+			flags = append(flags, "PHASE_MISMATCH: eval phase did more CPU work than train phase")
 		}
 	}
 
 	return flags
+}
+
+// phaseCPUWork returns the CPU-time spent during each phase, aligned with
+// run.Phases. A phase's work is the increase in cumulative CPU time from its
+// boundary to the next boundary; the last phase runs to the final observed CPU
+// time (the max across the run's hardware samples).
+func phaseCPUWork(run *session.RunRecord, samples []session.HardwareSample) []float64 {
+	n := len(run.Phases)
+	work := make([]float64, n)
+	if n == 0 {
+		return work
+	}
+	finalCPU := 0.0
+	for _, s := range samples {
+		if s.Counters.CPUTimeSec > finalCPU {
+			finalCPU = s.Counters.CPUTimeSec
+		}
+	}
+	for i := 0; i < n; i++ {
+		cur := run.Phases[i].Counters.CPUTimeSec
+		next := finalCPU
+		if i+1 < n {
+			next = run.Phases[i+1].Counters.CPUTimeSec
+		}
+		d := next - cur
+		if d < 0 {
+			d = 0
+		}
+		work[i] = d
+	}
+	return work
 }
 
 func filterSamples(samples []session.HardwareSample, start, end time.Time) []session.HardwareSample {

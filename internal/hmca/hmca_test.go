@@ -142,17 +142,23 @@ func TestIdleRun(t *testing.T) {
 }
 
 func TestPhaseMismatch(t *testing.T) {
+	// Cumulative CPU: train boundary at 100, eval boundary at 110 (train did 10),
+	// then eval runs to a final 200 (eval did 90). Eval work >> train work.
 	run := &session.RunRecord{
 		StartAt:     makeTime(0),
 		EndAt:       makeTime(300),
 		DurationSec: 300,
 		Phases: []session.PhaseEvent{
-			{Name: "training", Counters: session.HardwareCounters{CPUTimeSec: 10}},
-			{Name: "evaluation", Counters: session.HardwareCounters{CPUTimeSec: 50}},
+			{Name: "training", Counters: session.HardwareCounters{CPUTimeSec: 100}},
+			{Name: "evaluation", Counters: session.HardwareCounters{CPUTimeSec: 110}},
+		},
+		HardwareSamples: []session.HardwareSample{
+			{Timestamp: makeTime(0), Counters: session.HardwareCounters{CPUTimeSec: 100}},
+			{Timestamp: makeTime(300), Counters: session.HardwareCounters{CPUTimeSec: 200}},
 		},
 	}
 
-	result := Analyze([]*session.RunRecord{run}, nil)
+	result := Analyze([]*session.RunRecord{run}, run.HardwareSamples)
 
 	found := false
 	for _, f := range result.Flags {
