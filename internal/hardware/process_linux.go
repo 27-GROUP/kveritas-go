@@ -19,9 +19,21 @@ import (
 // memory and utilization come from nvidia-smi filtered to the tree's PIDs; GPU
 // power is the device draw scaled by the tree's share of GPU utilization.
 func ProcessCounters(rootPID int) session.HardwareCounters {
+	c := ProcessCPUCounters(rootPID)
+	g := ProcessGPUCounters(rootPID)
+	c.GPUTempC = g.GPUTempC
+	c.GPUMemUsedMB = g.GPUMemUsedMB
+	c.GPUUtilPct = g.GPUUtilPct
+	c.GPUPowerW = g.GPUPowerW
+	return c
+}
+
+// ProcessCPUCounters reads only the cheap /proc and sysfs counters for the tree
+// (CPU time, memory, context switches, page faults, threads, CPU frequency, and
+// I/O). It makes no nvidia-smi calls, so it is fast enough to sample at high rate.
+func ProcessCPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}
-
 	pageGB := float64(os.Getpagesize()) / 1e9
 	for pid := range pids {
 		c.CPUTimeSec += procCPUSeconds(pid)
@@ -36,7 +48,14 @@ func ProcessCounters(rootPID int) session.HardwareCounters {
 	}
 	c.CPUTempC = linuxCPUTemp()
 	c.CPUFreqMHz = linuxCPUFreqMHz()
+	return c
+}
 
+// ProcessGPUCounters reads the per-process GPU counters via nvidia-smi (slower).
+// It returns only the GPU fields; the sampler refreshes it at a lower rate.
+func ProcessGPUCounters(rootPID int) session.HardwareCounters {
+	pids := descendantPIDs(rootPID)
+	c := session.HardwareCounters{}
 	dev := gpuCounters()
 	c.GPUTempC = dev.GPUTempC
 	c.GPUMemUsedMB = gpuMemForPIDs(pids)

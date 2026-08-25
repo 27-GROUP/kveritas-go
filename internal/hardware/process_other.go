@@ -10,5 +10,15 @@ func ProcessCounters(rootPID int) session.HardwareCounters {
 	return DetailedCounters()
 }
 
+// ProcessCPUCounters and ProcessGPUCounters mirror the Linux split; off Linux the
+// sampler falls back to the combined system-wide reading each tick.
+func ProcessCPUCounters(rootPID int) session.HardwareCounters {
+	return DetailedCounters()
+}
+
+func ProcessGPUCounters(rootPID int) session.HardwareCounters {
+	return session.HardwareCounters{}
+}
+
 // ProcessAlive is best-effort on platforms without /proc; sampling continues.
 func ProcessAlive(pid int) bool { return true }

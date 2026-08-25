@@ -27,21 +27,27 @@ const (
 	computeFloorFLOPs = 1e12
 	// fp16BytesPerParam is the weights-only floor used for the soft memory note.
 	fp16BytesPerParam = 2
+	// cpuPeakFLOPSPerCore is a generous theoretical upper bound on one CPU core's
+	// FP32 throughput (well above real AVX-512 FMA peaks), so the CPU time bound
+	// never false-accuses an efficient real run but still catches gross overclaims.
+	// The process's CPU time is already in core-seconds, so peak x core-seconds is
+	// the most FLOPs the CPU could have contributed.
+	cpuPeakFLOPSPerCore = 1e12
 )
 
 // Analyze produces the compute-cost certificate for a single run.
 func Analyze(rec *session.RunRecord) session.ComputeCert {
 	cert := session.ComputeCert{TimeBoundOK: true, EnergyBoundOK: true, MemoryBoundOK: true}
 
-	active, energy, peakMem := aggregate(rec.HardwareSamples)
+	active, energy, peakMem, cpuCoreSec := aggregate(rec.HardwareSamples)
 	cert.GPUActiveSec = active
 	cert.EnergyJoules = energy
 	cert.PeakGPUMemMB = peakMem
 
-	// No GPU telemetry at all (CPU-only or no nvidia-smi): not applicable.
-	if active == 0 && energy == 0 && peakMem == 0 {
+	// No telemetry at all (no GPU activity and no measured CPU time): not applicable.
+	if active == 0 && energy == 0 && peakMem == 0 && cpuCoreSec == 0 {
 		cert.Verdict = "N/A"
-		cert.Notes = append(cert.Notes, "no GPU telemetry; compute certificate not applicable")
+		cert.Notes = append(cert.Notes, "no hardware telemetry; compute certificate not applicable")
 		return cert
 	}
 
@@ -55,24 +61,30 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 		return cert
 	}
 
-	fPeak := generousPeakFLOPs(rec.Hardware)
-	cert.FPeakGenerous = fPeak
+	// Total FLOP capacity = what the GPUs could deliver over their active time
+	// plus what the CPU could deliver over its measured core-seconds. Summed so the
+	// bound stays generous (never false-accuses), and applicable whether the run
+	// used a GPU, only the CPU, or both.
+	gpuPeak := generousPeakFLOPs(rec.Hardware)
+	cpuCapacity := cpuPeakFLOPSPerCore * cpuCoreSec
+	availableFLOPs := gpuPeak*active + cpuCapacity
+	cert.FPeakGenerous = gpuPeak
 	cert.MinPJPerFLOP = minJoulesPerFLOP * 1e12
 
-	// Time bound (hard): F_declared FLOPs cannot be done in less than
-	// F_declared / F_peak seconds, even at 100% efficiency.
-	if active > 0 && fPeak > 0 {
-		cert.ImpliedMFU = fDeclared / (fPeak * active)
-		if fDeclared > fPeak*active {
+	// Time bound (hard): declared FLOPs cannot exceed the total FLOP capacity the
+	// observed hardware could physically have delivered.
+	if availableFLOPs > 0 {
+		cert.ImpliedMFU = fDeclared / availableFLOPs
+		if fDeclared > availableFLOPs {
 			cert.TimeBoundOK = false
 			cert.Notes = append(cert.Notes, fmt.Sprintf(
-				"time-impossible: %.3e declared FLOPs need >= %.1fs at peak %.2e FLOP/s, but only %.1fs GPU-active",
-				fDeclared, fDeclared/fPeak, fPeak, active))
+				"time-impossible: %.3e declared FLOPs exceed the %.3e the hardware could deliver (%.1fs GPU-active at %.2e FLOP/s + %.1f CPU core-seconds)",
+				fDeclared, availableFLOPs, active, gpuPeak, cpuCoreSec))
 		}
-	} else if active == 0 {
+	} else {
 		cert.TimeBoundOK = false
 		cert.Notes = append(cert.Notes,
-			"time-impossible: heavy declared work but no GPU-active time observed")
+			"time-impossible: heavy declared work but no compute activity observed")
 	}
 
 	// Energy bound (hard): F_declared FLOPs need at least F_declared*minJoulesPerFLOP joules.
@@ -121,13 +133,20 @@ func declaredFLOPs(d *session.DeclaredModel) float64 {
 	return 6.0 * float64(d.Params) * tokens
 }
 
-// aggregate reduces the hardware samples to GPU-active seconds, integrated energy,
-// and peak GPU memory.
-func aggregate(samples []session.HardwareSample) (activeSec, energyJ, peakMemMB float64) {
+// aggregate reduces the hardware samples to GPU-active seconds, integrated GPU
+// energy, peak GPU memory, and the process's CPU core-seconds. CPU time is a
+// cumulative per-process counter, so the total core-seconds is its overall
+// increase across the run.
+func aggregate(samples []session.HardwareSample) (activeSec, energyJ, peakMemMB, cpuCoreSec float64) {
+	var firstCPU, lastCPU float64
 	for i, s := range samples {
 		if s.Counters.GPUMemUsedMB > peakMemMB {
 			peakMemMB = s.Counters.GPUMemUsedMB
 		}
+		if i == 0 {
+			firstCPU = s.Counters.CPUTimeSec
+		}
+		lastCPU = s.Counters.CPUTimeSec
 		if i == 0 {
 			continue
 		}
@@ -141,6 +160,9 @@ func aggregate(samples []session.HardwareSample) (activeSec, energyJ, peakMemMB 
 			activeSec += dt
 		}
 		energyJ += 0.5 * (prev.GPUPowerW + cur.GPUPowerW) * dt
+	}
+	if lastCPU > firstCPU {
+		cpuCoreSec = lastCPU - firstCPU
 	}
 	return
 }

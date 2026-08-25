@@ -58,7 +58,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 
 	// Start background hardware sampler. A short interval gives enough resolution
 	// to integrate GPU energy and active time for the compute-cost certificate.
-	sampler := hardware.NewSampler(500 * time.Millisecond)
+	sampler := hardware.NewSampler(100 * time.Millisecond)
 	sampler.Start()
 
 	rec := &session.RunRecord{
@@ -225,7 +225,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
-	hwSamples := sampler.Stop()
+	hwSamples := hardware.Decimate(sampler.Stop(), 400)
 	if len(hwSamples) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
 	}
