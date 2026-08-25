@@ -58,7 +58,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 
 	// Start background hardware sampler. A short interval gives enough resolution
 	// to integrate GPU energy and active time for the compute-cost certificate.
-	sampler := hardware.NewSampler(2 * time.Second)
+	sampler := hardware.NewSampler(500 * time.Millisecond)
 	sampler.Start()
 
 	rec := &session.RunRecord{

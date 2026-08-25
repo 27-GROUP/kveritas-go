@@ -1,6 +1,7 @@
 package hmca
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -8,276 +9,103 @@ import (
 )
 
 func makeTime(offsetSec int) time.Time {
-	base := time.Date(2026, 3, 30, 10, 0, 0, 0, time.UTC)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return base.Add(time.Duration(offsetSec) * time.Second)
 }
 
-func TestZeroCostMetric(t *testing.T) {
-	run := &session.RunRecord{
-		StartAt:     makeTime(0),
-		EndAt:       makeTime(0),
-		DurationSec: 0.2,
-		Metrics: []session.Metric{
-			{Name: "accuracy", Value: 0.95, Source: "explicit"},
-		},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, nil)
-
-	if result.Verdict == "PASS" && result.Score == 1.0 {
-		t.Error("expected HMCA to flag ZERO_COST_METRIC for <1s run with metrics")
-	}
-
-	found := false
-	for _, f := range result.Flags {
-		if containsSubstring(f, "ZERO_COST_METRIC") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected ZERO_COST_METRIC flag in result")
-	}
-}
-
-func TestLowActivityHighGain(t *testing.T) {
-	start := makeTime(0)
-	end := makeTime(60)
-	run := &session.RunRecord{
-		StartAt:     start,
-		EndAt:       end,
-		DurationSec: 60,
-		Metrics: []session.Metric{
-			{Name: "accuracy", Value: 0.99, Source: "explicit"},
-		},
-	}
-
-	samples := []session.HardwareSample{
-		{Timestamp: makeTime(0), Counters: session.HardwareCounters{CPUTimeSec: 100, MemUsedGB: 2.0}},
-		{Timestamp: makeTime(15), Counters: session.HardwareCounters{CPUTimeSec: 100.1, MemUsedGB: 2.0}},
-		{Timestamp: makeTime(30), Counters: session.HardwareCounters{CPUTimeSec: 100.2, MemUsedGB: 2.0}},
-		{Timestamp: makeTime(45), Counters: session.HardwareCounters{CPUTimeSec: 100.3, MemUsedGB: 2.0}},
-		{Timestamp: makeTime(60), Counters: session.HardwareCounters{CPUTimeSec: 100.5, MemUsedGB: 2.0}},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, samples)
-
-	found := false
-	for _, f := range result.Flags {
-		if containsSubstring(f, "LOW_ACTIVITY_HIGH_GAIN") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected LOW_ACTIVITY_HIGH_GAIN flag for high metrics with near-zero CPU")
-	}
-}
-
-func TestGPUClaimNoGPU(t *testing.T) {
-	run := &session.RunRecord{
-		StartAt:     makeTime(0),
-		EndAt:       makeTime(120),
-		DurationSec: 120,
-		Hardware: session.HardwareInfo{
-			OS:       "linux",
-			CPUCores: 8,
-			MemGB:    16,
-			GPUInfo:  "",
-		},
-		Phases: []session.PhaseEvent{
-			{
-				Name: "training",
-				Counters: session.HardwareCounters{
-					GPUUtilPct: 80,
-					GPUMemUsedMB: 4096,
-				},
+// coupledSamples builds a genuine-looking run: several channels driven by one
+// shared activity signal (they co-fluctuate), plus real trend.
+func coupledSamples(n int) []session.RunRecord {
+	s := make([]session.HardwareSample, n)
+	cpu := 0.0
+	ctx := 0.0
+	for i := 0; i < n; i++ {
+		burst := 0.5 + 0.5*math.Sin(float64(i)*0.7) // shared activity
+		cpu += 0.8 * burst
+		ctx += 500 * burst
+		s[i] = session.HardwareSample{
+			Timestamp: makeTime(i),
+			Counters: session.HardwareCounters{
+				CPUTimeSec:   cpu,
+				MemUsedGB:    4 + 0.3*burst,
+				CtxSwitches:  ctx,
+				CPUFreqMHz:   3000 + 500*burst,
+				GPUUtilPct:   80 * burst,
+				GPUMemUsedMB: 8000 + 400*burst,
+				GPUPowerW:    40 + 120*burst,
+				GPUTempC:     45 + 10*burst,
 			},
-		},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, nil)
-
-	found := false
-	for _, f := range result.Flags {
-		if containsSubstring(f, "GPU_CLAIM_NO_GPU") {
-			found = true
-			break
 		}
 	}
-	if !found {
-		t.Error("expected GPU_CLAIM_NO_GPU flag when GPU counters present but no GPU in hardware")
-	}
+	return []session.RunRecord{{HardwareSamples: s}}
 }
 
-func TestIdleRun(t *testing.T) {
-	start := makeTime(0)
-	end := makeTime(120)
-	run := &session.RunRecord{
-		StartAt:     start,
-		EndAt:       end,
-		DurationSec: 120,
-	}
-
-	samples := []session.HardwareSample{
-		{Timestamp: makeTime(0), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-		{Timestamp: makeTime(30), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-		{Timestamp: makeTime(60), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-		{Timestamp: makeTime(90), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-		{Timestamp: makeTime(120), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, samples)
-
-	found := false
-	for _, f := range result.Flags {
-		if containsSubstring(f, "IDLE_RUN") {
-			found = true
-			break
+// incoherentSamples builds a run where each channel is an INDEPENDENT random walk
+// (fabricated/spliced): the channels share no cause, so coherence collapses.
+func incoherentSamples(n int) []session.RunRecord {
+	// simple deterministic per-channel PRNGs (different seeds)
+	rng := func(seed uint64) func() float64 {
+		st := seed
+		return func() float64 {
+			st = st*6364136223846793005 + 1442695040888963407
+			return float64(st>>11)/float64(1<<53) - 0.5
 		}
 	}
-	if !found {
-		t.Error("expected IDLE_RUN flag when hardware is completely idle for >60s")
-	}
-}
-
-func TestPhaseMismatch(t *testing.T) {
-	// Cumulative CPU: train boundary at 100, eval boundary at 110 (train did 10),
-	// then eval runs to a final 200 (eval did 90). Eval work >> train work.
-	run := &session.RunRecord{
-		StartAt:     makeTime(0),
-		EndAt:       makeTime(300),
-		DurationSec: 300,
-		Phases: []session.PhaseEvent{
-			{Name: "training", Counters: session.HardwareCounters{CPUTimeSec: 100}},
-			{Name: "evaluation", Counters: session.HardwareCounters{CPUTimeSec: 110}},
-		},
-		HardwareSamples: []session.HardwareSample{
-			{Timestamp: makeTime(0), Counters: session.HardwareCounters{CPUTimeSec: 100}},
-			{Timestamp: makeTime(300), Counters: session.HardwareCounters{CPUTimeSec: 200}},
-		},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, run.HardwareSamples)
-
-	found := false
-	for _, f := range result.Flags {
-		if containsSubstring(f, "PHASE_MISMATCH") {
-			found = true
-			break
+	rc, rm, rx, rf, ru, rgm, rp, rt := rng(1), rng(2), rng(3), rng(4), rng(5), rng(6), rng(7), rng(8)
+	s := make([]session.HardwareSample, n)
+	cpu, ctx := 0.0, 0.0
+	for i := 0; i < n; i++ {
+		cpu += 0.8 * (rc() + 0.5)
+		ctx += 500 * (rx() + 0.5)
+		s[i] = session.HardwareSample{
+			Timestamp: makeTime(i),
+			Counters: session.HardwareCounters{
+				CPUTimeSec:   cpu,
+				MemUsedGB:    4 + rm(),
+				CtxSwitches:  ctx,
+				CPUFreqMHz:   3300 + 500*rf(),
+				GPUUtilPct:   50 + 40*ru(),
+				GPUMemUsedMB: 8000 + 800*rgm(),
+				GPUPowerW:    100 + 100*rp(),
+				GPUTempC:     50 + 10*rt(),
+			},
 		}
 	}
-	if !found {
-		t.Error("expected PHASE_MISMATCH flag when eval uses more CPU than training")
+	return []session.RunRecord{{HardwareSamples: s}}
+}
+
+func ptrs(runs []session.RunRecord) []*session.RunRecord {
+	out := make([]*session.RunRecord, len(runs))
+	for i := range runs {
+		out[i] = &runs[i]
+	}
+	return out
+}
+
+func TestCoherentRunPasses(t *testing.T) {
+	res := Analyze(ptrs(coupledSamples(60)), nil)
+	if res.Verdict != "PASS" {
+		t.Errorf("expected PASS for a coherent run, got %s (score %.3f, flags %v)", res.Verdict, res.Score, res.Flags)
 	}
 }
 
-func TestCleanPass(t *testing.T) {
-	start := makeTime(0)
-	end := makeTime(300)
-	run := &session.RunRecord{
-		StartAt:     start,
-		EndAt:       end,
-		DurationSec: 300,
-		Metrics: []session.Metric{
-			{Name: "accuracy", Value: 0.85, Source: "explicit"},
-		},
-		Hardware: session.HardwareInfo{
-			OS:       "linux",
-			CPUCores: 8,
-			MemGB:    16,
-		},
-		Phases: []session.PhaseEvent{
-			{Name: "training", Counters: session.HardwareCounters{CPUTimeSec: 200}},
-			{Name: "evaluation", Counters: session.HardwareCounters{CPUTimeSec: 50}},
-		},
-	}
-
-	samples := []session.HardwareSample{
-		{Timestamp: makeTime(0), Counters: session.HardwareCounters{CPUTimeSec: 0, MemUsedGB: 2.0}},
-		{Timestamp: makeTime(100), Counters: session.HardwareCounters{CPUTimeSec: 80, MemUsedGB: 4.5}},
-		{Timestamp: makeTime(200), Counters: session.HardwareCounters{CPUTimeSec: 160, MemUsedGB: 5.0}},
-		{Timestamp: makeTime(300), Counters: session.HardwareCounters{CPUTimeSec: 230, MemUsedGB: 3.5}},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, samples)
-
-	if result.Score != 1.0 {
-		t.Errorf("expected perfect score for clean run, got %v (flags: %v)", result.Score, result.Flags)
-	}
-	if result.Verdict != "PASS" {
-		t.Errorf("expected PASS verdict, got %s", result.Verdict)
-	}
-	if len(result.Flags) != 0 {
-		t.Errorf("expected no flags, got %v", result.Flags)
+func TestIncoherentRunFlags(t *testing.T) {
+	res := Analyze(ptrs(incoherentSamples(60)), nil)
+	if res.Verdict == "PASS" {
+		t.Errorf("expected a non-PASS verdict for an incoherent run, got PASS (score %.3f)", res.Score)
 	}
 }
 
-func TestScoreClampedAtZero(t *testing.T) {
-	// Many flags should not produce negative score
-	run := &session.RunRecord{
-		StartAt:     makeTime(0),
-		EndAt:       makeTime(0),
-		DurationSec: 0.1,
-		Metrics: []session.Metric{
-			{Name: "accuracy", Value: 0.99, Source: "explicit"},
-		},
-		Hardware: session.HardwareInfo{GPUInfo: ""},
-		Phases: []session.PhaseEvent{
-			{Name: "training", Counters: session.HardwareCounters{GPUUtilPct: 90, CPUTimeSec: 1}},
-			{Name: "evaluation", Counters: session.HardwareCounters{CPUTimeSec: 100}},
-		},
-	}
-
-	result := Analyze([]*session.RunRecord{run}, nil)
-
-	if result.Score < 0 {
-		t.Errorf("score should never be negative, got %v", result.Score)
+func TestShortRunAbstains(t *testing.T) {
+	res := Analyze(ptrs(coupledSamples(5)), nil)
+	if res.Verdict != "N/A" {
+		t.Errorf("expected N/A (abstain) for a too-short run, got %s", res.Verdict)
 	}
 }
 
-func TestVerdictThresholds(t *testing.T) {
-	tests := []struct {
-		name     string
-		flagCnt  int
-		wantVerdict string
-	}{
-		{"no_flags", 0, "PASS"},
-		{"two_flags", 2, "PASS"},
-		{"three_flags", 3, "WARN"},
-		{"six_flags", 6, "FAIL"},
+func TestNoSamplesAbstains(t *testing.T) {
+	res := Analyze([]*session.RunRecord{{}}, nil)
+	if res.Verdict != "N/A" {
+		t.Errorf("expected N/A when there are no samples, got %s", res.Verdict)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			score := 1.0 - float64(tc.flagCnt)*0.1
-			if score < 0 {
-				score = 0
-			}
-			var verdict string
-			if score < 0.5 {
-				verdict = "FAIL"
-			} else if score < 0.8 {
-				verdict = "WARN"
-			} else {
-				verdict = "PASS"
-			}
-			if verdict != tc.wantVerdict {
-				t.Errorf("score=%.1f: got verdict %s, want %s", score, verdict, tc.wantVerdict)
-			}
-		})
-	}
-}
-
-func containsSubstring(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsHelper(s, sub))
-}
-
-func containsHelper(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

@@ -199,6 +199,11 @@ type HardwareCounters struct {
 	CPUTempC     float64 `json:"cpu_temp_c,omitempty"`
 	DiskReadMB   float64 `json:"disk_read_mb"`
 	DiskWriteMB  float64 `json:"disk_write_mb"`
+	// Extra CPU-side channels for coherence analysis (per-process, cumulative).
+	CtxSwitches float64 `json:"ctx_switches,omitempty"`
+	MinorFaults float64 `json:"minor_faults,omitempty"`
+	Threads     float64 `json:"threads,omitempty"`
+	CPUFreqMHz  float64 `json:"cpu_freq_mhz,omitempty"`
 }
 
 // PhaseEvent records a KVERITAS_PHASE boundary with hardware state.

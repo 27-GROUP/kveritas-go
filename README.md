@@ -121,7 +121,7 @@ Multi-GPU setups report each GPU individually. The GPU count and names array are
 
 ### Hardware Sampler (per-process)
 
-During `kveritas run`, a background goroutine samples hardware counters every 2 seconds: CPU time, memory, GPU utilization, GPU memory, and GPU power. These are included in the signed data as a time-series trace of actual compute activity.
+During `kveritas run`, a background goroutine samples hardware counters about twice a second: CPU time, memory, context switches, page faults, thread count, CPU frequency, per-process I/O, and (when a GPU is used) its utilization, memory, power, and temperature. These are included in the signed data as a dense multi-channel time-series of actual compute activity - the basis for the HMCA coherence check and the verifier's telemetry graph.
 
 Sampling is scoped to the run's **own process tree** -- CPU and memory from the tree, GPU memory and utilization filtered to its PIDs, GPU power scaled by its share of utilization. So another app on the machine (a browser, a second job) does **not** inflate the run's evidence.
 
@@ -131,17 +131,26 @@ Sampling is scoped to the run's **own process tree** -- CPU and memory from the 
 
 ## HMCA (Hardware-Metric Consistency Analyzer)
 
-At `kveritas seal` time, a deterministic rule engine analyzes the relationship between hardware telemetry and reported metrics:
+HMCA is metric-blind. It never compares the reported metric against hardware activity (that
+comparison is confounded: the same result can legitimately cost very different amounts of work).
+Instead it asks a question about the execution itself:
 
-| Rule | Condition | Meaning |
-|---|---|---|
-| `ZERO_COST_METRIC` | Metric reported but total CPU time < 1s | Metric produced without measurable computation |
-| `LOW_ACTIVITY_HIGH_GAIN` | High metric value but peak CPU < 5% | Complex results with minimal resource usage |
-| `GPU_CLAIM_NO_GPU` | GPU counters reported but no GPU detected | Claims GPU training on CPU-only machine |
-| `IDLE_RUN` | Hardware completely idle for entire run (>60s) | No computation occurred |
-| `PHASE_MISMATCH` | Eval phase used more CPU than training phase | Suspicious resource distribution |
+> Are the run's telemetry channels consistent shadows of one process?
 
-The HMCA produces a score (0.0-1.0), verdict (PASS/WARN/FAIL), and triggered flags. These are baked into the canonical JSON before signing and included in the PDF report.
+A genuine computation drives every channel - CPU, memory, context switches, page faults, CPU
+frequency, I/O, and (when a GPU is used) its utilization, memory, power, and temperature - from a
+single underlying activity, so the channels co-fluctuate. A fabricated, replayed, or spliced trace
+authors the channels independently, so the coupling breaks.
+
+At `kveritas seal` time HMCA computes a **single-cause coherence score** (0.0-1.0) from the
+per-process telemetry sampled during the run: it takes the active channels, removes their shared
+trend (first difference), and measures how much of the variance is explained by one shared
+component. High coherence means the channels move as one process. The verdict is `PASS` (coherent),
+`WARN` (weak), `FAIL` (incoherent - possible fabrication or replay), or `N/A` (too little telemetry
+to judge, e.g. a very short run; authenticity then rests on the signature, ledger, source
+integrity, and provenance). A genuinely light run is judged on the consistency of the activity it
+has, never penalized for being light. Score, verdict, and flags are baked into the canonical JSON
+before signing and included in the report; the web verifier also renders the channels over time.
 
 ---
 
@@ -386,7 +395,7 @@ kveritas-go/
 │   ├── compute/                Compute-cost certificate
 │   ├── hmca/
 │   │   ├── hmca.go              Hardware-Metric Consistency Analyzer
-│   │   └── hmca_test.go         HMCA unit tests
+│   │   └── hmca_test.go         HMCA coherence tests
 │   └── bundle/bundle.go         Source file collection + hashing
 ├── tests/
 │   ├── run_tests.sh             Integration test suite
@@ -411,7 +420,7 @@ Everything else (RSA-PSS, SHA-256, PDF generation, HTTP server/client, hardware 
 
 ```bash
 # Unit tests
-go test ./internal/hmca/ -v    # 8 HMCA rule tests
+go test ./internal/hmca/ -v    # HMCA coherence tests
 
 # Integration tests
 kveritas-server --keys keys &

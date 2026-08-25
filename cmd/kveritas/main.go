@@ -1160,7 +1160,7 @@ var cmdSeal = &cobra.Command{
 			allSamples = append(allSamples, r.HardwareSamples...)
 		}
 		hmcaResult := hmca.Analyze(runs, allSamples)
-		fmt.Fprintf(os.Stderr, "[kveritas] HMCA score: %.2f  verdict: %s\n", hmcaResult.Score, hmcaResult.Verdict)
+		fmt.Fprintf(os.Stderr, "[kveritas] HMCA execution coherence: %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
 		for _, f := range hmcaResult.Flags {
 			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
 		}
@@ -1262,7 +1262,7 @@ var cmdSeal = &cobra.Command{
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
 		fmt.Printf("Runs:          %d\n", len(runs))
-		fmt.Printf("HMCA score:    %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
+		fmt.Printf("HMCA coherence: %.2f (%s)\n", hmcaResult.Score, hmcaResult.Verdict)
 		if seal.TotalRunCount > 0 {
 			fmt.Printf("Total runs:    %d (including failed/discarded)\n", seal.TotalRunCount)
 		}
@@ -1673,12 +1673,12 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
 		fmt.Printf("  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
 	}
-	if cs.HMCAScore != nil {
-		verdict := ""
-		if cs.HMCAVerdict != nil {
-			verdict = " " + *cs.HMCAVerdict
+	if cs.HMCAVerdict != nil {
+		coh := ""
+		if cs.HMCAScore != nil {
+			coh = fmt.Sprintf(" (coherence %.2f)", *cs.HMCAScore)
 		}
-		fmt.Printf("  Hardware (HMCA):      %.0f%%%s\n", *cs.HMCAScore*100, verdict)
+		fmt.Printf("  Execution coherence:  %s%s\n", *cs.HMCAVerdict, coh)
 	}
 	for _, f := range cs.HMCAFlags {
 		fmt.Printf("    flag: %s\n", f)

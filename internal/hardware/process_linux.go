@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,8 +26,16 @@ func ProcessCounters(rootPID int) session.HardwareCounters {
 	for pid := range pids {
 		c.CPUTimeSec += procCPUSeconds(pid)
 		c.MemUsedGB += procRSSPages(pid) * pageGB
+		mf, thr := procMinfltThreads(pid)
+		c.MinorFaults += mf
+		c.Threads += thr
+		c.CtxSwitches += procCtxSwitches(pid)
+		rb, wb := procIO(pid)
+		c.DiskReadMB += rb
+		c.DiskWriteMB += wb
 	}
 	c.CPUTempC = linuxCPUTemp()
+	c.CPUFreqMHz = linuxCPUFreqMHz()
 
 	dev := gpuCounters()
 	c.GPUTempC = dev.GPUTempC
@@ -123,6 +132,93 @@ func procCPUSeconds(pid int) float64 {
 }
 
 const clockTicks = 100.0
+
+// procMinfltThreads returns a process's cumulative minor page faults and its
+// current thread count, from /proc/<pid>/stat.
+func procMinfltThreads(pid int) (minflt, threads float64) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, 0
+	}
+	close := bytes.LastIndexByte(data, ')')
+	if close < 0 || close+2 >= len(data) {
+		return 0, 0
+	}
+	fields := strings.Fields(string(data[close+2:]))
+	if len(fields) < 18 {
+		return 0, 0
+	}
+	minflt, _ = strconv.ParseFloat(fields[7], 64)   // minflt
+	threads, _ = strconv.ParseFloat(fields[17], 64) // num_threads
+	return minflt, threads
+}
+
+// procCtxSwitches returns a process's cumulative context switches (voluntary +
+// nonvoluntary), from /proc/<pid>/status.
+func procCtxSwitches(pid int) float64 {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0
+	}
+	var total float64
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "voluntary_ctxt_switches:") || strings.HasPrefix(line, "nonvoluntary_ctxt_switches:") {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				v, _ := strconv.ParseFloat(f[1], 64)
+				total += v
+			}
+		}
+	}
+	return total
+}
+
+// procIO returns a process's cumulative read/write bytes as MB, from /proc/<pid>/io.
+func procIO(pid int) (readMB, writeMB float64) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/io")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		v, _ := strconv.ParseFloat(f[1], 64)
+		switch f[0] {
+		case "read_bytes:":
+			readMB = v / 1e6
+		case "write_bytes:":
+			writeMB = v / 1e6
+		}
+	}
+	return readMB, writeMB
+}
+
+// linuxCPUFreqMHz returns the mean current CPU frequency across cores (MHz).
+func linuxCPUFreqMHz() float64 {
+	matches, err := filepath.Glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")
+	if err != nil || len(matches) == 0 {
+		return 0
+	}
+	var sum float64
+	var n int
+	for _, m := range matches {
+		b, err := os.ReadFile(m)
+		if err != nil {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
+		if err == nil {
+			sum += v / 1000.0 // kHz -> MHz
+			n++
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
+}
 
 // procRSSPages returns a process's resident set size in memory pages.
 func procRSSPages(pid int) float64 {
