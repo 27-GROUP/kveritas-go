@@ -121,7 +121,7 @@ Multi-GPU setups report each GPU individually. The GPU count and names array are
 
 ### Hardware Sampler (per-process)
 
-During `kveritas run`, a background goroutine samples hardware counters about twice a second: CPU time, memory, context switches, page faults, thread count, CPU frequency, per-process I/O, and (when a GPU is used) its utilization, memory, power, and temperature. These are included in the signed data as a dense multi-channel time-series of actual compute activity - the basis for the HMCA coherence check and the verifier's telemetry graph.
+During `kveritas run`, a background goroutine samples hardware counters about twice a second: CPU time, memory, context switches, page faults, thread count, CPU frequency, per-process I/O, and (when a GPU is used) its utilization, memory, power, and temperature. These are included in the signed data as a dense multi-channel time-series of actual compute activity, the basis for the HMCA coherence check and the verifier's telemetry graph.
 
 Sampling is scoped to the run's **own process tree** -- CPU and memory from the tree, GPU memory and utilization filtered to its PIDs, GPU power scaled by its share of utilization. So another app on the machine (a browser, a second job) does **not** inflate the run's evidence.
 
@@ -137,8 +137,8 @@ Instead it asks a question about the execution itself:
 
 > Are the run's telemetry channels consistent shadows of one process?
 
-A genuine computation drives every channel - CPU, memory, context switches, page faults, CPU
-frequency, I/O, and (when a GPU is used) its utilization, memory, power, and temperature - from a
+A genuine computation drives every channel (CPU, memory, context switches, page faults, CPU
+frequency, I/O, and, when a GPU is used, its utilization, memory, power, and temperature) from a
 single underlying activity, so the channels co-fluctuate. A fabricated, replayed, or spliced trace
 authors the channels independently, so the coupling breaks.
 
@@ -146,7 +146,7 @@ At `kveritas seal` time HMCA computes a **single-cause coherence score** (0.0-1.
 per-process telemetry sampled during the run: it takes the active channels, removes their shared
 trend (first difference), and measures how much of the variance is explained by one shared
 component. High coherence means the channels move as one process. The verdict is `PASS` (coherent),
-`WARN` (weak), `FAIL` (incoherent - possible fabrication or replay), or `N/A` (too little telemetry
+`WARN` (weak), `FAIL` (incoherent, possible fabrication or replay), or `N/A` (too little telemetry
 to judge, e.g. a very short run; authenticity then rests on the signature, ledger, source
 integrity, and provenance). A genuinely light run is judged on the consistency of the activity it
 has, never penalized for being light. Score, verdict, and flags are baked into the canonical JSON
