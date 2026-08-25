@@ -433,8 +433,7 @@ bash tests/run_tests.sh
 
 | Repo | Purpose |
 |---|---|
-| [kveritas-api](https://github.com/27-GROUP/kveritas-api) | Attestation backend (signing, verification, AI audit) |
-| [kveritas-web](https://github.com/27-GROUP/kveritas-web) | Web verifier ([kveritas.org](https://kveritas.org)) |
+| [kveritas-go](https://github.com/27-GROUP/kveritas-go) | This repo -- the CLI and attestation server |
 | [kveritas-releases](https://github.com/27-GROUP/kveritas-releases) | Pre-built binaries for all platforms |
 
 ---
