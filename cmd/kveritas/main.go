@@ -1356,9 +1356,10 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		SourceCodeHash string                   `json:"source_code_hash,omitempty"`
 		Declared       *session.DeclaredModel   `json:"declared,omitempty"`
 		Trace          *session.RunTrace        `json:"trace,omitempty"`
-		Provenance     *session.Provenance      `json:"provenance,omitempty"`
-		ProvBundleHash string                   `json:"prov_bundle_hash,omitempty"`
-		Artifacts      []session.Artifact       `json:"artifacts,omitempty"`
+		Provenance      *session.Provenance       `json:"provenance,omitempty"`
+		ProvBundleHash  string                    `json:"prov_bundle_hash,omitempty"`
+		Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
+		HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
 	}
 
 	runPayloads := make([]runPayload, 0, len(runs))
@@ -1388,9 +1389,10 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 			SourceCodeHash: r.SourceCodeHash,
 			Declared:       r.Declared,
 			Trace:          r.Trace,
-			Provenance:     r.Provenance,
-			ProvBundleHash: r.ProvBundleHash,
-			Artifacts:      r.Artifacts,
+			Provenance:      r.Provenance,
+			ProvBundleHash:  r.ProvBundleHash,
+			Artifacts:       r.Artifacts,
+			HardwareSamples: r.HardwareSamples,
 		}
 		runPayloads = append(runPayloads, rp)
 	}
