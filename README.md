@@ -121,7 +121,7 @@ Multi-GPU setups report each GPU individually. The GPU count and names array are
 
 ### Hardware Sampler (per-process)
 
-During `kveritas run`, a background goroutine samples hardware counters about twice a second: CPU time, memory, context switches, page faults, thread count, CPU frequency, per-process I/O, and (when a GPU is used) its utilization, memory, power, and temperature. These are included in the signed data as a dense multi-channel time-series of actual compute activity, the basis for the HMCA coherence check and the verifier's telemetry graph.
+During `kveritas run`, a background goroutine samples the cheap /proc counters (CPU time, memory, context switches, page faults, thread count, CPU frequency, per-process I/O) at about 10 Hz, and the slower per-process GPU counters (utilization, memory, power, temperature) at about 2 Hz, forward-filled in between. The high rate means even a short run accumulates enough samples for the coherence check; long runs are thinned to a fixed cap before sealing so the report stays small. These form a dense multi-channel time-series of actual compute activity, the basis for the HMCA coherence check and the verifier's telemetry graph.
 
 Sampling is scoped to the run's **own process tree** -- CPU and memory from the tree, GPU memory and utilization filtered to its PIDs, GPU power scaled by its share of utilization. So another app on the machine (a browser, a second job) does **not** inflate the run's evidence.
 
@@ -165,16 +165,19 @@ The certificate checks three physical bounds, all recomputable from values print
 
 | Bound | Impossible when |
 |---|---|
-| Time | declared FLOPs exceed device peak times GPU-active seconds |
-| Energy | declared FLOPs exceed measured joules divided by the minimum energy per FLOP |
+| Time | declared FLOPs exceed the total the hardware could deliver (GPU peak times GPU-active seconds plus CPU peak times measured CPU core-seconds) |
+| Energy | declared FLOPs exceed measured GPU joules divided by the minimum energy per FLOP |
 | Memory | declared model weights exceed the observed GPU memory footprint (soft, review-only) |
 
-Constants are chosen generous toward the author (theoretical peak, an energy floor below any
-real device, all GPUs summed), so an honest run cannot trip the accusatory verdict; small or
-CPU-only runs are marked N/A. A hard time or energy violation is a physical impossibility and is
-non-deniable. The verdict (PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A) is bound into the signed
-canonical JSON, so editing the declared card to dodge the check breaks verification. See
-`COMPUTE_ATTESTATION_SPEC.md` for the full design.
+The time bound sums the FLOP capacity of every device the run used, so it applies whether the work
+ran on a GPU, only the CPU, or both. A 70B-parameter model declared on a machine with no GPU that
+ran for a few seconds is caught as FABRICATION-IMPOSSIBLE, because no CPU could deliver that many
+FLOPs in the measured core-seconds. Constants are chosen generous toward the author (theoretical
+peak, an energy floor below any real device, all devices summed), so an honest run cannot trip the
+accusatory verdict; a run with no declared card, or with no measurable compute at all, is marked
+N/A. A hard violation is a physical impossibility and is non-deniable. The verdict
+(PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A) is bound into the signed canonical JSON, so editing
+the declared card to dodge the check breaks verification.
 
 Example (Python):
 
