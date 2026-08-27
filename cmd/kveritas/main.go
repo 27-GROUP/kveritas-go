@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ This action is irreversible -- the session token is lost.`,
 func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
+	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -143,6 +145,110 @@ var cmdProve = &cobra.Command{
 }
 
 // cmdVerifyProof checks a self-contained proof, or a proof against a report.
+var harnessProveInput string
+var harnessProveOutput string
+var harnessProveTUID string
+var harnessProveOut string
+
+// cmdHarnessProve reveals one recorded prompt/output and proves it sat at a given
+// position in a signed session, without exposing any other entry's content.
+var cmdHarnessProve = &cobra.Command{
+	Use:   "harness-prove <session.json> <entry-index | --tool-use-id ID>",
+	Short: "Prove a recorded prompt or output was in a signed agent session",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		report, ok := loadHarnessReport(args[0])
+		if !ok {
+			return fmt.Errorf("%s is not a harness session", args[0])
+		}
+		index := -1
+		if harnessProveTUID != "" {
+			for _, e := range report.Entries {
+				if e.ToolUseID == harnessProveTUID {
+					index = e.Index
+					break
+				}
+			}
+			if index < 0 {
+				return fmt.Errorf("no entry with tool_use_id %q", harnessProveTUID)
+			}
+		} else if len(args) == 2 {
+			n, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("entry index must be a number or use --tool-use-id")
+			}
+			index = n
+		} else {
+			return fmt.Errorf("give an entry index or --tool-use-id")
+		}
+
+		var input, output []byte
+		var err error
+		if harnessProveInput != "" {
+			if input, err = os.ReadFile(harnessProveInput); err != nil {
+				return fmt.Errorf("reading input content: %w", err)
+			}
+		}
+		if harnessProveOutput != "" {
+			if output, err = os.ReadFile(harnessProveOutput); err != nil {
+				return fmt.Errorf("reading output content: %w", err)
+			}
+		}
+
+		proof, err := harness.BuildProof(report, index, input, output)
+		if err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(proof, "", "  ")
+		if err != nil {
+			return err
+		}
+		out := harnessProveOut
+		if out == "" {
+			out = fmt.Sprintf("harness-proof-%d.json", index)
+		}
+		if err := os.WriteFile(out, data, 0644); err != nil {
+			return err
+		}
+		fmt.Printf("Proof written: %s\n", out)
+		fmt.Println("Share this one file to prove that content was recorded; every other entry stays a hash.")
+		return nil
+	},
+}
+
+// cmdVerifyHarnessProof checks a harness proof: the chain is authentic and the
+// revealed content re-hashes to the committed hash at the named entry.
+var cmdVerifyHarnessProof = &cobra.Command{
+	Use:   "verify-harness-proof <proof.json>",
+	Short: "Check a harness prompt/output proof",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		data, err := os.ReadFile(args[0])
+		if err != nil {
+			return err
+		}
+		var proof harness.Proof
+		if err := json.Unmarshal(data, &proof); err != nil {
+			return err
+		}
+		res := harness.VerifyProof(&proof)
+		if !res.Valid {
+			fmt.Printf("REJECTED: %s\n", res.Detail)
+			return fmt.Errorf("proof did not verify")
+		}
+		fmt.Printf("VERIFIED\n")
+		fmt.Printf("Session:   %s\n", res.SessionID)
+		fmt.Printf("Entry:     #%d  %s  (%s)\n", res.Entry.Index, res.Entry.Type, res.Entry.Actor)
+		if res.InputMatch {
+			fmt.Printf("Input:     matches the recorded input hash at this position\n")
+		}
+		if res.OutputMatch {
+			fmt.Printf("Output:    matches the recorded output hash at this position\n")
+		}
+		return nil
+	},
+}
+
 var cmdVerifyProof = &cobra.Command{
 	Use:   "verify-proof <proof.json> | <report.pdf> <proof.json>",
 	Short: "Check a selective-disclosure proof",
@@ -377,6 +483,10 @@ func init() {
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
 	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
+	cmdHarnessProve.Flags().StringVar(&harnessProveInput, "input", "", "file with the prompt/tool-input content to reveal and prove")
+	cmdHarnessProve.Flags().StringVar(&harnessProveOutput, "output-content", "", "file with the response/tool-output content to reveal and prove")
+	cmdHarnessProve.Flags().StringVar(&harnessProveTUID, "tool-use-id", "", "select the entry by tool_use_id instead of index")
+	cmdHarnessProve.Flags().StringVarP(&harnessProveOut, "out", "o", "", "output proof path (default: harness-proof-<index>.json)")
 	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
 

@@ -10,6 +10,7 @@ package harness
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -235,6 +236,102 @@ type Report struct {
 	Genesis Genesis `json:"genesis"`
 	Entries []Entry `json:"entries"`
 	Seal    Seal    `json:"seal"`
+}
+
+// Proof is a self-contained attestation that a specific prompt or output was
+// recorded at a specific position in a signed session. It carries the full chain
+// (hashes only) plus the revealed content for one entry; every other entry's
+// content stays a hash, so nothing else is exposed.
+type Proof struct {
+	Kind   string `json:"kind"`
+	Report Report `json:"report"`
+	Index  int    `json:"entry_index"`
+	Input  string `json:"revealed_input,omitempty"`
+	Output string `json:"revealed_output,omitempty"`
+}
+
+// ProofResult reports whether a proof verifies and what it attests.
+type ProofResult struct {
+	Valid       bool
+	Detail      string
+	Entry       Entry
+	InputMatch  bool
+	OutputMatch bool
+	SessionID   string
+}
+
+func findEntry(entries []Entry, index int) *Entry {
+	for i := range entries {
+		if entries[i].Index == index {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+// BuildProof reveals the given entry's input and/or output content, checking each
+// against the entry's committed hash so only genuinely-recorded content can be
+// proven. The session must already verify.
+func BuildProof(r *Report, index int, input, output []byte) (*Proof, error) {
+	if res := Verify(r); res.Verdict != "VERIFIED" {
+		return nil, fmt.Errorf("session does not verify (%s): %s", res.Verdict, res.Detail)
+	}
+	e := findEntry(r.Entries, index)
+	if e == nil {
+		return nil, fmt.Errorf("no entry with index %d in the session", index)
+	}
+	p := &Proof{Kind: "kveritas-harness-proof", Report: *r, Index: index}
+	if input != nil {
+		if crypto.HashBytes(input) != e.InputHash {
+			return nil, fmt.Errorf("supplied input does not match entry %d's recorded input hash", index)
+		}
+		p.Input = base64.StdEncoding.EncodeToString(input)
+	}
+	if output != nil {
+		if crypto.HashBytes(output) != e.OutputHash {
+			return nil, fmt.Errorf("supplied output does not match entry %d's recorded output hash", index)
+		}
+		p.Output = base64.StdEncoding.EncodeToString(output)
+	}
+	if p.Input == "" && p.Output == "" {
+		return nil, fmt.Errorf("nothing to prove: supply an input and/or output to reveal")
+	}
+	return p, nil
+}
+
+// VerifyProof checks the chain, then confirms the revealed content re-hashes to
+// the committed hash at the named entry.
+func VerifyProof(p *Proof) ProofResult {
+	if p.Kind != "kveritas-harness-proof" {
+		return ProofResult{Detail: "not a harness proof"}
+	}
+	if res := Verify(&p.Report); res.Verdict != "VERIFIED" {
+		return ProofResult{Detail: fmt.Sprintf("session chain %s: %s", res.Verdict, res.Detail)}
+	}
+	e := findEntry(p.Report.Entries, p.Index)
+	if e == nil {
+		return ProofResult{Detail: "named entry is not in the chain"}
+	}
+	out := ProofResult{Entry: *e, SessionID: p.Report.Genesis.SessionID}
+	if p.Input != "" {
+		b, err := base64.StdEncoding.DecodeString(p.Input)
+		if err != nil || crypto.HashBytes(b) != e.InputHash {
+			return ProofResult{Detail: "revealed input does not match the committed input hash"}
+		}
+		out.InputMatch = true
+	}
+	if p.Output != "" {
+		b, err := base64.StdEncoding.DecodeString(p.Output)
+		if err != nil || crypto.HashBytes(b) != e.OutputHash {
+			return ProofResult{Detail: "revealed output does not match the committed output hash"}
+		}
+		out.OutputMatch = true
+	}
+	if !out.InputMatch && !out.OutputMatch {
+		return ProofResult{Detail: "proof reveals no content"}
+	}
+	out.Valid = true
+	return out
 }
 
 // CoreHash hashes the genesis fields excluding its own Hash and the server
