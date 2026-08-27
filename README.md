@@ -219,6 +219,15 @@ kveritas verify-proof report.pdf kveritas-proof-train.py.json
 
 The proof discloses only that file; the others appear as opaque commitments. It works across every run of a multi-run session. The `report.pdf.provkey.json` written at seal time is a **local** keystore (real paths + salts) that powers `prove` -- keep it private.
 
+For agent sessions, the analogous proof reveals one recorded prompt or output and checks it against its committed hash, leaving every other entry a hash:
+
+```bash
+kveritas harness-prove session.json 1 --input prompt.txt -o proof.json
+kveritas verify-harness-proof proof.json
+```
+
+Select the entry by index or `--tool-use-id`, and reveal the prompt side with `--input` or the response side with `--output-content`. Verification confirms the signed chain and that the revealed content re-hashes to the committed hash at that position.
+
 ---
 
 ## Checkout Bundle
