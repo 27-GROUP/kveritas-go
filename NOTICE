@@ -1,0 +1,13 @@
+K-Veritas
+Copyright 2026 Mamadou K.
+
+This product includes software developed as part of the K-Veritas project.
+
+The CLI, protocol, and verification libraries are licensed under the Apache
+License, Version 2.0 (see LICENSE).
+
+The attestation server (server/) is licensed under the GNU Affero General
+Public License, Version 3 (see LICENSE-AGPL).
+
+"K-Veritas" and its logo are trademarks. This license grants no trademark
+rights.

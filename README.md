@@ -165,4 +165,8 @@ Dependencies: `spf13/cobra` (CLI) and `google/uuid` (IDs); everything else is th
 
 ## License
 
-MIT
+The CLI, protocol, and verification libraries are licensed under **Apache-2.0** ([LICENSE](LICENSE)).
+
+The attestation server under `server/` is licensed under **AGPL-3.0** ([LICENSE-AGPL](LICENSE-AGPL)). Running a modified version as a network service requires publishing your source under the same license, or obtaining a commercial license.
+
+"K-Veritas" and its logo are trademarks. The license grants no rights to use the name or logo to run a service that implies official K-Veritas certification.
