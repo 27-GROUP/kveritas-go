@@ -51,6 +51,7 @@ type RunRecord struct {
 	Metrics     []Metric          `json:"metrics"`
 	Hardware    HardwareInfo      `json:"hardware"`
 	EnvDigest   string            `json:"env_digest"`
+	EnvPackages string            `json:"env_packages,omitempty"`
 
 	// Per-phase hardware snapshots
 	Phases []PhaseEvent `json:"phases,omitempty"`

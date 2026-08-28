@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"sync"
 	"time"
@@ -283,7 +284,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	// Post-run: hash files, env digest, and source indexing concurrently.
 	var postHashes map[string]string
 	var postHashErr error
-	var envDig string
+	var envDig, envPackages string
 
 	var postWg sync.WaitGroup
 	postWg.Add(2)
@@ -293,7 +294,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}()
 	go func() {
 		defer postWg.Done()
-		envDig, _ = envDigest()
+		envDig, envPackages, _ = envDigest(command)
 	}()
 
 	if len(sess.SourceHashes) == 0 {
@@ -318,6 +319,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}
 	rec.PostHashes = postHashes
 	rec.EnvDigest = envDig
+	rec.EnvPackages = envPackages
 
 	if len(sess.SourceHashes) > 0 {
 		rec.SourceCodeHash = computeAggregateSourceHash(sess.SourceHashes)
@@ -338,6 +340,9 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		rec.PreHashes = nil
 		rec.PostHashes = nil
 		rec.Modified = nil
+		// The dependency list can name internal packages, so at the redacted level
+		// only its digest is kept; the digest stays bound into the signature.
+		rec.EnvPackages = ""
 	}
 
 	parser.WarnIfEmpty()
@@ -403,25 +408,37 @@ func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, leve
 	return art
 }
 
-func envDigest() (string, error) {
-	// Python: pip freeze
-	for _, pip := range []string{"pip", "pip3"} {
-		out, err := exec.Command(pip, "freeze").Output()
-		if err == nil {
-			return digestBuf(out), nil
+// envDigest captures the run's dependency environment. For a Python command it
+// follows the exact interpreter that ran the code, so an absolute or virtualenv
+// interpreter (e.g. ./venv/bin/python) reports its own packages rather than
+// whatever pip happens to be first on PATH. It returns the freeze content and its
+// SHA-256 digest: the digest is always bound into the signature, the content is
+// stored for reproducibility (and withheld at the redacted disclosure level).
+func envDigest(command []string) (digest string, content string, err error) {
+	if len(command) > 0 && strings.HasPrefix(strings.ToLower(filepath.Base(command[0])), "python") {
+		interp := command[0]
+		if !strings.ContainsRune(interp, filepath.Separator) {
+			if resolved, e := exec.LookPath(interp); e == nil {
+				interp = resolved
+			}
+		}
+		if out, e := exec.Command(interp, "-m", "pip", "freeze").Output(); e == nil {
+			return digestBuf(out), string(out), nil
 		}
 	}
-	// R: installed.packages()
-	out, err := exec.Command("Rscript", "-e", "cat(paste(installed.packages()[,'Package'], installed.packages()[,'Version'], sep='==', collapse='\n'))").Output()
-	if err == nil && len(out) > 0 {
-		return digestBuf(out), nil
+	// Fallbacks: pip on PATH, then R, then Julia.
+	for _, pip := range []string{"pip", "pip3"} {
+		if out, e := exec.Command(pip, "freeze").Output(); e == nil {
+			return digestBuf(out), string(out), nil
+		}
 	}
-	// Julia: Pkg.status()
-	out, err = exec.Command("julia", "-e", "using Pkg; for (uuid, info) in Pkg.dependencies(); println(info.name, \"==\", info.version); end").Output()
-	if err == nil && len(out) > 0 {
-		return digestBuf(out), nil
+	if out, e := exec.Command("Rscript", "-e", "cat(paste(installed.packages()[,'Package'], installed.packages()[,'Version'], sep='==', collapse='\n'))").Output(); e == nil && len(out) > 0 {
+		return digestBuf(out), string(out), nil
 	}
-	return "", fmt.Errorf("no package manager available (tried pip, R, Julia)")
+	if out, e := exec.Command("julia", "-e", "using Pkg; for (uuid, info) in Pkg.dependencies(); println(info.name, \"==\", info.version); end").Output(); e == nil && len(out) > 0 {
+		return digestBuf(out), string(out), nil
+	}
+	return "", "", fmt.Errorf("no package manager available (tried the run interpreter, pip, R, Julia)")
 }
 
 // MetricLinesDigest computes the hash of concatenated explicit metric and claim

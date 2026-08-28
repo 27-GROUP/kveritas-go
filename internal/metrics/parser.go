@@ -300,7 +300,9 @@ func (p *Parser) WarnIfEmpty() {
 		fmt.Fprintln(os.Stderr, "[kveritas] Warning: No explicit metrics captured in this run.")
 		fmt.Fprintln(os.Stderr, "[kveritas] Add one line per metric to your script (any language):")
 		fmt.Fprintln(os.Stderr, `[kveritas]   Python:  print(f"KVERITAS_METRIC name=val_accuracy value={acc:.4f} step={epoch}")`)
-		fmt.Fprintln(os.Stderr, `[kveritas]   R:       cat(sprintf("KVERITAS_METRIC name=val_accuracy value=%.4f step=%d\n", acc, epoch))`)
+		// Written directly, not via a Print verb, so the literal %.4f/%d in this R
+		// example are not mistaken for format directives.
+		os.Stderr.WriteString(`[kveritas]   R:       cat(sprintf("KVERITAS_METRIC name=val_accuracy value=%.4f step=%d\n", acc, epoch))` + "\n")
 		fmt.Fprintln(os.Stderr, `[kveritas]   Julia:   println("KVERITAS_METRIC name=val_accuracy value=$(acc) step=$(epoch)")`)
 		fmt.Fprintln(os.Stderr, `[kveritas]   Shell:   echo "KVERITAS_METRIC name=val_accuracy value=0.9471 step=100"`)
 		if p.heuristicCount > 0 {

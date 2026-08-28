@@ -3,8 +3,6 @@
 // performed on the reported hardware. It compares declared FLOPs against the
 // hardware evidence (GPU active time, energy, memory) using bounds set generous
 // toward the author, so an honest run cannot trip the accusatory verdict.
-//
-// See COMPUTE_ATTESTATION_SPEC.md for the full design.
 package compute
 
 import (
