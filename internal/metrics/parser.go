@@ -1,19 +1,6 @@
-// Package metrics implements the K-Veritas metric capture protocol.
-//
-// Primary format (guaranteed capture):
-//
-//	KVERITAS_METRIC name=<identifier> value=<float> [step=<value>]
-//
-// Additional protocol lines:
-//
-//	KVERITAS_PHASE name=<phase>                                    Phase boundary with hardware snapshot
-//	KVERITAS_CLAIM metric=<name> value=<float> [phase=<phase>]     Inline claim committed in stdout
-//	KVERITAS_INPUT src=seed:<value>                                 Seed commitment before computation
-//
-// The entire stdout stream is SHA-256 hashed byte-for-byte as the process runs.
-// Each metric, claim, phase, and seed is anchored to its line number within
-// that hash, making it impossible to insert, remove, or reorder without
-// invalidating the hash.
+// Package metrics parses the KVERITAS_* stdout protocol lines. The whole stdout
+// stream is SHA-256 hashed as it runs, and each match is anchored to its line
+// number, so lines cannot be inserted, removed, or reordered undetected.
 package metrics
 
 import (
@@ -100,8 +87,7 @@ type Parser struct {
 	seedCount      int
 }
 
-// Parse checks a line for the primary KVERITAS_METRIC format.
-// Returns a metric and true only when the explicit prefix is found.
+// Parse returns a metric and true only when the KVERITAS_METRIC prefix matches.
 func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
 	m := explicitRe.FindStringSubmatch(line)
 	if m == nil {
@@ -124,8 +110,7 @@ func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
 	return metric, true
 }
 
-// ParsePhase checks a line for KVERITAS_PHASE.
-// Returns the phase name and true if found.
+// ParsePhase returns the KVERITAS_PHASE name and true if the line matches.
 func (p *Parser) ParsePhase(line string) (string, bool) {
 	m := phaseRe.FindStringSubmatch(line)
 	if m == nil {
@@ -135,8 +120,7 @@ func (p *Parser) ParsePhase(line string) (string, bool) {
 	return m[1], true
 }
 
-// ParseClaim checks a line for KVERITAS_CLAIM.
-// Returns an InlineClaim and true if found.
+// ParseClaim returns a KVERITAS_CLAIM as an InlineClaim and true if it matches.
 func (p *Parser) ParseClaim(line string, lineNum int) (*session.InlineClaim, bool) {
 	m := claimRe.FindStringSubmatch(line)
 	if m == nil {
@@ -196,8 +180,7 @@ func (p *Parser) ParseArtifact(line string) (*ArtifactDecl, bool) {
 	return d, true
 }
 
-// ParseSeed checks a line for KVERITAS_INPUT src=seed:<value>.
-// Returns the seed value and true if found.
+// ParseSeed returns the KVERITAS_INPUT seed value and true if the line matches.
 func (p *Parser) ParseSeed(line string) (string, bool) {
 	m := inputRe.FindStringSubmatch(line)
 	if m == nil {
@@ -300,8 +283,7 @@ func (p *Parser) WarnIfEmpty() {
 		fmt.Fprintln(os.Stderr, "[kveritas] Warning: No explicit metrics captured in this run.")
 		fmt.Fprintln(os.Stderr, "[kveritas] Add one line per metric to your script (any language):")
 		fmt.Fprintln(os.Stderr, `[kveritas]   Python:  print(f"KVERITAS_METRIC name=val_accuracy value={acc:.4f} step={epoch}")`)
-		// Written directly, not via a Print verb, so the literal %.4f/%d in this R
-		// example are not mistaken for format directives.
+		// WriteString, not a Print verb: keeps the literal %.4f/%d from being read as format directives.
 		os.Stderr.WriteString(`[kveritas]   R:       cat(sprintf("KVERITAS_METRIC name=val_accuracy value=%.4f step=%d\n", acc, epoch))` + "\n")
 		fmt.Fprintln(os.Stderr, `[kveritas]   Julia:   println("KVERITAS_METRIC name=val_accuracy value=$(acc) step=$(epoch)")`)
 		fmt.Fprintln(os.Stderr, `[kveritas]   Shell:   echo "KVERITAS_METRIC name=val_accuracy value=0.9471 step=100"`)

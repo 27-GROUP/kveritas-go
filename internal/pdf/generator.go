@@ -1,9 +1,7 @@
-// Package pdf generates K-Veritas verification reports.
-//
-// The report is a self-contained PDF file. Cryptographic metadata is appended
-// after the PDF %%EOF marker between known delimiters so that standard PDF
-// readers display the visual report while the verify command can extract and
-// check the embedded attestation data without a PDF parsing library.
+// Package pdf generates K-Veritas verification reports as self-contained PDFs.
+// Attestation metadata is appended after %%EOF between delimiters, so standard
+// readers show the visual report while verify extracts the seal without a PDF
+// parser.
 //
 // Metadata block format (appended verbatim after %%EOF):
 //
@@ -160,7 +158,6 @@ func (b *builder) checkSpace(needed float64) {
 	}
 }
 
-// lineHeight returns the line height for a given font size.
 func lineH(size float64) float64 { return size * 1.4 }
 
 func (b *builder) writeLine(text, font string, size, x float64) {
@@ -786,9 +783,8 @@ func (b *builder) render() ([]byte, error) {
 		pageNums = append(pageNums, pgObj)
 	}
 
-	// We need to write the Pages and Catalog objects. Their numbers must be
-	// 1 (catalog) and 2 (pages) per PDF convention, but we wrote fonts first.
-	// Instead, embed them with their actual numbers.
+	// Pages and Catalog are emitted last with their actual object numbers rather
+	// than the conventional 1 and 2, since fonts were written first.
 	kidsStr := ""
 	for i, n := range pageNums {
 		if i > 0 {

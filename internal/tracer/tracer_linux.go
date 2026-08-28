@@ -1,10 +1,9 @@
 //go:build linux
 
-// Package tracer records what a run reads, writes, and spawns so the run can be
-// drawn as an event tree. It watches the operating system rather than the process,
-// so it works for any language: inotify reports file opens and writes under the
-// project directory, and /proc is polled for subprocesses. It lives in the parent
-// kveritas process, out of the traced program's reach.
+// Package tracer records what a run reads, writes, and spawns, from the parent
+// kveritas process out of the traced program's reach. It watches the OS, not the
+// process, so it is language-agnostic: inotify for file activity under the project
+// directory, /proc polling for subprocesses.
 package tracer
 
 import (
@@ -27,10 +26,9 @@ import (
 // enormous tree cannot produce an unbounded trace.
 const maxFiles = 10000
 
-// skipDirs are never watched; they are noise or would feed back on ourselves.
-// __pycache__ is deliberately kept: on a warm run Python reads a module's cached
-// bytecode instead of reopening its .py, so watching it (and normalizing the .pyc
-// back to its source) is how the "main used helper.py" edge survives repeat runs.
+// skipDirs are never watched: noise, or feedback on ourselves. __pycache__ is kept
+// on purpose, since a warm run reads cached bytecode instead of the .py; watching
+// it and normalizing the .pyc back to source keeps the "main used helper.py" edge.
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, ".venv": true,
 	"venv": true, ".kveritas": true, "dist": true, ".mypy_cache": true,
@@ -247,9 +245,8 @@ func (o *Observer) atCap() bool {
 func (o *Observer) procLoop() {
 	defer o.wg.Done()
 	root := int(atomic.LoadInt32(&o.pid))
-	// Poll frequently: a subprocess that does real work lives far longer than
-	// this, and reading /proc is cheap. Very short-lived helpers may still be
-	// missed, but they usually also show up as a file read.
+	// Poll frequently: real subprocesses outlive this and /proc is cheap. Very
+	// short-lived helpers may be missed, but usually surface as a file read too.
 	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 	for {

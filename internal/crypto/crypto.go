@@ -1,15 +1,5 @@
-// Package crypto implements the K-Veritas signing protocol.
-//
-// Protocol summary:
-//  1. data_hash  = SHA-256(canonical_json(experiment_data))  [64 hex chars]
-//  2. nonce      = hex(16 random bytes)                      [32 hex chars]
-//  3. signed_at  = RFC3339Nano UTC timestamp
-//  4. payload    = "{data_hash}:{nonce}:{signed_at}"
-//  5. signature  = RSA-PSS-SHA256(payload, salt=MAX)         [base64]
-//  6. msg_hash   = SHA-256(payload)                          [64 hex chars]
-//
-// Verification reconstructs the payload from stored fields, checks msg_hash,
-// then verifies the RSA-PSS signature.
+// Package crypto implements the K-Veritas signing protocol: sign the payload
+// "data_hash:nonce:signed_at" with RSA-PSS-SHA256.
 package crypto
 
 import (
@@ -36,8 +26,7 @@ func HashBytes(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// HashFile returns the SHA-256 hex digest of the named file.
-// Uses streaming hash to avoid loading the entire file into memory.
+// HashFile returns the SHA-256 hex digest of the named file, streamed.
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -51,9 +40,8 @@ func HashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// CanonicalHash marshals v to deterministic JSON (sorted keys at every level)
-// and returns the SHA-256 hex digest. This matches Python's
-// json.dumps(v, sort_keys=True, default=str, ensure_ascii=True).
+// CanonicalHash returns the SHA-256 hex digest of v as sorted-key JSON,
+// matching Python's json.dumps(sort_keys=True).
 func CanonicalHash(v interface{}) (string, error) {
 	b, err := sortedMarshal(v)
 	if err != nil {
@@ -62,10 +50,8 @@ func CanonicalHash(v interface{}) (string, error) {
 	return HashBytes(b), nil
 }
 
-// CanonicalHashWithBytes returns both the SHA-256 hex digest and the raw
-// canonical JSON bytes. The bytes are embedded in the seal record so that
-// verifiers can re-hash them directly instead of reconstructing the signing
-// data structure (which breaks when new fields are added).
+// CanonicalHashWithBytes also returns the raw canonical JSON, embedded in the
+// seal so verifiers re-hash the exact bytes rather than rebuild the structure.
 func CanonicalHashWithBytes(v interface{}) (string, []byte, error) {
 	b, err := sortedMarshal(v)
 	if err != nil {
@@ -143,8 +129,8 @@ func LoadPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
 	return x509.ParsePKCS1PrivateKey(block.Bytes)
 }
 
-// SignPSS signs payload with RSA-PSS-SHA256 using maximum salt length.
-// Returns base64-encoded signature.
+// SignPSS returns a base64 RSA-PSS-SHA256 signature over payload. The digest is
+// SHA-256 of the payload bytes, matching Python's sign over payload.encode.
 func SignPSS(privKey *rsa.PrivateKey, payload string) (string, error) {
 	h := sha256.Sum256([]byte(payload))
 	opts := &rsa.PSSOptions{
@@ -172,8 +158,7 @@ func VerifyPSS(pubKey *rsa.PublicKey, payload, sigBase64 string) error {
 	return rsa.VerifyPSS(pubKey, crypto.SHA256, h[:], sigBytes, opts)
 }
 
-// sortedMarshal produces JSON with recursively sorted object keys,
-// matching Python's json.dumps(v, sort_keys=True).
+// sortedMarshal produces JSON with recursively sorted object keys.
 func sortedMarshal(v interface{}) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

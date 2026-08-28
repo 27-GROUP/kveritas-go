@@ -77,10 +77,8 @@ type RunRecord struct {
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 }
 
-// Artifact is a model or dataset the run declared for attestation. A public
-// artifact carries its plain content hash so a verifier can match it against an
-// independently published reference; a private one carries a salted commitment
-// that reveals nothing.
+// Artifact is a model or dataset declared for attestation. Public artifacts carry
+// a plain content hash; private ones a salted commitment that reveals nothing.
 type Artifact struct {
 	Role       string `json:"role"`
 	Name       string `json:"name,omitempty"`
@@ -89,10 +87,9 @@ type Artifact struct {
 	SizeBucket string `json:"size_bucket,omitempty"`
 }
 
-// Provenance is the signed state history of a run: a hash-chained series of
-// content-addressed snapshots taken at run boundaries. At the default disclosure
-// level file names are redacted, so the timeline proves what changed and when
-// without revealing code, data, or filenames.
+// Provenance is a run's hash-chained state history: content-addressed snapshots
+// at run boundaries. At the default disclosure level names are redacted, so it
+// proves what changed and when without revealing code or filenames.
 type Provenance struct {
 	Disclosure string         `json:"disclosure"`
 	Root       string         `json:"root"`
@@ -116,9 +113,8 @@ type ProvChange struct {
 	Path string `json:"path"`
 }
 
-// ProvCommit is one state transition: the Merkle root of the tracked files at
-// this moment, the event that produced it, and a link that binds it to the prior
-// commit so the order and content cannot be altered.
+// ProvCommit is one state transition: the Merkle root of the tracked files, the
+// event that produced it, and a link binding it to the prior commit.
 type ProvCommit struct {
 	Index     int          `json:"index"`
 	Timestamp time.Time    `json:"timestamp"`
@@ -131,18 +127,16 @@ type ProvCommit struct {
 }
 
 // WithheldFile is a file the author kept out of any bundle via .kveritasignore.
-// Its hash is still committed, so it is disclosed here (redacted) rather than
-// silently dropped.
+// Its hash is still committed, so it is disclosed here rather than silently dropped.
 type WithheldFile struct {
 	Path       string `json:"path"`
 	Hash       string `json:"hash"`
 	SizeBucket string `json:"size_bucket"`
 }
 
-// FileEvent is one file the run touched, as seen by the activity tracer. Op is
-// "read" for a file that was opened but not written, or "write" for a file the
-// run created or modified. Reads are coalesced to the first open of each path;
-// writes carry the final content hash.
+// FileEvent is one file the run touched. Op is "read" (opened, not written) or
+// "write" (created or modified). Reads coalesce to first open; writes carry the
+// final content hash.
 type FileEvent struct {
 	Op        string    `json:"op"`
 	Path      string    `json:"path"`
@@ -158,10 +152,8 @@ type ProcEvent struct {
 	StartAt time.Time `json:"start_at"`
 }
 
-// RunTrace is the file and subprocess activity captured during a single run.
-// It is reconstructed into an event tree and timeline at seal time so a reviewer
-// can see what the run read, produced, and spawned, and when. Truncated is set
-// when the number of distinct files exceeded the capture cap.
+// RunTrace is the file and subprocess activity captured during a run, shown as a
+// timeline at seal time. Truncated is set when distinct files exceeded the cap.
 type RunTrace struct {
 	Files     []FileEvent `json:"files,omitempty"`
 	Procs     []ProcEvent `json:"procs,omitempty"`
@@ -244,9 +236,8 @@ type HMCAResult struct {
 	Verdict string   `json:"hmca_verdict"`
 }
 
-// DeclaredModel is the author-committed model card for a run, declared via the
-// KVERITAS_MODEL and KVERITAS_WORKLOAD stdout directives. It is the WRITTEN claim
-// that the compute-cost certificate checks against the hardware evidence.
+// DeclaredModel is the author-committed model card (KVERITAS_MODEL /
+// KVERITAS_WORKLOAD), the written claim the compute certificate checks.
 type DeclaredModel struct {
 	Params      int64   `json:"params,omitempty"`
 	Arch        string  `json:"arch,omitempty"`
@@ -257,10 +248,9 @@ type DeclaredModel struct {
 	SeqLen      int64   `json:"seq_len,omitempty"`
 }
 
-// ComputeCert is the per-run compute-cost attestation certificate: a non-deniable
-// check that the declared work was physically performed on the reported hardware.
-// It is derived from the declared model card and the hardware samples, and is
-// recomputed at verify time so any sample or claim tampering breaks the signature.
+// ComputeCert is the per-run compute-cost certificate, derived from the model
+// card and hardware samples and recomputed at verify time so tampering breaks
+// the signature.
 type ComputeCert struct {
 	FDeclaredFLOPs float64  `json:"f_declared_flops,omitempty"`
 	GPUActiveSec   float64  `json:"gpu_active_sec,omitempty"`

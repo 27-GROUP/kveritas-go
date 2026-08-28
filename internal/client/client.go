@@ -137,8 +137,8 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 	return &resp, nil
 }
 
-// RecordRun records a run invocation in the server ledger.
-// This records every invocation -- successful or not -- for the multi-run ledger.
+// RecordRun records a run invocation in the server ledger, successful or not, for
+// the multi-run ledger.
 func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error {
 	var resp struct{}
 	return c.post("/api/v1/record-run", recordRunRequest{

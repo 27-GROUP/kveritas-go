@@ -31,8 +31,8 @@ func Snapshot() session.HardwareInfo {
 	}
 }
 
-// MachineID returns an 8-byte hex fingerprint of the host machine.
-// It is not a secret; its purpose is replay-attack detection across machines.
+// MachineID returns an 8-byte hex host fingerprint. Not a secret; used to detect
+// replay across machines.
 func MachineID() string {
 	hostname, _ := os.Hostname()
 	raw := fmt.Sprintf("%s:%s:%s:%d", hostname, runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
@@ -40,8 +40,8 @@ func MachineID() string {
 	return hex.EncodeToString(h[:8])
 }
 
-// DetailedCounters captures a full hardware state snapshot for phase tracking.
-// Best-effort: zeros mean the counter was unavailable on this platform.
+// DetailedCounters captures a hardware snapshot. Best-effort: a zero means the
+// counter was unavailable on this platform.
 func DetailedCounters() session.HardwareCounters {
 	c := session.HardwareCounters{}
 	switch runtime.GOOS {
@@ -54,7 +54,6 @@ func DetailedCounters() session.HardwareCounters {
 		c.CPUTimeSec = darwinCPUTime()
 		c.MemUsedGB = darwinMemUsed()
 	}
-	// GPU counters (nvidia-smi works on Linux, Windows, and some macOS)
 	g := gpuCounters()
 	c.GPUUtilPct = g.GPUUtilPct
 	c.GPUMemUsedMB = g.GPUMemUsedMB
@@ -63,8 +62,8 @@ func DetailedCounters() session.HardwareCounters {
 	return c
 }
 
-// CapturePhaseEvent creates a PhaseEvent with current hardware counters. When pid
-// is non-zero the counters are scoped to that process tree, matching the sampler.
+// CapturePhaseEvent records current counters at a phase boundary. A non-zero pid
+// scopes them to that process tree, matching the sampler.
 func CapturePhaseEvent(name string, line, pid int) session.PhaseEvent {
 	counters := DetailedCounters()
 	if pid != 0 {

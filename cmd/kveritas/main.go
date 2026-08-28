@@ -30,8 +30,7 @@ import (
 
 const defaultServer = "https://kveritas-api-production.up.railway.app"
 
-// publicVerifyServer is the public entry point reviewers use for the ledger
-// check. It fronts the attestation server, so the backend host is never exposed.
+// Public ledger-check entry point; fronts the attestation server so its host stays hidden.
 const publicVerifyServer = "https://kveritas.org"
 
 var root = &cobra.Command{
@@ -93,9 +92,7 @@ func main() {
 var proveProject string
 var proveOutput string
 
-// cmdProve reveals one file against a signed snapshot without exposing the others.
-// cmdProve reveals one or more files against a signed snapshot without exposing
-// the others, as a single self-contained proof that embeds the report's seal.
+// Emits a self-contained proof embedding the report's seal.
 var cmdProve = &cobra.Command{
 	Use:   "prove <report.pdf> <file> [file...]",
 	Short: "Prove one or more files were part of a signed snapshot, revealing nothing else",
@@ -144,14 +141,12 @@ var cmdProve = &cobra.Command{
 	},
 }
 
-// cmdVerifyProof checks a self-contained proof, or a proof against a report.
 var harnessProveInput string
 var harnessProveOutput string
 var harnessProveTUID string
 var harnessProveOut string
 
-// cmdHarnessProve reveals one recorded prompt/output and proves it sat at a given
-// position in a signed session, without exposing any other entry's content.
+// Reveals one recorded entry and proves its position in the chain, exposing nothing else.
 var cmdHarnessProve = &cobra.Command{
 	Use:   "harness-prove <session.json> <entry-index | --tool-use-id ID>",
 	Short: "Prove a recorded prompt or output was in a signed agent session",
@@ -216,8 +211,7 @@ var cmdHarnessProve = &cobra.Command{
 	},
 }
 
-// cmdVerifyHarnessProof checks a harness proof: the chain is authentic and the
-// revealed content re-hashes to the committed hash at the named entry.
+// Checks chain authenticity and that revealed content re-hashes to its committed entry.
 var cmdVerifyHarnessProof = &cobra.Command{
 	Use:   "verify-harness-proof <proof.json>",
 	Short: "Check a harness prompt/output proof",
@@ -301,7 +295,6 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 	return nil
 }
 
-// loadProofFile returns the proof if path is a self-contained proof JSON.
 func loadProofFile(path string) (*provenance.Proof, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -319,7 +312,6 @@ func loadProofFile(path string) (*provenance.Proof, bool) {
 
 var checkoutReport string
 
-// cmdCheckout materializes a snapshot's files from an open-disclosure bundle.
 var cmdCheckout = &cobra.Command{
 	Use:   "checkout <bundle.zip> <[run:]phase|index> <outdir>",
 	Short: "Reconstruct the files of a snapshot from a checkout bundle",
@@ -490,8 +482,7 @@ func init() {
 	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
 
-// harnessInit registers a harness session and binds the designation D at genesis,
-// signed by the attestation server so it cannot be altered after the session.
+// Binds the designation at genesis with a server signature so it cannot be altered later.
 func harnessInit(kvDir, wd, machineID, sessionID string) error {
 	designation := defaultDesignation
 	if initDesignate != "" {
@@ -589,9 +580,8 @@ func harnessInit(kvDir, wd, machineID, sessionID string) error {
 	return nil
 }
 
-// installClaudeHooks registers the recording hooks in the project's Claude Code
-// settings so every designated tool call and prompt is committed to the chain
-// before it takes effect. Existing hooks are preserved.
+// Installs recording hooks so designated actions are committed to the chain before
+// they take effect. Existing hooks are preserved.
 func installClaudeHooks(projectDir string) error {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
@@ -752,10 +742,7 @@ type hookInput struct {
 	Prompt        string          `json:"prompt"`
 }
 
-// topAgent names the independent top-level agent an action belongs to. Several
-// agents can run under one chokepoint, so we take the name the launcher set in
-// KVERITAS_AGENT_NAME, fall back to the harness session id (distinct per agent
-// process), and finally to "main" for a lone agent.
+// Names the top-level agent: launcher-set env name, else the per-process session id, else "main".
 func topAgent(h hookInput) string {
 	if name := os.Getenv("KVERITAS_AGENT_NAME"); name != "" {
 		return name
@@ -766,9 +753,8 @@ func topAgent(h hookInput) string {
 	return "main"
 }
 
-// hookActor names the agent that took an action, scoped under its top-level
-// agent. Claude Code tags a sub-agent's tool calls with agent_type and agent_id;
-// a top-level agent's own calls carry neither, so it is named by its top-level id.
+// Scopes an action's actor under its top-level agent; sub-agents carry agent_type/agent_id,
+// a top-level agent's own calls carry neither.
 func hookActor(h hookInput) string {
 	top := topAgent(h)
 	if h.AgentType != "" {
@@ -781,8 +767,7 @@ func hookActor(h hookInput) string {
 	return top
 }
 
-// spawnedAgentID pulls the child agent's id out of an Agent tool result, which
-// is how a spawn is tied to the sub-agent it created.
+// Extracts the child agent id from an Agent tool result to tie a spawn to its sub-agent.
 func spawnedAgentID(resp json.RawMessage) string {
 	var r struct {
 		AgentID string `json:"agentId"`
@@ -791,10 +776,8 @@ func spawnedAgentID(resp json.RawMessage) string {
 	return r.AgentID
 }
 
-// runHookRecord is invoked by a Claude Code hook. It reads the hook payload from
-// stdin and commits a designated action to the chain before the tool is allowed
-// to run. If a designated action cannot be recorded, the pre hook exits 2 to
-// block the tool, so a designated effect cannot occur without its entry.
+// Commits a designated action from the hook payload before the tool runs. On failure the
+// pre hook exits 2 to block the tool, so no designated effect can occur without its entry.
 func runHookRecord(event string) error {
 	data, _ := io.ReadAll(os.Stdin)
 	var h hookInput
@@ -806,8 +789,7 @@ func runHookRecord(event string) error {
 	}
 	sess, err := session.Load(kvDir)
 	if err != nil {
-		// A session directory exists but cannot be read. Fail safe: block a pre
-		// hook so a designated action cannot proceed while recording is disabled.
+		// Fail safe: block the pre hook so an action cannot proceed while recording is broken.
 		if event == "pre" {
 			fmt.Fprintf(os.Stderr, "kveritas: session unreadable; blocking tool to preserve the audit chain: %v\n", err)
 			os.Exit(2)
@@ -1011,9 +993,8 @@ func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	}
 }
 
-// sanitizeForReport returns a copy of the session safe to embed in the report.
-// The provenance salt never leaves the machine, and the source file listing (real
-// paths) is dropped unless the author disclosed names.
+// Copies the session for embedding: the provenance salt never leaves the machine, and
+// real source paths are dropped unless the author disclosed names.
 func sanitizeForReport(s *session.Session) *session.Session {
 	clean := *s
 	clean.ProvSalt = ""
@@ -1023,10 +1004,8 @@ func sanitizeForReport(s *session.Session) *session.Session {
 	return &clean
 }
 
-// renderProvenance prints the state timeline of a run: each snapshot, the event
-// that produced it, and what changed since the previous one. At the redacted
-// level file names are pseudonyms. Withheld files are listed so a reviewer sees
-// what the author kept out of any bundle.
+// Prints a run's snapshot timeline. At the redacted level file names are pseudonyms;
+// withheld files are listed so a reviewer sees what was kept out of any bundle.
 func renderProvenance(idx int, p *session.Provenance) {
 	fmt.Printf("\nRun %d provenance (%s, %d files):\n", idx, p.Disclosure, p.FileCount)
 	for _, c := range p.Commits {
@@ -1062,9 +1041,8 @@ func renderProvenance(idx int, p *session.Provenance) {
 	}
 }
 
-// renderArtifacts prints the attested models and datasets. A public artifact
-// shows its name and content hash (comparable to a published reference); a private
-// one shows only a salted commitment.
+// Prints attested models and datasets: public artifacts show name and hash, private ones
+// show only a salted commitment.
 func renderArtifacts(idx int, arts []session.Artifact) {
 	fmt.Printf("\nRun %d attested artifacts:\n", idx)
 	for _, a := range arts {
@@ -1080,9 +1058,7 @@ func renderArtifacts(idx int, arts []session.Artifact) {
 	}
 }
 
-// renderRunTrace prints the file and subprocess activity of a run as an event
-// tree: what it read, what it produced, and what it spawned, in the order the
-// events were observed.
+// Prints a run's file and subprocess activity: reads, writes, and spawns.
 func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 	var reads, writes []session.FileEvent
 	for _, f := range t.Files {
@@ -1179,7 +1155,7 @@ Files listed with --files are hashed before and after the run.`,
 			return err
 		}
 
-		// Record ALL runs to the server ledger (even failed ones) for the multi-run history.
+		// Record every run in the ledger, failures included, for the multi-run history.
 		if sess.ServerURL != "local" {
 			c := client.New(sess.ServerURL)
 			if ledgerErr := c.RecordRun(sess, rec); ledgerErr != nil {
@@ -1275,10 +1251,8 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
 		}
 
-		// The source bundle ships file contents, so it is only built when the author
-		// The checkout bundle (open disclosure only) is the single bundle now; the
-		// older flat source bundle is gone. Every run's store is merged into one zip
-		// and its hash is bound into the signature below.
+		// Merge every run's store into one checkout bundle (open disclosure only) and bind
+		// its hash into the signature below.
 		var bundleHash string
 		var combinedBundle []byte
 		var checkoutBundleHash string
@@ -1340,9 +1314,8 @@ var cmdSeal = &cobra.Command{
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Merge every run's proof keystore into one sidecar so a proof can reveal a
-		// file from any run, and write the single combined checkout bundle. Both are
-		// kept next to the report before the session directory is cleaned up.
+		// Merge per-run proof keystores into one sidecar so a proof can reveal a file from
+		// any run; keep it and the combined bundle next to the report before cleanup.
 		merged := &provenance.Keystore{SessionID: sess.ID}
 		for _, r := range runs {
 			if k, err := provenance.LoadKeystore(filepath.Join(kvDir, "keystore-"+r.ID+".json")); err == nil {
@@ -1415,7 +1388,6 @@ var cmdSeal = &cobra.Command{
 	},
 }
 
-// reportComputeCert prints a run's compute-cost certificate to stdout.
 func reportComputeCert(c session.ComputeCert) {
 	if c.Verdict == "" || c.Verdict == "N/A" {
 		return
@@ -1457,7 +1429,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		Metrics     []session.Metric     `json:"metrics"`
 		Hardware    session.HardwareInfo `json:"hardware"`
 		EnvDigest   string               `json:"env_digest"`
-		// New fields (omitted when empty for backward compat with old verifier)
+		// Below: omitempty for backward compat with old verifiers.
 		Phases         []session.PhaseEvent     `json:"phases,omitempty"`
 		Claims         []session.InlineClaim    `json:"claims,omitempty"`
 		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
@@ -1507,11 +1479,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		runPayloads = append(runPayloads, rp)
 	}
 
-	// Compute-cost certificates are derived deterministically per run, so they are
-	// recomputed identically at seal and verify; binding them into the signed data
-	// makes any declared-card or sample tampering break the signature. They are
-	// bound only when at least one run declares a model card, so reports without one
-	// (including those from older versions) hash exactly as before.
+	// Compute certs are deterministic, so binding them makes declared-card or sample
+	// tampering break the signature. Bound only when a run declares a card, so reports
+	// without one hash exactly as before.
 	certs := make([]session.ComputeCert, 0, len(runs))
 	anyDeclared := false
 	for _, r := range runs {
@@ -1666,9 +1636,8 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Step 3: verify the RSA-PSS signature against the embedded key. This proves
-		// the document is internally consistent. Whether K-Veritas produced it is a
-		// separate question, decided next against the trust anchor.
+		// Step 3: verify the RSA-PSS signature against the embedded key. Proves internal
+		// consistency only; origin against the trust anchor is decided next.
 		embeddedKey, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
 			return fmt.Errorf("parsing embedded public key: %w", err)
@@ -1678,9 +1647,8 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Origin: the embedded key must match the trust anchor (the key given with
-		// --key, or the K-Veritas server key pinned into this binary). A report signed
-		// with any other key is self-attested: a valid signature, but not from K-Veritas.
+		// Origin: the embedded key must match the trust anchor (--key, or the pinned server
+		// key). Any other key means self-attested: valid signature, but not from K-Veritas.
 		var anchorPEM []byte
 		if verifyKeyPath != "" {
 			anchorPEM, err = os.ReadFile(verifyKeyPath)
@@ -1974,8 +1942,7 @@ func init() {
 	cmdCheck.Flags().StringVar(&checkReportPath, "report", "", "path to K-Veritas PDF report")
 }
 
-// findMetric searches runs for a metric by name.
-// runFilter is 1-indexed; 0 means search all runs.
+// runFilter is 1-indexed; 0 searches all runs.
 func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bool, value float64, explicit bool) {
 	for i, r := range runs {
 		if runFilter > 0 && i+1 != runFilter {
@@ -2097,7 +2064,6 @@ func init() {
 	cmdGenerateClaims.Flags().StringVar(&generateClaimsReportPath, "report", "", "path to K-Veritas PDF report")
 }
 
-// isSourceFile returns true for file arguments that look like executable scripts.
 func isSourceFile(path string) bool {
 	exts := []string{".py", ".r", ".R", ".jl", ".sh", ".bash", ".rb", ".js", ".ts"}
 	lower := strings.ToLower(path)

@@ -26,11 +26,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Run executes command as a monitored subprocess.
-//
-// It tees stdout and stderr to the terminal while simultaneously hashing them,
-// parsing metrics, capturing phase boundaries with hardware snapshots, recording
-// inline claims, and tracking seed commitments.
+// Run executes command as a monitored subprocess, teeing its output while hashing
+// it and capturing metrics, phase boundaries with hardware snapshots, claims, and seeds.
 func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
@@ -57,8 +54,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, fmt.Errorf("pre-run file hashing: %w", preHashErr)
 	}
 
-	// Start background hardware sampler. A short interval gives enough resolution
-	// to integrate GPU energy and active time for the compute-cost certificate.
+	// Short interval gives enough resolution to integrate GPU energy for the compute cert.
 	sampler := hardware.NewSampler(100 * time.Millisecond)
 	sampler.Start()
 
@@ -106,8 +102,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		return nil, err
 	}
 
-	// Start watching the project tree before the child runs so early file opens
-	// (the interpreter loading the script and its imports) are captured.
+	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
 	obs := tracer.New(sess.ProjectDir)
 	obs.Start()
 
@@ -118,15 +113,13 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	obs.SetPID(cmd.Process.Pid)
 	sampler.SetPID(cmd.Process.Pid)
 
-	// Provenance records a content-addressed snapshot at the start, at each phase,
-	// and at the end, so the run becomes a tamper-evident state timeline.
+	// Snapshots at start, each phase, and end make the run a tamper-evident state timeline.
 	provLevel := provenance.ParseLevel(sess.Disclosure)
 	salt := decodeSalt(sess.ProvSalt)
 	prov := provenance.New(sess.ProjectDir, sess.Disclosure, sess.ID, salt)
 	prov.Snapshot("run_start", "")
 
-	// The command line can name a private script or dataset, so at the redacted
-	// level only the interpreter is kept in the signed record.
+	// The command can name a private script or dataset, so redacted keeps only the interpreter.
 	rec.Command = redactCommand(command, provLevel)
 
 	var wg sync.WaitGroup
@@ -135,7 +128,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	go func() {
 		defer wg.Done()
 		scanner := bufio.NewScanner(stdoutPipe)
-		// Increase scanner buffer for long lines
 		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 		lineNum := 0
 		for scanner.Scan() {
@@ -253,8 +245,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
-	// The cleartext activity map exposes real file names, so it only ships once the
-	// author has chosen to disclose names.
+	// The cleartext activity map exposes real file names, so it ships only once names are disclosed.
 	trace := obs.Stop()
 	if provLevel >= provenance.Names {
 		rec.Trace = trace
@@ -334,14 +325,13 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		fmt.Fprintf(os.Stderr, "[kveritas] Warning: files modified during run: %v\n", rec.Modified)
 	}
 
-	// The file-hint hashes are keyed by real paths, and provenance already covers
-	// these files, so they are dropped at the redacted level.
+	// File-hint hashes are keyed by real paths and provenance already covers them,
+	// so they are dropped at the redacted level.
 	if provLevel < provenance.Names {
 		rec.PreHashes = nil
 		rec.PostHashes = nil
 		rec.Modified = nil
-		// The dependency list can name internal packages, so at the redacted level
-		// only its digest is kept; the digest stays bound into the signature.
+		// The package list can name internal packages; redacted keeps only its digest, still signed.
 		rec.EnvPackages = ""
 	}
 
@@ -386,9 +376,9 @@ func redactCommand(cmd []string, level provenance.Level) []string {
 	return []string{cmd[0], "<redacted>"}
 }
 
-// buildArtifact hashes a declared model or dataset. A public artifact gets its
-// plain content hash so it can be matched to a published reference; a private one
-// gets a salted commitment, and its name is only kept once names are disclosed.
+// buildArtifact hashes a declared model or dataset. Public artifacts get a plain
+// content hash so they can be matched to a published reference; private ones get a
+// salted commitment, with the name kept only once names are disclosed.
 func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, level provenance.Level) *session.Artifact {
 	content, err := os.ReadFile(filepath.Join(projectDir, d.Path))
 	if err != nil {
@@ -408,12 +398,10 @@ func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, leve
 	return art
 }
 
-// envDigest captures the run's dependency environment. For a Python command it
-// follows the exact interpreter that ran the code, so an absolute or virtualenv
-// interpreter (e.g. ./venv/bin/python) reports its own packages rather than
-// whatever pip happens to be first on PATH. It returns the freeze content and its
-// SHA-256 digest: the digest is always bound into the signature, the content is
-// stored for reproducibility (and withheld at the redacted disclosure level).
+// envDigest captures the run's dependency environment. For Python it follows the
+// exact interpreter that ran the code, not whatever pip is first on PATH. Returns
+// the freeze content and its digest; the digest is always signed, the content is
+// withheld at the redacted level.
 func envDigest(command []string) (digest string, content string, err error) {
 	if len(command) > 0 && strings.HasPrefix(strings.ToLower(filepath.Base(command[0])), "python") {
 		interp := command[0]
@@ -441,9 +429,8 @@ func envDigest(command []string) (digest string, content string, err error) {
 	return "", "", fmt.Errorf("no package manager available (tried the run interpreter, pip, R, Julia)")
 }
 
-// MetricLinesDigest computes the hash of concatenated explicit metric and claim
-// lines from the run's stdout, for ledger recording. The actual values stay
-// private; only the hash is published.
+// MetricLinesDigest hashes the concatenated metric and claim lines for ledger
+// recording; only the hash is published, not the values.
 func MetricLinesDigest(metricLines []string) string {
 	h := sha256.New()
 	for _, l := range metricLines {

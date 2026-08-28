@@ -1,11 +1,7 @@
-// Package harness implements agent non-repudiation for agentic sessions.
-//
-// A harness session is a hash-chained log of designated actions. The genesis
-// binds the designation D and is signed by the attestation server; each entry
-// binds an actor identity, its input and output content, and its position via a
-// link that depends on the previous link. Verification recomputes the chain and
-// localizes the first entry that fails, so no party can alter the identity,
-// content, or order of a designated action without detection.
+// Package harness records an agentic session as a hash-chained log of designated
+// actions. Each entry's link binds the actor, its input and output, and the prior
+// chain, so the identity, content, or order of an action cannot be altered
+// undetected. Verification recomputes the chain and localizes the first failure.
 package harness
 
 import (
@@ -52,13 +48,10 @@ type Genesis struct {
 	Server          ServerSig `json:"server"`
 }
 
-// Entry is one designated action in the session order. TopAgent names the
-// independent top-level agent the action belongs to (several may share one
-// session); AgentID identifies a sub-agent within that top-level agent, and
-// SpawnedID, set on a spawn result, names the sub-agent that action created.
-// Together they let the whole forest of agents be rebuilt from signed facts
-// rather than trusted at record time, which is what makes attribution
-// tamper-evident even across many agents and their sub-agents.
+// Entry is one designated action in session order. TopAgent names the top-level
+// agent it belongs to, AgentID a sub-agent within it, and SpawnedID (on a spawn
+// result) the sub-agent that action created. Together they let the agent forest be
+// rebuilt from signed facts, so attribution stays tamper-evident across sub-agents.
 type Entry struct {
 	Index       int    `json:"index"`
 	Actor       string `json:"actor"`
@@ -122,13 +115,10 @@ func bucket(t string) string {
 	}
 }
 
-// ActorTree reconstructs the forest of agents from the entries. Each independent
-// top-level agent is a root; a sub-agent hangs under whichever agent actually
-// spawned it, within that top-level agent's own subtree, so several top-level
-// agents can each have their own sub-agents nested to any depth. Spawn edges and
-// the agent namespace come from the signed TopAgent/AgentID/SpawnedID fields, so
-// re-attributing or hiding an agent is detectable; a manually recorded
-// ParentActor is honored as a fallback for callers that are not the hook.
+// ActorTree reconstructs the agent forest from the entries: each top-level agent is
+// a root, and a sub-agent hangs under whichever agent spawned it. Spawn edges come
+// from the signed TopAgent/AgentID/SpawnedID fields, so re-attributing or hiding an
+// agent is detectable; a manual ParentActor is honored as a fallback off the hook.
 func ActorTree(entries []Entry) []*ActorNode {
 	topName := func(e Entry) string {
 		if e.TopAgent != "" {
@@ -452,8 +442,7 @@ func AppendEntry(kvDir string, e Entry) (*Entry, error) {
 }
 
 // lock serializes chain appends across processes, since parallel sub-agents can
-// each fire a hook at the same time. It is a simple exclusive-create spinlock,
-// which is enough here and works the same on every platform.
+// each fire a hook at once. An exclusive-create spinlock is enough and portable.
 func lock(kvDir string) (func(), error) {
 	path := filepath.Join(kvDir, lockFile)
 	for i := 0; i < 1000; i++ {
@@ -467,9 +456,8 @@ func lock(kvDir string) (func(), error) {
 	return nil, fmt.Errorf("could not acquire chain lock at %s", path)
 }
 
-// Result is what verification hands back: a verdict, and when something is wrong,
-// exactly which entry and which actor it went wrong at so an auditor can go
-// straight to it.
+// Result is what verification hands back: a verdict, and on failure the exact entry
+// and actor it went wrong at.
 type Result struct {
 	Verdict     string
 	Detail      string

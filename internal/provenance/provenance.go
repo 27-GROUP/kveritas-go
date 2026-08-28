@@ -1,12 +1,8 @@
-// Package provenance records a run as a chain of content-addressed snapshots.
-// At each boundary (run start, a phase, run end) it hashes the tracked source
-// files into a Merkle root and links it to the previous one, so the result is a
-// tamper-evident timeline of what the working set looked like and what changed.
-//
-// Each leaf is salted with a key derived from the session salt and the file path,
-// so a published hash cannot be guessed back to known content, and revealing one
-// file (a selective-disclosure proof) never exposes the others. At the default
-// disclosure level file names are shown as stable pseudonyms.
+// Package provenance records a run as a chain of content-addressed snapshots. At
+// each boundary (run start, phase, run end) it hashes the tracked files into a
+// Merkle root linked to the previous one, giving a tamper-evident timeline of what
+// changed. Leaves are salted per file, so a published hash cannot be guessed back
+// to known content and revealing one file never exposes the others.
 package provenance
 
 import (
@@ -107,8 +103,8 @@ func New(root, level, sessionID string, salt []byte) *Recorder {
 	return r
 }
 
-// leafSalt derives a per-file salt from the session salt. Revealing one file's
-// salt does not reveal the session salt or any other file's salt.
+// leafSalt derives a per-file salt from the session salt, so revealing one file's
+// salt exposes neither the session salt nor any other file's.
 func (r *Recorder) leafSalt(rel string) []byte {
 	m := hmac.New(sha256.New, r.salt)
 	m.Write([]byte(rel))
@@ -188,8 +184,8 @@ func (r *Recorder) Snapshot(kind, name string) {
 		if withheld {
 			r.withheld[rel] = withheldInfo{hash: lh, size: info.Size()}
 		}
-		// A withheld file's hash is committed above, but its content never enters the
-		// bundle, so a .kveritasignore file can never be reconstructed via checkout.
+		// A withheld file's hash is committed, but its content never enters the bundle,
+		// so a .kveritasignore file can never be reconstructed via checkout.
 		if r.level >= Open && !withheld {
 			ch := contentHash(content)
 			r.objects[ch] = content

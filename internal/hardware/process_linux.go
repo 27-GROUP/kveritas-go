@@ -13,11 +13,10 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// ProcessCounters measures hardware use for the process tree rooted at rootPID,
-// so activity from anything else on the machine (a browser, another job) is not
-// counted against the run. CPU and memory come from /proc for the whole tree; GPU
-// memory and utilization come from nvidia-smi filtered to the tree's PIDs; GPU
-// power is the device draw scaled by the tree's share of GPU utilization.
+// ProcessCounters measures hardware use for the tree rooted at rootPID, so other
+// activity on the machine is not counted against the run. CPU and memory come from
+// /proc; GPU memory and utilization from nvidia-smi filtered to the tree's PIDs;
+// GPU power is device draw scaled by the tree's share of utilization.
 func ProcessCounters(rootPID int) session.HardwareCounters {
 	c := ProcessCPUCounters(rootPID)
 	g := ProcessGPUCounters(rootPID)
@@ -28,9 +27,8 @@ func ProcessCounters(rootPID int) session.HardwareCounters {
 	return c
 }
 
-// ProcessCPUCounters reads only the cheap /proc and sysfs counters for the tree
-// (CPU time, memory, context switches, page faults, threads, CPU frequency, and
-// I/O). It makes no nvidia-smi calls, so it is fast enough to sample at high rate.
+// ProcessCPUCounters reads only the cheap /proc and sysfs counters for the tree.
+// It makes no nvidia-smi calls, so it is fast enough to sample at a high rate.
 func ProcessCPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}
@@ -51,8 +49,8 @@ func ProcessCPUCounters(rootPID int) session.HardwareCounters {
 	return c
 }
 
-// ProcessGPUCounters reads the per-process GPU counters via nvidia-smi (slower).
-// It returns only the GPU fields; the sampler refreshes it at a lower rate.
+// ProcessGPUCounters reads the per-process GPU counters via nvidia-smi (slower),
+// returning only the GPU fields. The sampler refreshes it at a lower rate.
 func ProcessGPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}

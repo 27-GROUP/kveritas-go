@@ -1,17 +1,6 @@
-// Package hmca implements the Hardware-Metric Consistency Analyzer.
-//
-// HMCA no longer compares reported metrics against hardware (that comparison is
-// confounded: the same score can legitimately cost very different amounts of
-// work). Instead it asks a metric-blind question about the execution itself:
-//
-//	Are the run's telemetry channels consistent shadows of ONE process?
-//
-// A genuine computation drives every channel (CPU, memory, context switches,
-// page faults, CPU frequency, I/O, and, when a GPU is used, its utilization /
-// memory / power / temperature) from a single underlying activity, so the
-// channels co-fluctuate. A fabricated, replayed, or spliced trace authors the
-// channels independently, so the coupling breaks. HMCA measures that coupling
-// (single-cause coherence) and never inspects the claimed result.
+// Package hmca measures single-cause coherence: whether a run's telemetry
+// channels co-fluctuate as shadows of one process. Genuine computation couples
+// them; a fabricated, replayed, or spliced trace does not. Metric-blind.
 package hmca
 
 import (
@@ -22,11 +11,10 @@ import (
 )
 
 const (
-	minSamples    = 20   // below this, too little evidence -> abstain
-	minActive     = 2    // need at least two active channels to judge coupling
+	minSamples    = 20   // below this, abstain
+	minActive     = 2    // need two active channels to judge coupling
 	gpuIdleRangeW = 15.0 // GPU power swing below this means the GPU did not engage
-	// coherence thresholds (single-cause co-fluctuation, 0..1), calibrated on a
-	// benchmark of genuine runs vs fabricated/replayed traces.
+	// Coherence thresholds (0..1), calibrated on genuine vs fabricated traces.
 	coherentPASS = 0.15
 	coherentWARN = 0.08
 )
@@ -36,9 +24,8 @@ type channel struct {
 	vals []float64
 }
 
-// Analyze computes single-cause coherence per run and returns the session verdict.
-// The samples argument is accepted for signature compatibility; per-run coherence
-// uses each run's own scoped hardware samples.
+// Analyze computes per-run coherence from each run's scoped samples and returns
+// the session verdict. The samples argument is kept for signature compatibility.
 func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) session.HMCAResult {
 	var scores []float64
 	var flags []string
@@ -48,7 +35,7 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 		cross, status := coherenceOne(run.HardwareSamples)
 		switch status {
 		case "insufficient":
-			// too few samples: abstain for this run, no accusation
+			// too few samples: abstain, no accusation
 		case "no_activity":
 			judged++
 			flags = append(flags, fmt.Sprintf("run_%d: no computational activity observed", i+1))
@@ -64,13 +51,12 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	}
 
 	if judged == 0 {
-		// Nothing measurable (e.g. only very short runs). Authenticity rests on the
-		// signature, ledger, source integrity, and provenance -- HMCA abstains.
+		// Nothing measurable: HMCA abstains; authenticity rests on the other checks.
 		return session.HMCAResult{Score: 0, Verdict: "N/A", Flags: nil}
 	}
 
-	// Session score is the weakest run's coherence (worst case); no scored runs
-	// means every judged run had no activity.
+	// Session score is the weakest run's coherence; no scored runs means every
+	// judged run had no activity.
 	score := 0.0
 	verdict := "FAIL"
 	if len(scores) > 0 {
@@ -92,8 +78,8 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict}
 }
 
-// coherenceOne returns the single-cause coherence (0..1) of one run's samples and
-// a status: "genuine" (returned as ""), "no_activity", or "insufficient".
+// coherenceOne returns one run's coherence (0..1) and a status: "" (genuine),
+// "no_activity", or "insufficient".
 func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	n := len(samples)
 	if n < minSamples {
@@ -105,8 +91,8 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		return 0, "no_activity"
 	}
 
-	// First-difference each active channel (removes the shared trend so a smooth
-	// ramp is not mistaken for coupling), then center and scale to unit variance.
+	// First-difference each channel (removes the shared trend, so a smooth ramp is
+	// not read as coupling), then standardize to unit variance.
 	var cols [][]float64
 	for _, ch := range act {
 		d := diff(ch.vals)
@@ -120,9 +106,9 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		return 0, "no_activity"
 	}
 
-	// Correlation matrix of the differenced channels; its largest eigenvalue
-	// relative to k measures how much one shared component explains. Independent
-	// channels spread variance evenly (evr1 ~ 1/k); a single cause concentrates it.
+	// Largest eigenvalue of the correlation matrix, relative to k, measures how
+	// much one shared component explains: ~1/k when independent, near 1 for a
+	// single cause. Rescaled to 0..1.
 	C := correlation(cols)
 	lambda := largestEigenvalue(C)
 	evr1 := lambda / float64(k)
@@ -136,9 +122,8 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	return cross, ""
 }
 
-// activeChannels returns the channels that genuinely varied during the run. If
-// the GPU never engaged (its power barely moved), its channels are excluded so
-// their idle drift does not dilute a CPU-only run's coherence.
+// activeChannels returns the channels that genuinely varied. GPU channels are
+// dropped when the GPU never engaged, so idle drift does not dilute a CPU-only run.
 func activeChannels(samples []session.HardwareSample) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))
@@ -171,8 +156,8 @@ func activeChannels(samples []session.HardwareSample) []channel {
 		}
 		rng := valueRange(ch.vals)
 		mean := average(ch.vals)
-		// meaningful variation relative to the channel's own scale (unit-invariant,
-		// rejects both constants and measurement-noise jitter)
+		// variation meaningful relative to the channel's own scale: rejects
+		// constants and measurement-noise jitter alike
 		if rng > 1e-9 && rng > 1e-4*(math.Abs(mean)+1e-9) {
 			act = append(act, ch)
 		}
@@ -208,8 +193,7 @@ func standardize(v []float64) ([]float64, bool) {
 	return out, true
 }
 
-// correlation builds the k x k Pearson correlation matrix of already-standardized
-// (mean 0, unit variance) columns.
+// correlation builds the k x k Pearson matrix of already-standardized columns.
 func correlation(cols [][]float64) [][]float64 {
 	k := len(cols)
 	m := len(cols[0])
@@ -231,8 +215,8 @@ func correlation(cols [][]float64) [][]float64 {
 	return C
 }
 
-// largestEigenvalue returns the dominant eigenvalue of a small symmetric matrix
-// via power iteration (sufficient for a k<=12 correlation matrix).
+// largestEigenvalue returns the dominant eigenvalue by power iteration, enough
+// for a k<=12 symmetric correlation matrix.
 func largestEigenvalue(C [][]float64) float64 {
 	k := len(C)
 	x := make([]float64, k)

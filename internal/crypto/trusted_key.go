@@ -3,8 +3,8 @@ package crypto
 import "crypto/rsa"
 
 // trustedServerKeyPEM is the K-Veritas production signing key, pinned into the
-// binary. Verification treats a report as authentic only when the key embedded
-// in it matches this one; a report signed with any other key is self-attested.
+// binary. A report is authentic only if its embedded key matches; any other key
+// means self-attested.
 const trustedServerKeyPEM = `-----BEGIN PUBLIC KEY-----
 MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA1QL3YyMgeShx8IhTC7jb
 sM0w2BnRXgsBn3+SMXKjtwHATqdekm1PlcjayJxD5fcPrOPPCqp/LoUFz5CUZzRi
@@ -31,9 +31,9 @@ func SamePublicKey(a, b *rsa.PublicKey) bool {
 	return a != nil && b != nil && a.N.Cmp(b.N) == 0 && a.E == b.E
 }
 
-// OriginConfirmed reports whether the embedded key matches the trust anchor: the
-// key in anchorPEM when non-empty, otherwise the pinned K-Veritas server key. A
-// true result means K-Veritas signed the report; false means it is self-attested.
+// OriginConfirmed reports whether the embedded key matches the trust anchor
+// (anchorPEM when non-empty, else the pinned server key). True means K-Veritas
+// signed the report; false means self-attested.
 func OriginConfirmed(embeddedPEM string, anchorPEM []byte) (bool, error) {
 	embedded, err := LoadPublicKey([]byte(embeddedPEM))
 	if err != nil {

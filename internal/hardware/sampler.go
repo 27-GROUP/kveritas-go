@@ -8,15 +8,12 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// gpuRefreshEvery controls how often the (slower) per-process GPU counters are
-// refreshed relative to the cheap /proc counters. At a 100ms tick this refreshes
-// the GPU about every 500ms while the CPU-side channels are sampled at ~10 Hz, so
-// even short runs accumulate enough samples for the coherence analysis.
+// gpuRefreshEvery refreshes the slower GPU counters once every N ticks; at a 100ms
+// tick that is ~500ms, against ~10 Hz for the /proc channels.
 const gpuRefreshEvery = 5
 
-// Sampler periodically captures hardware state in the background. Once the run's
-// PID is set, it measures only that process tree so other apps on the machine do
-// not inflate the readings. The cheap /proc channels are sampled at the tick rate;
+// Sampler captures hardware state in the background, scoped to the run's process
+// tree once the PID is set. The cheap /proc channels are read at the tick rate;
 // the expensive nvidia-smi channels are refreshed less often and forward-filled.
 type Sampler struct {
 	interval time.Duration
@@ -71,8 +68,8 @@ func hasGPU(c session.HardwareCounters) bool {
 }
 
 func (s *Sampler) capture() {
-	// Record only while the run's own process is alive, so samples are all
-	// per-process and never mixed with a pre-run or post-exit system reading.
+	// Record only while the run's process is alive, so no sample mixes in a pre-run
+	// or post-exit system reading.
 	pid := atomic.LoadInt32(&s.pid)
 	if pid == 0 || !ProcessAlive(int(pid)) {
 		return
@@ -97,10 +94,8 @@ func (s *Sampler) capture() {
 	s.mu.Unlock()
 }
 
-// Decimate evenly reduces a sample series to at most max points, preserving the
-// first and last. High-rate sampling gives short runs enough points to judge;
-// long runs are thinned here so the signed report stays small without losing the
-// fluctuation structure the coherence analysis needs.
+// Decimate evenly reduces a series to at most max points, keeping the first and
+// last, so the signed report stays small without losing the fluctuation structure.
 func Decimate(samples []session.HardwareSample, max int) []session.HardwareSample {
 	n := len(samples)
 	if max < 2 || n <= max {

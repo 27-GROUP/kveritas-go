@@ -1,18 +1,4 @@
-// K-Veritas attestation server.
-//
-// The server holds the RSA private key and is the only entity that can issue
-// valid signatures. It receives a data_hash from the client, never the raw
-// experiment data, and signs the payload data_hash:nonce:signed_at.
-//
-// Endpoints:
-//
-//	POST /api/v1/init        Register a session; returns an opaque token.
-//	POST /api/v1/seal        Validate token and sign data hash; returns attestation.
-//	POST /api/v1/record-run  Record a run invocation in the ledger.
-//	GET  /api/v1/run-history Return all run invocations for a session.
-//	GET  /api/v1/public-key  Return the server's public key in PEM format.
-//
-// Key storage: keys/private.pem and keys/public.pem. Generated on first run.
+// K-Veritas attestation server: holds the RSA private key and signs client data hashes.
 package main
 
 import (
@@ -187,8 +173,7 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]string{"token": token}
 
-	// Harness mode: sign the genesis hash so the designation is bound at the
-	// start of the session and cannot be altered afterward.
+	// Sign the genesis hash so the harness designation is bound and unalterable.
 	if req.GenesisHash != "" {
 		if len(req.GenesisHash) != 64 {
 			writeError(w, http.StatusBadRequest, "genesis_hash must be 64 hex characters (SHA-256)")
