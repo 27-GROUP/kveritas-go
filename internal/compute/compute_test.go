@@ -97,8 +97,31 @@ func TestComputeBenchmark(t *testing.T) {
 			expect: "N/A",
 		},
 		{
-			name:   "no_telemetry",
+			// Heavy training declared, no telemetry captured, duration unknown: not
+			// provably impossible, but unverifiable, so it must not pass silently.
+			name:   "heavy_declared_no_telemetry",
 			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000, DatasetSize: 10_000_000, Epochs: 3, SeqLen: 2048}},
+			expect: "REVIEW",
+		},
+		{
+			// Print-and-exit fake: declares a heavy training workload but the process
+			// ran for half a second, too short for the FLOPs on any hardware. Caught by
+			// the wall-clock floor even though the sampler captured nothing.
+			name:   "fast_fake_declared_workload",
+			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000, DatasetSize: 10_000_000, Epochs: 3, SeqLen: 2048}, DurationSec: 0.5},
+			expect: "FABRICATION-IMPOSSIBLE",
+		},
+		{
+			// Evaluation fake: declares a 70B model and a benchmark score but no training
+			// workload (so no FLOP bound) and no telemetry. Large model, no evidence: review.
+			name:   "eval_large_model_no_evidence",
+			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000}, DurationSec: 0.4},
+			expect: "REVIEW",
+		},
+		{
+			// Small declared work that finishes fast is legitimately not checkable.
+			name:   "small_declared_fast_no_telemetry",
+			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 200_000, DatasetSize: 1000, Epochs: 1}, DurationSec: 0.3},
 			expect: "N/A",
 		},
 	}

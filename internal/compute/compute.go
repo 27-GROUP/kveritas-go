@@ -33,6 +33,15 @@ const (
 	// The process's CPU time is already in core-seconds, so peak x core-seconds is
 	// the most FLOPs the CPU could have contributed.
 	cpuPeakFLOPSPerCore = 1e12
+	// absolutePeakFLOPS is an upper bound on the throughput of any single machine
+	// (well above an 8-GPU node), used for a telemetry-independent wall-clock floor:
+	// F_declared FLOPs need at least F_declared/absolutePeakFLOPS seconds no matter
+	// what hardware ran them, so a run shorter than that is impossible on its face.
+	absolutePeakFLOPS = 1e16
+	// largeModelParams marks a declaration substantial enough that a clean N/A would
+	// be misleading: at or above this, a run with no compute evidence is flagged for
+	// review rather than silently passed.
+	largeModelParams = 1e9
 )
 
 // Analyze produces the compute-cost certificate for a single run.
@@ -44,20 +53,14 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 	cert.EnergyJoules = energy
 	cert.PeakGPUMemMB = peakMem
 
-	// No telemetry at all (no GPU activity and no measured CPU time): not applicable.
-	if active == 0 && energy == 0 && peakMem == 0 && cpuCoreSec == 0 {
-		cert.Verdict = "N/A"
-		cert.Notes = append(cert.Notes, "no hardware telemetry; compute certificate not applicable")
-		return cert
-	}
-
 	fDeclared := declaredFLOPs(rec.Declared)
 	cert.FDeclaredFLOPs = fDeclared
 
-	// No declared model card, or declared work below the floor: not applicable.
-	if rec.Declared == nil || fDeclared < computeFloorFLOPs {
+	// No model card was declared: the run makes no compute claim, so there is
+	// nothing to attest.
+	if rec.Declared == nil {
 		cert.Verdict = "N/A"
-		cert.Notes = append(cert.Notes, "no declared model card or declared work below compute floor")
+		cert.Notes = append(cert.Notes, "no declared model card; compute certificate not applicable")
 		return cert
 	}
 
@@ -71,41 +74,81 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 	cert.FPeakGenerous = gpuPeak
 	cert.MinPJPerFLOP = minJoulesPerFLOP * 1e12
 
-	// Time bound (hard): declared FLOPs cannot exceed the total FLOP capacity the
-	// observed hardware could physically have delivered.
-	if availableFLOPs > 0 {
-		cert.ImpliedMFU = fDeclared / availableFLOPs
-		if fDeclared > availableFLOPs {
+	haveTelemetry := active > 0 || energy > 0 || peakMem > 0 || cpuCoreSec > 0
+	// A declaration is substantial when its training FLOPs clear the floor, or when
+	// the model itself is large (e.g. an evaluation that declares params but no
+	// training workload). Below this, a fast run is legitimately not checkable.
+	substantial := fDeclared >= computeFloorFLOPs || rec.Declared.Params >= largeModelParams
+
+	// Wall-clock floor, independent of telemetry: F_declared FLOPs need at least
+	// F_declared/absolutePeakFLOPS seconds on any single machine. A run shorter than
+	// that is physically impossible whatever the sampler captured, so a print-and-exit
+	// fake that never yields a second sample is still caught here.
+	if fDeclared > 0 && rec.DurationSec > 0 {
+		minWallSec := fDeclared / absolutePeakFLOPS
+		if rec.DurationSec < minWallSec {
 			cert.TimeBoundOK = false
 			cert.Notes = append(cert.Notes, fmt.Sprintf(
-				"time-impossible: %.3e declared FLOPs exceed the %.3e the hardware could deliver (%.1fs GPU-active at %.2e FLOP/s + %.1f CPU core-seconds)",
-				fDeclared, availableFLOPs, active, gpuPeak, cpuCoreSec))
-		}
-	} else {
-		cert.TimeBoundOK = false
-		cert.Notes = append(cert.Notes,
-			"time-impossible: heavy declared work but no compute activity observed")
-	}
-
-	// Energy bound (hard): F_declared FLOPs need at least F_declared*minJoulesPerFLOP joules.
-	if energy > 0 {
-		minEnergy := fDeclared * minJoulesPerFLOP
-		if energy < minEnergy {
-			cert.EnergyBoundOK = false
-			cert.Notes = append(cert.Notes, fmt.Sprintf(
-				"energy-impossible: declared work needs >= %.1f J, but only %.1f J measured",
-				minEnergy, energy))
+				"time-impossible: %.3e declared FLOPs need >= %.1fs on any hardware, but the run lasted %.1fs",
+				fDeclared, minWallSec, rec.DurationSec))
 		}
 	}
 
-	// Memory note (soft): fp16 weights alone should fit the observed footprint.
-	if rec.Declared.Params > 0 && peakMem > 0 {
-		weightsMB := float64(rec.Declared.Params*fp16BytesPerParam) / 1e6
-		if weightsMB > peakMem*1.1 {
-			cert.Notes = append(cert.Notes, fmt.Sprintf(
-				"memory-review: declared params need ~%.0f MB of weights, but peak GPU memory was %.0f MB",
-				weightsMB, peakMem))
+	switch {
+	case haveTelemetry && fDeclared >= computeFloorFLOPs:
+		// Time bound (hard): declared FLOPs cannot exceed the total FLOP capacity the
+		// observed hardware could physically have delivered.
+		if availableFLOPs > 0 {
+			cert.ImpliedMFU = fDeclared / availableFLOPs
+			if fDeclared > availableFLOPs {
+				cert.TimeBoundOK = false
+				cert.Notes = append(cert.Notes, fmt.Sprintf(
+					"time-impossible: %.3e declared FLOPs exceed the %.3e the hardware could deliver (%.1fs GPU-active at %.2e FLOP/s + %.1f CPU core-seconds)",
+					fDeclared, availableFLOPs, active, gpuPeak, cpuCoreSec))
+			}
+		} else {
+			cert.TimeBoundOK = false
+			cert.Notes = append(cert.Notes,
+				"time-impossible: heavy declared work but no compute activity observed")
 		}
+
+		// Energy bound (hard): F_declared FLOPs need at least F_declared*minJoulesPerFLOP joules.
+		if energy > 0 {
+			minEnergy := fDeclared * minJoulesPerFLOP
+			if energy < minEnergy {
+				cert.EnergyBoundOK = false
+				cert.Notes = append(cert.Notes, fmt.Sprintf(
+					"energy-impossible: declared work needs >= %.1f J, but only %.1f J measured",
+					minEnergy, energy))
+			}
+		}
+
+		// Memory note (soft): fp16 weights alone should fit the observed footprint.
+		if rec.Declared.Params > 0 && peakMem > 0 {
+			weightsMB := float64(rec.Declared.Params*fp16BytesPerParam) / 1e6
+			if weightsMB > peakMem*1.1 {
+				cert.Notes = append(cert.Notes, fmt.Sprintf(
+					"memory-review: declared params need ~%.0f MB of weights, but peak GPU memory was %.0f MB",
+					weightsMB, peakMem))
+			}
+		}
+
+	case substantial:
+		// A substantial model or workload was declared, but there is not enough
+		// evidence (no telemetry, or no declared training workload to bound) to
+		// corroborate it. Unless the wall-clock floor already proved impossibility,
+		// this must not silently pass: flag it for review as unverified.
+		if cert.TimeBoundOK {
+			cert.Notes = append(cert.Notes,
+				"review: a substantial model or workload was declared but there is not enough compute evidence to verify it; treat the declared figures as unverified")
+		}
+
+	default:
+		// Small declared work with nothing impossible about it: not checkable, which
+		// protects legitimately fast small runs.
+		cert.Verdict = "N/A"
+		cert.Notes = append(cert.Notes, "declared work below compute floor; certificate not applicable")
+		return cert
 	}
 
 	switch {

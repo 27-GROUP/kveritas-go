@@ -1666,24 +1666,40 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Step 3: verify RSA-PSS signature.
-		pubKeyPEM := []byte(seal.PublicKeyPEM)
-		if verifyKeyPath != "" {
-			pubKeyPEM, err = os.ReadFile(verifyKeyPath)
-			if err != nil {
-				return fmt.Errorf("reading public key: %w", err)
-			}
-		}
-		pubKey, err := kvcrypto.LoadPublicKey(pubKeyPEM)
+		// Step 3: verify the RSA-PSS signature against the embedded key. This proves
+		// the document is internally consistent. Whether K-Veritas produced it is a
+		// separate question, decided next against the trust anchor.
+		embeddedKey, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
-			return fmt.Errorf("parsing public key: %w", err)
+			return fmt.Errorf("parsing embedded public key: %w", err)
 		}
-		if err := kvcrypto.VerifyPSS(pubKey, payload, seal.Signature); err != nil {
+		if err := kvcrypto.VerifyPSS(embeddedKey, payload, seal.Signature); err != nil {
 			fmt.Printf("INVALID\nSignature verification failed: %v\n", err)
 			return nil
 		}
 
-		fmt.Printf("VERIFIED\n")
+		// Origin: the embedded key must match the trust anchor (the key given with
+		// --key, or the K-Veritas server key pinned into this binary). A report signed
+		// with any other key is self-attested: a valid signature, but not from K-Veritas.
+		var anchorPEM []byte
+		if verifyKeyPath != "" {
+			anchorPEM, err = os.ReadFile(verifyKeyPath)
+			if err != nil {
+				return fmt.Errorf("reading public key: %w", err)
+			}
+		}
+		serverSigned, err := kvcrypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM)
+		if err != nil {
+			return fmt.Errorf("checking report origin: %w", err)
+		}
+
+		if serverSigned {
+			fmt.Printf("VERIFIED\n")
+		} else {
+			fmt.Printf("SELF-ATTESTED\n")
+			fmt.Printf("Signature valid, but signed with an author-supplied key, not K-Veritas.\n")
+			fmt.Printf("The report's origin cannot be confirmed; treat the results as unverified.\n")
+		}
 		fmt.Printf("Session:    %s\n", sess.ID)
 		fmt.Printf("Sealed at:  %s\n", seal.SealedAt.UTC().Format(time.RFC3339))
 		fmt.Printf("Signed at:  %s\n", seal.SignedAt)
