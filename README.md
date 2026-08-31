@@ -1,6 +1,6 @@
 # K-Veritas Go
 
-Tamper-evident verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
+Cryptographic verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
 
 **Platform.** Verify, seal, proofs, checkout, artifacts, provenance, disclosure: cross-platform. Activity map and per-process hardware: Linux only, system-wide fallback elsewhere.
 
