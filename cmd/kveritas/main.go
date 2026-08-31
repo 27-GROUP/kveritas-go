@@ -16,7 +16,7 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/client"
 	"github.com/Mamadou2727/kveritas-go/internal/compute"
-	kvcrypto "github.com/Mamadou2727/kveritas-go/internal/crypto"
+	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 	"github.com/Mamadou2727/kveritas-go/internal/hardware"
 	"github.com/Mamadou2727/kveritas-go/internal/harness"
 	"github.com/Mamadou2727/kveritas-go/internal/hmca"
@@ -345,15 +345,15 @@ func verifyReportSignature(seal *session.SealRecord) error {
 	if seal == nil || seal.CanonicalJSON == "" {
 		return fmt.Errorf("report has no signed data")
 	}
-	if kvcrypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
+	if crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
 		return fmt.Errorf("data hash mismatch")
 	}
-	pub, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
+	pub, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 	if err != nil {
 		return err
 	}
-	payload := kvcrypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
-	return kvcrypto.VerifyPSS(pub, payload, seal.Signature)
+	payload := crypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
+	return crypto.VerifyPSS(pub, payload, seal.Signature)
 }
 
 func checkBundleBinding(reportPath, bundlePath string) error {
@@ -368,7 +368,7 @@ func checkBundleBinding(reportPath, bundlePath string) error {
 	if err != nil {
 		return err
 	}
-	if kvcrypto.HashBytes(data) == meta.Seal.CheckoutBundleHash {
+	if crypto.HashBytes(data) == meta.Seal.CheckoutBundleHash {
 		return nil
 	}
 	return fmt.Errorf("TAMPERED: bundle hash does not match the signed report")
@@ -437,7 +437,7 @@ var cmdInit = &cobra.Command{
 			initDisclosure = "names"
 		}
 
-		salt, err := kvcrypto.RandomNonce()
+		salt, err := crypto.RandomNonce()
 		if err != nil {
 			return err
 		}
@@ -502,7 +502,7 @@ func harnessInit(kvDir, wd, machineID, sessionID string) error {
 		}
 	}
 
-	nonce, err := kvcrypto.RandomNonce()
+	nonce, err := crypto.RandomNonce()
 	if err != nil {
 		return err
 	}
@@ -513,7 +513,7 @@ func harnessInit(kvDir, wd, machineID, sessionID string) error {
 		AgentIdentity:   initAgent,
 		OperatorID:      operator,
 		Designation:     designation,
-		DesignationHash: kvcrypto.HashBytes([]byte(designation)),
+		DesignationHash: crypto.HashBytes([]byte(designation)),
 		StartAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		Nonce:           nonce,
 	}
@@ -634,20 +634,20 @@ func localSignGenesis(gHash, keyPath string) (*harness.ServerSig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading private key %s: %w", keyPath, err)
 	}
-	privKey, err := kvcrypto.LoadPrivateKey(keyData)
+	privKey, err := crypto.LoadPrivateKey(keyData)
 	if err != nil {
 		return nil, err
 	}
-	nonce, err := kvcrypto.RandomNonce()
+	nonce, err := crypto.RandomNonce()
 	if err != nil {
 		return nil, err
 	}
 	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	sig, err := kvcrypto.SignPSS(privKey, kvcrypto.Payload(gHash, nonce, signedAt))
+	sig, err := crypto.SignPSS(privKey, crypto.Payload(gHash, nonce, signedAt))
 	if err != nil {
 		return nil, err
 	}
-	pubPEM, err := kvcrypto.MarshalPublicKey(&privKey.PublicKey)
+	pubPEM, err := crypto.MarshalPublicKey(&privKey.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -714,9 +714,9 @@ var cmdRecord = &cobra.Command{
 
 func contentHash(inline, file string) (string, error) {
 	if file != "" {
-		return kvcrypto.HashFile(file)
+		return crypto.HashFile(file)
 	}
-	return kvcrypto.HashBytes([]byte(inline)), nil
+	return crypto.HashBytes([]byte(inline)), nil
 }
 
 func init() {
@@ -808,17 +808,17 @@ func runHookRecord(event string) error {
 		if h.ToolName == "" {
 			return nil
 		}
-		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName), ToolUseID: h.ToolUseID, InputHash: kvcrypto.HashBytes(h.ToolInput)}
+		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName), ToolUseID: h.ToolUseID, InputHash: crypto.HashBytes(h.ToolInput)}
 	case "post":
 		if h.ToolName == "" {
 			return nil
 		}
-		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName) + ".result", ToolUseID: h.ToolUseID, OutputHash: kvcrypto.HashBytes(h.ToolResponse)}
+		e = harness.Entry{Actor: actor, TopAgent: top, AgentID: h.AgentID, Type: mapToolType(h.ToolName) + ".result", ToolUseID: h.ToolUseID, OutputHash: crypto.HashBytes(h.ToolResponse)}
 		if h.ToolName == "Agent" || h.ToolName == "Task" {
 			e.SpawnedID = spawnedAgentID(h.ToolResponse)
 		}
 	case "prompt":
-		e = harness.Entry{Actor: "operator", TopAgent: top, Type: "prompt", InputHash: kvcrypto.HashBytes([]byte(h.Prompt))}
+		e = harness.Entry{Actor: "operator", TopAgent: top, Type: "prompt", InputHash: crypto.HashBytes([]byte(h.Prompt))}
 	default:
 		return nil
 	}
@@ -1511,7 +1511,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		signingData["compute"] = certs
 	}
 
-	return kvcrypto.CanonicalHashWithBytes(signingData)
+	return crypto.CanonicalHashWithBytes(signingData)
 }
 
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
@@ -1542,24 +1542,24 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 	if err != nil {
 		return nil, fmt.Errorf("reading private key %s: %w\n\nGenerate a key with: kveritas-server --keys keys", keyPath, err)
 	}
-	privKey, err := kvcrypto.LoadPrivateKey(keyData)
+	privKey, err := crypto.LoadPrivateKey(keyData)
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
 
-	nonce, err := kvcrypto.RandomNonce()
+	nonce, err := crypto.RandomNonce()
 	if err != nil {
 		return nil, err
 	}
 	signedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	payload := kvcrypto.Payload(dataHash, nonce, signedAt)
+	payload := crypto.Payload(dataHash, nonce, signedAt)
 
-	sig, err := kvcrypto.SignPSS(privKey, payload)
+	sig, err := crypto.SignPSS(privKey, payload)
 	if err != nil {
 		return nil, err
 	}
 
-	pubPEM, err := kvcrypto.MarshalPublicKey(&privKey.PublicKey)
+	pubPEM, err := crypto.MarshalPublicKey(&privKey.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1571,7 +1571,7 @@ func localSeal(sess *session.Session, _ []*session.RunRecord, dataHash, keyPath 
 		Nonce:             nonce,
 		SignedAt:          signedAt,
 		Signature:         sig,
-		SignedMessageHash: kvcrypto.HashBytes([]byte(payload)),
+		SignedMessageHash: crypto.HashBytes([]byte(payload)),
 		PublicKeyPEM:      string(pubPEM),
 		ServerURL:         "local",
 	}, nil
@@ -1628,8 +1628,8 @@ var cmdVerify = &cobra.Command{
 		}
 
 		// Step 2: verify the signed message hash.
-		payload := kvcrypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
-		expectedMsgHash := kvcrypto.HashBytes([]byte(payload))
+		payload := crypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
+		expectedMsgHash := crypto.HashBytes([]byte(payload))
 		if expectedMsgHash != seal.SignedMessageHash {
 			fmt.Printf("TAMPERED\nSigned message hash mismatch.\n  Stored:   %s\n  Expected: %s\n",
 				seal.SignedMessageHash, expectedMsgHash)
@@ -1638,11 +1638,11 @@ var cmdVerify = &cobra.Command{
 
 		// Step 3: verify the RSA-PSS signature against the embedded key. Proves internal
 		// consistency only; origin against the trust anchor is decided next.
-		embeddedKey, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
+		embeddedKey, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
 			return fmt.Errorf("parsing embedded public key: %w", err)
 		}
-		if err := kvcrypto.VerifyPSS(embeddedKey, payload, seal.Signature); err != nil {
+		if err := crypto.VerifyPSS(embeddedKey, payload, seal.Signature); err != nil {
 			fmt.Printf("INVALID\nSignature verification failed: %v\n", err)
 			return nil
 		}
@@ -1656,7 +1656,7 @@ var cmdVerify = &cobra.Command{
 				return fmt.Errorf("reading public key: %w", err)
 			}
 		}
-		serverSigned, err := kvcrypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM)
+		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM)
 		if err != nil {
 			return fmt.Errorf("checking report origin: %w", err)
 		}
@@ -1731,7 +1731,7 @@ var cmdVerify = &cobra.Command{
 				if err != nil {
 					return fmt.Errorf("reading bundle: %w", err)
 				}
-				got := kvcrypto.HashBytes(bundleData)
+				got := crypto.HashBytes(bundleData)
 				switch {
 				case seal.CheckoutBundleHash == "" && seal.SourceBundleHash == "":
 					fmt.Printf("Source bundle: report has no bundle hash to match\n")
@@ -1881,16 +1881,16 @@ var cmdCheck = &cobra.Command{
 			fmt.Println("TAMPERED: report data has been modified; claims check aborted")
 			return nil
 		}
-		payload := kvcrypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
-		if kvcrypto.HashBytes([]byte(payload)) != seal.SignedMessageHash {
+		payload := crypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
+		if crypto.HashBytes([]byte(payload)) != seal.SignedMessageHash {
 			fmt.Println("TAMPERED: signature metadata has been modified; claims check aborted")
 			return nil
 		}
-		pubKey, err := kvcrypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
+		pubKey, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
 			return err
 		}
-		if err := kvcrypto.VerifyPSS(pubKey, payload, seal.Signature); err != nil {
+		if err := crypto.VerifyPSS(pubKey, payload, seal.Signature); err != nil {
 			fmt.Printf("INVALID: signature verification failed: %v\n", err)
 			return nil
 		}
