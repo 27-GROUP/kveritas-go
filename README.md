@@ -89,4 +89,4 @@ Upload the report PDF at [kveritas.org/verify](https://kveritas.org/verify), opt
 
 CLI, protocol, libraries: **Apache-2.0** ([LICENSE](LICENSE)). Server under `server/`: **AGPL-3.0** ([LICENSE-AGPL](LICENSE-AGPL)); a modified network service must publish its source or hold a commercial license.
 
-"K-Veritas" and its logo are trademarks. No rights to use the name or logo to imply official certification.
+"K-Veritas" is a trademark and cannot be used in any way that implies official certification.
