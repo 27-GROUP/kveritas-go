@@ -236,6 +236,17 @@ type Mismatch struct {
 	Description string `json:"description"`
 }
 
+// PaperClaim is one reconciled paper claim: its value, the matching signed value,
+// and whether the two agree, disagree, or have no signed evidence.
+type PaperClaim struct {
+	Category    string `json:"category"`
+	Label       string `json:"label"`
+	PaperValue  string `json:"paper_value"`
+	ReportValue string `json:"report_value"`
+	Status      string `json:"status"`
+	Severity    string `json:"severity"`
+}
+
 // ServerAuditResult mirrors the /api/audit response the web verifier renders:
 // cryptographic status and ledger, hardware consistency, source-bundle match,
 // AI code audit, and paper crosscheck.
@@ -258,10 +269,13 @@ type ServerAuditResult struct {
 		Anomalies []Anomaly `json:"anomalies"`
 	} `json:"code_audit"`
 	PaperCrosscheck struct {
-		Status     string     `json:"status"`
-		Summary    string     `json:"summary"`
-		Reason     string     `json:"reason"`
-		Mismatches []Mismatch `json:"mismatches"`
+		Status      string       `json:"status"`
+		Summary     string       `json:"summary"`
+		Reason      string       `json:"reason"`
+		Coverage    *float64     `json:"coverage"`
+		Consistency *float64     `json:"consistency"`
+		Claims      []PaperClaim `json:"claims"`
+		Mismatches  []Mismatch   `json:"mismatches"`
 	} `json:"paper_crosscheck"`
 	BundleVerification struct {
 		Match *bool `json:"match"`

@@ -1815,7 +1815,30 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	switch pc.Status {
 	case "", "skipped":
 	default:
-		if len(pc.Mismatches) == 0 {
+		if len(pc.Claims) > 0 {
+			cov, con := "n/a", "n/a"
+			if pc.Coverage != nil {
+				cov = fmt.Sprintf("%.0f%%", *pc.Coverage*100)
+			}
+			if pc.Consistency != nil {
+				con = fmt.Sprintf("%.0f%%", *pc.Consistency*100)
+			}
+			fmt.Printf("  Paper crosscheck:     coverage %s, consistency %s\n", cov, con)
+			for _, c := range pc.Claims {
+				if c.Status == "consistent" {
+					continue
+				}
+				label := c.Label
+				if label == "" {
+					label = c.Category
+				}
+				if c.Status == "unsupported" {
+					fmt.Printf("      [unsupported] %s: paper says %s, no matching signed value\n", label, c.PaperValue)
+				} else {
+					fmt.Printf("      [disagrees] %s: paper %s vs report %s\n", label, c.PaperValue, c.ReportValue)
+				}
+			}
+		} else if len(pc.Mismatches) == 0 {
 			fmt.Printf("  Paper crosscheck:     no mismatches with the report\n")
 		} else {
 			fmt.Printf("  Paper crosscheck:     %d mismatch(es)\n", len(pc.Mismatches))
