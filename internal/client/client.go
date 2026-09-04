@@ -15,7 +15,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// Client communicates with the K-Veritas attestation server.
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
@@ -46,7 +45,6 @@ type sealRequest struct {
 	RunCount  int    `json:"run_count"`
 }
 
-// SealResponse contains the server's attestation response.
 type SealResponse struct {
 	Nonce             string `json:"nonce"`
 	SignedAt          string `json:"signed_at"`
@@ -68,13 +66,11 @@ type recordRunRequest struct {
 	StdoutLines int     `json:"stdout_lines"`
 }
 
-// RunHistoryResponse contains the server's run history for a session.
 type RunHistoryResponse struct {
 	Runs      []session.LedgerRunEntry `json:"runs"`
 	TotalRuns int                      `json:"total_runs"`
 }
 
-// Init registers a new session with the server and returns the full response.
 func (c *Client) Init(sessionID, machineID string, initAt time.Time) (*InitResponse, error) {
 	var resp InitResponse
 	err := c.post("/api/v1/init", initRequest{
@@ -95,8 +91,6 @@ type harnessInitRequest struct {
 	GenesisHash string `json:"genesis_hash"`
 }
 
-// GenesisResponse carries the session token and the server signature over the
-// genesis hash, which binds the designation D at the start of a harness session.
 type GenesisResponse struct {
 	Token            string `json:"token"`
 	GenesisSignature string `json:"genesis_signature"`
@@ -105,8 +99,6 @@ type GenesisResponse struct {
 	PublicKeyPEM     string `json:"public_key_pem"`
 }
 
-// HarnessInit registers a harness session and asks the server to sign the
-// genesis hash.
 func (c *Client) HarnessInit(sessionID, machineID string, initAt time.Time, genesisHash string) (*GenesisResponse, error) {
 	var resp GenesisResponse
 	err := c.post("/api/v1/init", harnessInitRequest{
@@ -121,7 +113,6 @@ func (c *Client) HarnessInit(sessionID, machineID string, initAt time.Time, gene
 	return &resp, nil
 }
 
-// Seal submits a data hash to the server and receives a cryptographic attestation.
 func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*SealResponse, error) {
 	var resp SealResponse
 	err := c.post("/api/v1/seal", sealRequest{
@@ -137,8 +128,6 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 	return &resp, nil
 }
 
-// RecordRun records a run invocation in the server ledger, successful or not, for
-// the multi-run ledger.
 func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error {
 	var resp struct{}
 	return c.post("/api/v1/record-run", recordRunRequest{
@@ -155,7 +144,6 @@ func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error 
 	}, &resp)
 }
 
-// RunHistory retrieves the full run history for a session from the server ledger.
 func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) {
 	url := fmt.Sprintf("%s/api/v1/run-history?session_id=%s&token=%s",
 		c.BaseURL, sess.ID, sess.Token)
@@ -178,7 +166,6 @@ func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) 
 	return &result, nil
 }
 
-// PublicKeyPEM fetches the server's public key in PEM format.
 func (c *Client) PublicKeyPEM() (string, error) {
 	resp, err := c.HTTPClient.Get(c.BaseURL + "/api/v1/public-key")
 	if err != nil {
@@ -221,7 +208,6 @@ func (c *Client) post(path string, body, out interface{}) error {
 	return json.Unmarshal(respBody, out)
 }
 
-// Anomaly is one code-audit finding.
 type Anomaly struct {
 	File        string `json:"file"`
 	Line        int    `json:"line"`
@@ -229,15 +215,12 @@ type Anomaly struct {
 	Description string `json:"description"`
 }
 
-// Mismatch is one paper-crosscheck finding.
 type Mismatch struct {
 	Category    string `json:"category"`
 	Severity    string `json:"severity"`
 	Description string `json:"description"`
 }
 
-// PaperClaim is one reconciled paper claim: its value, the matching signed value,
-// and whether the two agree, disagree, or have no signed evidence.
 type PaperClaim struct {
 	Category    string `json:"category"`
 	Label       string `json:"label"`
@@ -247,9 +230,6 @@ type PaperClaim struct {
 	Severity    string `json:"severity"`
 }
 
-// ServerAuditResult mirrors the /api/audit response the web verifier renders:
-// cryptographic status and ledger, hardware consistency, source-bundle match,
-// AI code audit, and paper crosscheck.
 type ServerAuditResult struct {
 	CryptoStatus struct {
 		Valid  bool   `json:"valid"`
@@ -296,9 +276,6 @@ func addFilePart(w *multipart.Writer, field, path string) error {
 	return err
 }
 
-// AuditReport uploads a report (and optionally a source bundle and a manuscript)
-// to the server's /api/audit endpoint, returning the same full result the web
-// verifier shows for the same files.
 func (c *Client) AuditReport(reportPath, bundlePath, manuscriptPath string) (*ServerAuditResult, error) {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
