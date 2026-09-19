@@ -122,8 +122,11 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	return cross, ""
 }
 
-// activeChannels returns the channels that genuinely varied. GPU channels are
-// dropped when the GPU never engaged, so idle drift does not dilute a CPU-only run.
+// activeChannels returns the per-process channels that carried real activity.
+// cpu_freq and gpu_temp are deliberately excluded: they are board/system-wide, so
+// an external process could drive them and inject a shared signal into a run that
+// did nothing. Each channel must clear an absolute floor, so the measurement-noise
+// jitter of a near-idle loop does not read as computation.
 func activeChannels(samples []session.HardwareSample) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))
@@ -132,34 +135,35 @@ func activeChannels(samples []session.HardwareSample) []channel {
 		}
 		return out
 	}
-	all := []channel{
-		{"cpu_time", get(func(c session.HardwareCounters) float64 { return c.CPUTimeSec })},
-		{"mem", get(func(c session.HardwareCounters) float64 { return c.MemUsedGB })},
-		{"ctx_sw", get(func(c session.HardwareCounters) float64 { return c.CtxSwitches })},
-		{"minflt", get(func(c session.HardwareCounters) float64 { return c.MinorFaults })},
-		{"threads", get(func(c session.HardwareCounters) float64 { return c.Threads })},
-		{"cpu_freq", get(func(c session.HardwareCounters) float64 { return c.CPUFreqMHz })},
-		{"disk_r", get(func(c session.HardwareCounters) float64 { return c.DiskReadMB })},
-		{"disk_w", get(func(c session.HardwareCounters) float64 { return c.DiskWriteMB })},
-		{"gpu_util", get(func(c session.HardwareCounters) float64 { return c.GPUUtilPct })},
-		{"gpu_mem", get(func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB })},
-		{"gpu_power", get(func(c session.HardwareCounters) float64 { return c.GPUPowerW })},
-		{"gpu_temp", get(func(c session.HardwareCounters) float64 { return c.GPUTempC })},
+	gpuIdle := valueRange(get(func(c session.HardwareCounters) float64 { return c.GPUPowerW })) < gpuIdleRangeW
+
+	type spec struct {
+		name  string
+		floor float64
+		gpu   bool
+		f     func(session.HardwareCounters) float64
 	}
-	gpu := map[string]bool{"gpu_util": true, "gpu_mem": true, "gpu_power": true, "gpu_temp": true}
-	gpuIdle := valueRange(all[10].vals) < gpuIdleRangeW // gpu_power range
+	specs := []spec{
+		{"cpu_time", 0.2, false, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
+		{"mem", 0.002, false, func(c session.HardwareCounters) float64 { return c.MemUsedGB }},
+		{"ctx_sw", 200, false, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
+		{"minflt", 100, false, func(c session.HardwareCounters) float64 { return c.MinorFaults }},
+		{"threads", 1, false, func(c session.HardwareCounters) float64 { return c.Threads }},
+		{"disk_r", 0.5, false, func(c session.HardwareCounters) float64 { return c.DiskReadMB }},
+		{"disk_w", 0.5, false, func(c session.HardwareCounters) float64 { return c.DiskWriteMB }},
+		{"gpu_util", 3, true, func(c session.HardwareCounters) float64 { return c.GPUUtilPct }},
+		{"gpu_mem", 20, true, func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB }},
+		{"gpu_power", 3, true, func(c session.HardwareCounters) float64 { return c.GPUPowerW }},
+	}
 
 	var act []channel
-	for _, ch := range all {
-		if gpuIdle && gpu[ch.name] {
+	for _, sp := range specs {
+		if gpuIdle && sp.gpu {
 			continue
 		}
-		rng := valueRange(ch.vals)
-		mean := average(ch.vals)
-		// variation meaningful relative to the channel's own scale: rejects
-		// constants and measurement-noise jitter alike
-		if rng > 1e-9 && rng > 1e-4*(math.Abs(mean)+1e-9) {
-			act = append(act, ch)
+		vals := get(sp.f)
+		if valueRange(vals) >= sp.floor {
+			act = append(act, channel{sp.name, vals})
 		}
 	}
 	return act
