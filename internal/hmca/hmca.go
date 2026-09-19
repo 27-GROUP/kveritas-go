@@ -88,8 +88,13 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	}
 
 	act := activeChannels(samples)
-	if len(act) < minActive {
+	if len(act) == 0 {
 		return 0, "no_activity"
+	}
+	if len(act) < minActive {
+		// Work is present but one channel cannot show coupling. Abstain rather
+		// than accuse: a light but genuine run looks like this.
+		return 0, "insufficient"
 	}
 
 	// First-difference each channel (removes the shared trend, so a smooth ramp is
@@ -103,8 +108,11 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		}
 	}
 	k := len(cols)
-	if k < minActive {
+	if k == 0 {
 		return 0, "no_activity"
+	}
+	if k < minActive {
+		return 0, "insufficient"
 	}
 
 	// How much the top components of the correlation matrix explain, relative to
@@ -127,6 +135,13 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		evr = (lam1 + lam2) / float64(k)
 	}
 	cross := (evr - float64(top)/float64(k)) / (1.0 - float64(top)/float64(k))
+
+	// Independent channels still leave a positive residue in finite samples, and
+	// it grows as the trace shortens, so a short or channel-poor run would score
+	// above threshold on noise alone. Subtract that expected residue.
+	null := nullCoherence(k, n, top)
+	cross = (cross - null) / (1.0 - null)
+
 	if cross < 0 {
 		cross = 0
 	}
@@ -134,6 +149,24 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		cross = 1
 	}
 	return cross, ""
+}
+
+// nullCoherence is the value the statistic takes when the channels are
+// independent, fitted to simulated correlation matrices. It falls as 1/sqrt(n)
+// and, for the two-cause form, rises as the channel count falls.
+func nullCoherence(k, n, top int) float64 {
+	if n < 2 {
+		return 0
+	}
+	c := 0.80
+	if top >= 2 {
+		c = 0.85 + 2.4/float64(k)
+	}
+	null := c / math.Sqrt(float64(n))
+	if null > 0.9 {
+		null = 0.9
+	}
+	return null
 }
 
 // activeChannels returns the per-process channels that carried real activity.
