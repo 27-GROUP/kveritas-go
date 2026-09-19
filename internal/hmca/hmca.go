@@ -13,6 +13,7 @@ import (
 const (
 	minSamples    = 20   // below this, abstain
 	minActive     = 2    // need two active channels to judge coupling
+	minSamplesTop2 = 150 // below this the two-cause estimator is too noisy; use one cause
 	gpuIdleRangeW = 15.0 // GPU power swing below this means the GPU did not engage
 	// Coherence thresholds (0..1), calibrated on genuine vs fabricated traces.
 	coherentPASS = 0.15
@@ -106,13 +107,26 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 		return 0, "no_activity"
 	}
 
-	// Largest eigenvalue of the correlation matrix, relative to k, measures how
-	// much one shared component explains: ~1/k when independent, near 1 for a
-	// single cause. Rescaled to 0..1.
+	// How much the top components of the correlation matrix explain, relative to
+	// chance (top/k). One cause is not enough for a phase-alternating run (CPU then
+	// GPU), so use the top two components: near top/k when channels are independent,
+	// near 1 when a few shared causes drive them. Rescaled to 0..1.
 	C := correlation(cols)
-	lambda := largestEigenvalue(C)
-	evr1 := lambda / float64(k)
-	cross := (evr1 - 1.0/float64(k)) / (1.0 - 1.0/float64(k))
+	lam1, v1 := dominantEigen(C)
+	top := 1
+	if n >= minSamplesTop2 && k >= 4 {
+		top = 2
+	}
+	evr := lam1 / float64(k)
+	if top == 2 {
+		deflate(C, lam1, v1)
+		lam2, _ := dominantEigen(C)
+		if lam2 < 0 {
+			lam2 = 0
+		}
+		evr = (lam1 + lam2) / float64(k)
+	}
+	cross := (evr - float64(top)/float64(k)) / (1.0 - float64(top)/float64(k))
 	if cross < 0 {
 		cross = 0
 	}
@@ -143,17 +157,19 @@ func activeChannels(samples []session.HardwareSample) []channel {
 		gpu   bool
 		f     func(session.HardwareCounters) float64
 	}
+	// Floors are on per-interval activity (mean |first-difference|), not total range,
+	// so a long idle run cannot accumulate its way past them.
 	specs := []spec{
-		{"cpu_time", 0.2, false, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
-		{"mem", 0.002, false, func(c session.HardwareCounters) float64 { return c.MemUsedGB }},
-		{"ctx_sw", 200, false, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
-		{"minflt", 100, false, func(c session.HardwareCounters) float64 { return c.MinorFaults }},
-		{"threads", 1, false, func(c session.HardwareCounters) float64 { return c.Threads }},
-		{"disk_r", 0.5, false, func(c session.HardwareCounters) float64 { return c.DiskReadMB }},
-		{"disk_w", 0.5, false, func(c session.HardwareCounters) float64 { return c.DiskWriteMB }},
-		{"gpu_util", 3, true, func(c session.HardwareCounters) float64 { return c.GPUUtilPct }},
-		{"gpu_mem", 20, true, func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB }},
-		{"gpu_power", 3, true, func(c session.HardwareCounters) float64 { return c.GPUPowerW }},
+		{"cpu_time", 0.005, false, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
+		{"mem", 0.0002, false, func(c session.HardwareCounters) float64 { return c.MemUsedGB }},
+		{"ctx_sw", 1.0, false, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
+		{"minflt", 50, false, func(c session.HardwareCounters) float64 { return c.MinorFaults }},
+		{"threads", 0.01, false, func(c session.HardwareCounters) float64 { return c.Threads }},
+		{"disk_r", 0.005, false, func(c session.HardwareCounters) float64 { return c.DiskReadMB }},
+		{"disk_w", 0.005, false, func(c session.HardwareCounters) float64 { return c.DiskWriteMB }},
+		{"gpu_util", 0.1, true, func(c session.HardwareCounters) float64 { return c.GPUUtilPct }},
+		{"gpu_mem", 0.5, true, func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB }},
+		{"gpu_power", 0.1, true, func(c session.HardwareCounters) float64 { return c.GPUPowerW }},
 	}
 
 	var act []channel
@@ -162,11 +178,22 @@ func activeChannels(samples []session.HardwareSample) []channel {
 			continue
 		}
 		vals := get(sp.f)
-		if valueRange(vals) >= sp.floor {
+		if meanAbsDiff(vals) >= sp.floor {
 			act = append(act, channel{sp.name, vals})
 		}
 	}
 	return act
+}
+
+func meanAbsDiff(v []float64) float64 {
+	if len(v) < 2 {
+		return 0
+	}
+	var s float64
+	for i := 1; i < len(v); i++ {
+		s += math.Abs(v[i] - v[i-1])
+	}
+	return s / float64(len(v)-1)
 }
 
 func diff(v []float64) []float64 {
@@ -219,17 +246,18 @@ func correlation(cols [][]float64) [][]float64 {
 	return C
 }
 
-// largestEigenvalue returns the dominant eigenvalue by power iteration, enough
-// for a k<=12 symmetric correlation matrix.
-func largestEigenvalue(C [][]float64) float64 {
+// dominantEigen returns the largest eigenvalue and its unit eigenvector by power
+// iteration, enough for a k<=10 symmetric correlation matrix.
+func dominantEigen(C [][]float64) (float64, []float64) {
 	k := len(C)
 	x := make([]float64, k)
 	for i := range x {
 		x[i] = 1.0 / math.Sqrt(float64(k))
 	}
 	var lambda float64
+	y := x
 	for iter := 0; iter < 100; iter++ {
-		y := make([]float64, k)
+		y = make([]float64, k)
 		for i := 0; i < k; i++ {
 			for j := 0; j < k; j++ {
 				y[i] += C[i][j] * x[j]
@@ -246,7 +274,6 @@ func largestEigenvalue(C [][]float64) float64 {
 		for i := range y {
 			y[i] /= norm
 		}
-		// Rayleigh quotient x^T C x
 		var l float64
 		for i := 0; i < k; i++ {
 			var ci float64
@@ -262,7 +289,17 @@ func largestEigenvalue(C [][]float64) float64 {
 		lambda = l
 		x = y
 	}
-	return lambda
+	return lambda, y
+}
+
+// deflate removes the component along v (eigenvalue lam) so the next power
+// iteration finds the second eigenvalue.
+func deflate(C [][]float64, lam float64, v []float64) {
+	for i := range C {
+		for j := range C[i] {
+			C[i][j] -= lam * v[i] * v[j]
+		}
+	}
 }
 
 func average(v []float64) float64 {
