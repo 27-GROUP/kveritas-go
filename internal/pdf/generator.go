@@ -127,6 +127,25 @@ func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 	return &meta, nil
 }
 
+// VisualPDFHash re-derives the SHA-256 of the report's visual pages (everything
+// before the seal marker), so an edit to the human-readable PDF is detectable.
+func VisualPDFHash(pdfPath string) (string, error) {
+	data, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return "", err
+	}
+	start := bytes.Index(data, []byte(metaBegin))
+	if start < 0 {
+		return "", fmt.Errorf("no K-Veritas seal in %s", pdfPath)
+	}
+	end := start
+	if end > 0 && data[end-1] == '\n' {
+		end--
+	}
+	sum := sha256.Sum256(data[:end])
+	return hex.EncodeToString(sum[:]), nil
+}
+
 type page struct {
 	content strings.Builder
 }

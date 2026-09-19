@@ -998,6 +998,8 @@ func renderActorTree(nodes []*harness.ActorNode, depth int) {
 func sanitizeForReport(s *session.Session) *session.Session {
 	clean := *s
 	clean.ProvSalt = ""
+	// The session token is a server credential; never publish it in the report.
+	clean.Token = ""
 	if provenance.ParseLevel(s.Disclosure) < provenance.Names {
 		clean.SourceHashes = nil
 	}
@@ -1625,6 +1627,22 @@ var cmdVerify = &cobra.Command{
 			fmt.Printf("TAMPERED\nData hash mismatch.\n  Stored:   %s\n  Computed: %s\n",
 				seal.DataHash, computedHash)
 			return nil
+		}
+
+		// The stored canonical JSON is the exact bytes that were signed; hashing it
+		// must reproduce the data hash, so an edit to the embedded copy is caught.
+		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
+			fmt.Printf("TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
+			return nil
+		}
+
+		// Re-hash the visual pages so an edit to the human-readable PDF is caught,
+		// not only changes to the embedded data.
+		if seal.VisualPDFHash != "" {
+			if vh, verr := pdf.VisualPDFHash(reportPath); verr == nil && vh != seal.VisualPDFHash {
+				fmt.Printf("TAMPERED\nThe visual PDF pages were modified after signing.\n")
+				return nil
+			}
 		}
 
 		// Step 2: verify the signed message hash.
