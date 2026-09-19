@@ -1779,10 +1779,14 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	fmt.Println("Server audit (same checks as the web verifier):")
 
 	cs := r.CryptoStatus
-	if cs.Valid {
+	authentic := cs.Authentic == nil && cs.Valid || (cs.Authentic != nil && *cs.Authentic)
+	switch {
+	case !cs.Valid:
+		fmt.Printf("  Cryptographic status: NOT AUTHENTIC (%s)\n", cs.Reason)
+	case authentic:
 		fmt.Printf("  Cryptographic status: AUTHENTIC\n")
-	} else {
-		fmt.Printf("  Cryptographic status: NOT AUTHENTIC -- %s\n", cs.Reason)
+	default:
+		fmt.Printf("  Cryptographic status: SELF-ATTESTED (valid signature, origin not confirmed)\n")
 	}
 	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
 		fmt.Printf("  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)

@@ -232,9 +232,11 @@ type PaperClaim struct {
 
 type ServerAuditResult struct {
 	CryptoStatus struct {
-		Valid  bool   `json:"valid"`
-		Reason string `json:"reason"`
-		Ledger *struct {
+		Valid     bool   `json:"valid"`
+		Authentic *bool  `json:"authentic"`
+		Origin    string `json:"origin"`
+		Reason    string `json:"reason"`
+		Ledger    *struct {
 			SignedAt string `json:"signed_at"`
 		} `json:"ledger"`
 		HMCAScore   *float64 `json:"hmca_score"`
