@@ -1274,7 +1274,7 @@ var cmdSeal = &cobra.Command{
 			checkoutBundleHash = h
 		}
 
-		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, checkoutBundleHash, &hmcaResult)
+		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, checkoutBundleHash, &hmcaResult, nil)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -1411,7 +1411,25 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult) (string, []byte, error) {
+// signedAnalysis recovers the coherence verdict and compute certificates the seal
+// actually committed to. Verification has to hash those, not what today's analyzer
+// would produce, or any improvement to either analyzer would retroactively mark
+// every report ever issued as tampered.
+func signedAnalysis(canonicalJSON string) (*session.HMCAResult, []session.ComputeCert, bool) {
+	if canonicalJSON == "" {
+		return nil, nil, false
+	}
+	var doc struct {
+		HMCA    *session.HMCAResult   `json:"hmca"`
+		Compute []session.ComputeCert `json:"compute"`
+	}
+	if err := json.Unmarshal([]byte(canonicalJSON), &doc); err != nil {
+		return nil, nil, false
+	}
+	return doc.HMCA, doc.Compute, true
+}
+
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult, certsOverride []session.ComputeCert) (string, []byte, error) {
 	type runPayload struct {
 		ID          string               `json:"id"`
 		Index       int                  `json:"index"`
@@ -1482,10 +1500,12 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	// Compute certs are deterministic, so binding them makes declared-card or sample
 	// tampering break the signature. Bound only when a run declares a card, so reports
 	// without one hash exactly as before.
-	certs := make([]session.ComputeCert, 0, len(runs))
+	certs := certsOverride
 	anyDeclared := false
 	for _, r := range runs {
-		certs = append(certs, compute.Analyze(r))
+		if certsOverride == nil {
+			certs = append(certs, compute.Analyze(r))
+		}
 		if r.Declared != nil {
 			anyDeclared = true
 		}
@@ -1616,7 +1636,12 @@ var cmdVerify = &cobra.Command{
 		}
 		verifyHMCA := hmca.Analyze(runs, verifySamples)
 
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, &verifyHMCA)
+		signedHMCA, signedCerts, haveSigned := signedAnalysis(seal.CanonicalJSON)
+		hashHMCA, hashCerts := &verifyHMCA, []session.ComputeCert(nil)
+		if haveSigned {
+			hashHMCA, hashCerts = signedHMCA, signedCerts
+		}
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, hashHMCA, hashCerts)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -1631,6 +1656,20 @@ var cmdVerify = &cobra.Command{
 		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
 			fmt.Printf("TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
 			return nil
+		}
+
+		if final, ferr := pdf.SealIsFinal(reportPath); ferr == nil && !final {
+			fmt.Printf("TAMPERED\nContent was appended after the seal; a PDF reader may render it in place of the signed pages.\n")
+			return nil
+		}
+
+		// The seal block covers what the signature does not: run history, total run
+		// count, and the other fields verify prints straight from the seal.
+		if seal.SealBlockHash != "" {
+			if sh, serr := pdf.SealBlockHash(reportPath); serr == nil && sh != seal.SealBlockHash {
+				fmt.Printf("TAMPERED\nThe seal block was modified after signing.\n")
+				return nil
+			}
 		}
 
 		// Re-hash the visual pages so an edit to the human-readable PDF is caught,
@@ -1912,7 +1951,11 @@ var cmdCheck = &cobra.Command{
 			checkSamples = append(checkSamples, r.HardwareSamples...)
 		}
 		checkHMCA := hmca.Analyze(runs, checkSamples)
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, &checkHMCA)
+		checkHashHMCA, checkCerts := &checkHMCA, []session.ComputeCert(nil)
+		if sh, sc, ok := signedAnalysis(seal.CanonicalJSON); ok {
+			checkHashHMCA, checkCerts = sh, sc
+		}
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, checkHashHMCA, checkCerts)
 		if err != nil {
 			return err
 		}

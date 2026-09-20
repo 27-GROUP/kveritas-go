@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -121,6 +122,47 @@ func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 		return nil, fmt.Errorf("corrupted metadata: %w", err)
 	}
 	return &meta, nil
+}
+
+// SealBlockHash re-derives the hash of the seal block. It covers fields the signed
+// canonical JSON does not, such as run_history and total_run_count, which verify
+// prints but the signature never bound. The field is hashed as it was before it
+// contained itself, so it is stripped back out before re-hashing.
+func SealBlockHash(pdfPath string) (string, error) {
+	data, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return "", err
+	}
+	start := bytes.Index(data, []byte(metaBegin))
+	end := bytes.Index(data, []byte(metaEnd))
+	if start < 0 || end < 0 || end <= start {
+		return "", fmt.Errorf("no K-Veritas seal in %s", pdfPath)
+	}
+	block := data[start+len(metaBegin)+1 : end]
+	if len(block) > 0 && block[len(block)-1] == '\n' {
+		block = block[:len(block)-1]
+	}
+	stripped := sealBlockHashField.ReplaceAll(block, nil)
+	sum := sha256.Sum256(stripped)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+var sealBlockHashField = regexp.MustCompile(`,?\s*"seal_block_hash"\s*:\s*"[a-f0-9]*"`)
+
+// SealIsFinal reports whether the seal block ends the file. A PDF reader resolves
+// objects through the last cross-reference table in the file, so an incremental
+// update appended after the seal can redefine a page and change what a reader shows
+// while every hash in the seal still matches.
+func SealIsFinal(pdfPath string) (bool, error) {
+	data, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return false, err
+	}
+	end := bytes.Index(data, []byte(metaEnd))
+	if end < 0 {
+		return false, fmt.Errorf("no K-Veritas seal in %s", pdfPath)
+	}
+	return len(bytes.TrimSpace(data[end+len(metaEnd):])) == 0, nil
 }
 
 // VisualPDFHash re-derives the SHA-256 of the report's visual pages (everything
