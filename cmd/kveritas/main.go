@@ -1727,6 +1727,22 @@ var cmdVerify = &cobra.Command{
 		fmt.Printf("Runs:       %d\n", len(runs))
 		fmt.Printf("Data hash:  %s\n", seal.DataHash)
 
+		// Coherence is part of the signed data, so report it offline too. Re-analysis
+		// is shown when it disagrees: the detector improves, sealed reports do not.
+		if signedHMCA != nil && signedHMCA.Verdict != "" {
+			fmt.Printf("Coherence:  %s (%.2f)\n", signedHMCA.Verdict, signedHMCA.Score)
+			for _, f := range signedHMCA.Flags {
+				fmt.Printf("  %s\n", f)
+			}
+		}
+		if verifyHMCA.Verdict == "FAIL" && (signedHMCA == nil || signedHMCA.Verdict != "FAIL") {
+			fmt.Printf("\nRe-analysis returns FAIL (sealed as %s):\n", signedHMCA.Verdict)
+			for _, f := range verifyHMCA.Flags {
+				fmt.Printf("  %s\n", f)
+			}
+			fmt.Printf("The signature is valid; the telemetry it commits to does not support this run.\n")
+		}
+
 		if seal.TotalRunCount > 0 {
 			fmt.Printf("Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
 		}

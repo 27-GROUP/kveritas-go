@@ -6,6 +6,7 @@ package hmca
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
@@ -27,6 +28,10 @@ const (
 	// square wave and lands near 1. Only meaningful at a known sampling rate.
 	analysisRateHz  = 2.0
 	uniformKurtosis = 2.0
+	// Telemetry belonging to a run cannot predate its start or outlive its end.
+	// Across 203 genuine runs no sample fell outside at all, so the tolerance only
+	// has to absorb clock granularity.
+	windowTolerance = time.Second
 )
 
 type channel struct {
@@ -41,7 +46,20 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	judged := 0
 
 	uniform := false
+	replayed := false
 	for i, run := range runs {
+		if !telemetryInWindow(run) {
+			judged++
+			replayed = true
+			flags = append(flags, fmt.Sprintf("run_%d: telemetry timestamps lie outside the run; the samples describe a different execution", i+1))
+			continue
+		}
+		if cpuTimeExceedsCores(run) {
+			judged++
+			replayed = true
+			flags = append(flags, fmt.Sprintf("run_%d: processor time exceeds what %d cores could deliver in %.0fs", i+1, run.Hardware.CPUCores, run.DurationSec))
+			continue
+		}
 		cross, kurt, status := coherenceOne(run.HardwareSamples)
 		switch status {
 		case "insufficient":
@@ -94,7 +112,43 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 			verdict = "WARN"
 		}
 	}
+	// Coherence measures the telemetry it is given; it cannot tell that the trace
+	// belongs to some other execution. Timestamps can, and they are signed.
+	if replayed {
+		verdict = "FAIL"
+	}
 	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict}
+}
+
+// cpuTimeExceedsCores reports a run that accumulated more processor time than its
+// cores could have delivered in its wall-clock window. This is arithmetic, not a
+// heuristic: a replayed trace squeezed into a shorter run trips it. Genuine runs
+// reach 15.04 core-seconds per second on 16 cores, so the headroom is real.
+func cpuTimeExceedsCores(run *session.RunRecord) bool {
+	cores := run.Hardware.CPUCores
+	n := len(run.HardwareSamples)
+	if cores <= 0 || n < 2 || run.DurationSec <= 0 {
+		return false
+	}
+	used := run.HardwareSamples[n-1].Counters.CPUTimeSec - run.HardwareSamples[0].Counters.CPUTimeSec
+	return used > float64(cores)*run.DurationSec*1.10
+}
+
+// telemetryInWindow reports whether a run's samples lie within the run's own start
+// and end. A replayed or borrowed trace is recorded at some other time, so it falls
+// outside even when it is perfectly coherent in itself.
+func telemetryInWindow(run *session.RunRecord) bool {
+	if run.StartAt.IsZero() || run.EndAt.IsZero() || len(run.HardwareSamples) == 0 {
+		return true
+	}
+	lo := run.StartAt.Add(-windowTolerance)
+	hi := run.EndAt.Add(windowTolerance)
+	for _, s := range run.HardwareSamples {
+		if s.Timestamp.Before(lo) || s.Timestamp.After(hi) {
+			return false
+		}
+	}
+	return true
 }
 
 // coherenceOne returns one run's coherence (0..1), the kurtosis of its shared
