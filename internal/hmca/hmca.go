@@ -11,8 +11,11 @@ import (
 )
 
 const (
-	minSamples    = 20   // below this, abstain
-	minActive     = 2    // need two active channels to judge coupling
+	minSamples = 20 // below this, abstain
+	// Two channels reduce the statistic to a single correlation coefficient,
+	// which is too noisy to accuse on: tight CPU loops that move only processor
+	// time and context switches swing between 0.06 and 1.00 across seeds.
+	minActive = 3
 	minSamplesTop2 = 150 // below this the two-cause estimator is too noisy; use one cause
 	gpuIdleRangeW = 15.0 // GPU power swing below this means the GPU did not engage
 	// Coherence thresholds (0..1), calibrated on genuine vs fabricated traces.
