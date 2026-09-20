@@ -15,12 +15,18 @@ const (
 	// Two channels reduce the statistic to a single correlation coefficient,
 	// which is too noisy to accuse on: tight CPU loops that move only processor
 	// time and context switches swing between 0.06 and 1.00 across seeds.
-	minActive = 3
-	minSamplesTop2 = 150 // below this the two-cause estimator is too noisy; use one cause
-	gpuIdleRangeW = 15.0 // GPU power swing below this means the GPU did not engage
+	minActive      = 3
+	minSamplesTop2 = 150  // below this the two-cause estimator is too noisy; use one cause
+	gpuIdleRangeW  = 15.0 // GPU power swing below this means the GPU did not engage
 	// Coherence thresholds (0..1), calibrated on genuine vs fabricated traces.
 	coherentPASS = 0.15
 	coherentWARN = 0.08
+	// Real computation drives its channels in bursts, so the shared component is
+	// heavy-tailed (kurtosis well above the Gaussian 3, typically tens). A duty
+	// cycle that manufactures coherence by toggling load on a timer is closer to a
+	// square wave and lands near 1. Only meaningful at a known sampling rate.
+	analysisRateHz  = 2.0
+	uniformKurtosis = 2.0
 )
 
 type channel struct {
@@ -35,8 +41,9 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	var flags []string
 	judged := 0
 
+	uniform := false
 	for i, run := range runs {
-		cross, status := coherenceOne(run.HardwareSamples)
+		cross, kurt, status := coherenceOne(run.HardwareSamples)
 		switch status {
 		case "insufficient":
 			// too few samples: abstain, no accusation
@@ -50,6 +57,10 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 				flags = append(flags, fmt.Sprintf("run_%d: execution channels are not coherent (%.2f); possible fabrication/replay", i+1, cross))
 			} else if cross < coherentPASS {
 				flags = append(flags, fmt.Sprintf("run_%d: weak execution coherence (%.2f)", i+1, cross))
+			}
+			if cross >= coherentPASS && !math.IsNaN(kurt) && kurt <= uniformKurtosis {
+				uniform = true
+				flags = append(flags, fmt.Sprintf("run_%d: coherence is uniform rather than bursty (%.2f); consistent with load driven on a timer", i+1, kurt))
 			}
 		}
 	}
@@ -78,26 +89,32 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 		default:
 			verdict = "FAIL"
 		}
+		// Coherence this regular is cheap to manufacture, so it is not evidence of
+		// work. Withhold the pass; do not accuse, the shape alone is not proof.
+		if uniform && verdict == "PASS" {
+			verdict = "WARN"
+		}
 	}
 	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict}
 }
 
-// coherenceOne returns one run's coherence (0..1) and a status: "" (genuine),
-// "no_activity", or "insufficient".
-func coherenceOne(samples []session.HardwareSample) (float64, string) {
+// coherenceOne returns one run's coherence (0..1), the kurtosis of its shared
+// component (NaN when the trace is too coarse to judge shape), and a status:
+// "" (genuine), "no_activity", or "insufficient".
+func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	n := len(samples)
 	if n < minSamples {
-		return 0, "insufficient"
+		return 0, math.NaN(), "insufficient"
 	}
 
-	act := activeChannels(samples)
+	act := activeChannels(samples, sampleDt(samples))
 	if len(act) == 0 {
-		return 0, "no_activity"
+		return 0, math.NaN(), "no_activity"
 	}
 	if len(act) < minActive {
 		// Work is present but one channel cannot show coupling. Abstain rather
 		// than accuse: a light but genuine run looks like this.
-		return 0, "insufficient"
+		return 0, math.NaN(), "insufficient"
 	}
 
 	// First-difference each channel (removes the shared trend, so a smooth ramp is
@@ -112,10 +129,10 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	}
 	k := len(cols)
 	if k == 0 {
-		return 0, "no_activity"
+		return 0, math.NaN(), "no_activity"
 	}
 	if k < minActive {
-		return 0, "insufficient"
+		return 0, math.NaN(), "insufficient"
 	}
 
 	// How much the top components of the correlation matrix explain, relative to
@@ -151,7 +168,107 @@ func coherenceOne(samples []session.HardwareSample) (float64, string) {
 	if cross > 1 {
 		cross = 1
 	}
-	return cross, ""
+
+	return cross, shapeKurtosis(samples), ""
+}
+
+// shapeKurtosis measures how bursty the shared component is. It re-derives the
+// component at a fixed rate because sampling rate sets the scale of the statistic:
+// judged at the raw rate, the same run would change shape with its duration.
+// Returns NaN when the trace is too coarse to reach that rate.
+func shapeKurtosis(samples []session.HardwareSample) float64 {
+	rs, rate := resample(samples, analysisRateHz)
+	if rate < analysisRateHz*0.9 || len(rs) < minSamples {
+		return math.NaN()
+	}
+	act := activeChannels(rs, 1.0/rate)
+	if len(act) < minActive {
+		return math.NaN()
+	}
+	var cols [][]float64
+	for _, ch := range act {
+		if z, ok := standardize(diff(ch.vals)); ok {
+			cols = append(cols, z)
+		}
+	}
+	if len(cols) < minActive {
+		return math.NaN()
+	}
+	_, v := dominantEigen(correlation(cols))
+	return kurtosis(project(cols, v))
+}
+
+func sampleDt(samples []session.HardwareSample) float64 {
+	n := len(samples)
+	if n < 2 {
+		return 0
+	}
+	span := samples[n-1].Timestamp.Sub(samples[0].Timestamp).Seconds()
+	if span <= 0 {
+		return 0
+	}
+	return span / float64(n-1)
+}
+
+// resample puts the trace on a fixed-rate time grid and reports the rate achieved.
+func resample(samples []session.HardwareSample, hz float64) ([]session.HardwareSample, float64) {
+	n := len(samples)
+	if n < 2 {
+		return samples, 0
+	}
+	span := samples[n-1].Timestamp.Sub(samples[0].Timestamp).Seconds()
+	if span <= 0 {
+		return samples, 0
+	}
+	if have := float64(n-1) / span; have <= hz {
+		return samples, have
+	}
+	want := int(span*hz) + 1
+	out := make([]session.HardwareSample, 0, want)
+	j := 0
+	for i := 0; i < want; i++ {
+		t := float64(i) / hz
+		for j+1 < n && samples[j+1].Timestamp.Sub(samples[0].Timestamp).Seconds() <= t {
+			j++
+		}
+		out = append(out, samples[j])
+	}
+	return out, hz
+}
+
+// project collapses the standardized channels onto the shared component v, giving
+// the one signal every channel is a shadow of.
+func project(cols [][]float64, v []float64) []float64 {
+	m := len(cols[0])
+	out := make([]float64, m)
+	for t := 0; t < m; t++ {
+		var x float64
+		for i := range cols {
+			x += v[i] * cols[i][t]
+		}
+		out[t] = x
+	}
+	return out
+}
+
+func kurtosis(v []float64) float64 {
+	n := float64(len(v))
+	if n < 4 {
+		return math.NaN()
+	}
+	m := average(v)
+	var m2, m4 float64
+	for _, x := range v {
+		d := x - m
+		m2 += d * d
+		m4 += d * d * d * d
+	}
+	m2 /= n
+	m4 /= n
+	if m2 < 1e-12 {
+		return math.NaN()
+	}
+	return m4 / (m2 * m2)
 }
 
 // nullCoherence is the value the statistic takes when the channels are
@@ -172,12 +289,13 @@ func nullCoherence(k, n, top int) float64 {
 	return null
 }
 
-// activeChannels returns the per-process channels that carried real activity.
-// cpu_freq and gpu_temp are deliberately excluded: they are board/system-wide, so
-// an external process could drive them and inject a shared signal into a run that
-// did nothing. Each channel must clear an absolute floor, so the measurement-noise
-// jitter of a near-idle loop does not read as computation.
-func activeChannels(samples []session.HardwareSample) []channel {
+// activeChannels returns the per-process channels that carried real activity,
+// given the seconds between samples. cpu_freq and gpu_temp are deliberately
+// excluded: they are board/system-wide, so an external process could drive them
+// and inject a shared signal into a run that did nothing. Each channel must clear
+// an absolute floor, so the measurement-noise jitter of a near-idle loop does not
+// read as computation.
+func activeChannels(samples []session.HardwareSample, dt float64) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))
 		for i, s := range samples {
@@ -191,30 +309,40 @@ func activeChannels(samples []session.HardwareSample) []channel {
 		name  string
 		floor float64
 		gpu   bool
+		rate  bool
 		f     func(session.HardwareCounters) float64
 	}
-	// Floors are on per-interval activity (mean |first-difference|), not total range,
-	// so a long idle run cannot accumulate its way past them.
+	// Cumulative counters are gated on work per second, which means the same thing
+	// at any sampling rate and cannot be accumulated past by simply running longer.
+	// The rest are instantaneous levels, where coarser sampling genuinely averages
+	// fluctuation away, so they keep an absolute floor on movement between samples.
 	specs := []spec{
-		{"cpu_time", 0.005, false, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
-		{"mem", 0.0002, false, func(c session.HardwareCounters) float64 { return c.MemUsedGB }},
-		{"ctx_sw", 1.0, false, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
-		{"minflt", 50, false, func(c session.HardwareCounters) float64 { return c.MinorFaults }},
-		{"threads", 0.01, false, func(c session.HardwareCounters) float64 { return c.Threads }},
-		{"disk_r", 0.005, false, func(c session.HardwareCounters) float64 { return c.DiskReadMB }},
-		{"disk_w", 0.005, false, func(c session.HardwareCounters) float64 { return c.DiskWriteMB }},
-		{"gpu_util", 0.1, true, func(c session.HardwareCounters) float64 { return c.GPUUtilPct }},
-		{"gpu_mem", 0.5, true, func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB }},
-		{"gpu_power", 0.1, true, func(c session.HardwareCounters) float64 { return c.GPUPowerW }},
+		{"cpu_time", 0.05, false, true, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
+		{"ctx_sw", 10, false, true, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
+		{"minflt", 500, false, true, func(c session.HardwareCounters) float64 { return c.MinorFaults }},
+		{"disk_r", 0.05, false, true, func(c session.HardwareCounters) float64 { return c.DiskReadMB }},
+		{"disk_w", 0.05, false, true, func(c session.HardwareCounters) float64 { return c.DiskWriteMB }},
+		{"mem", 0.0002, false, false, func(c session.HardwareCounters) float64 { return c.MemUsedGB }},
+		{"threads", 0.01, false, false, func(c session.HardwareCounters) float64 { return c.Threads }},
+		{"gpu_util", 0.1, true, false, func(c session.HardwareCounters) float64 { return c.GPUUtilPct }},
+		{"gpu_mem", 0.5, true, false, func(c session.HardwareCounters) float64 { return c.GPUMemUsedMB }},
+		{"gpu_power", 0.1, true, false, func(c session.HardwareCounters) float64 { return c.GPUPowerW }},
 	}
 
+	if dt <= 0 {
+		dt = 1.0 / analysisRateHz
+	}
 	var act []channel
 	for _, sp := range specs {
 		if gpuIdle && sp.gpu {
 			continue
 		}
 		vals := get(sp.f)
-		if meanAbsDiff(vals) >= sp.floor {
+		move := meanAbsDiff(vals)
+		if sp.rate {
+			move /= dt
+		}
+		if move >= sp.floor {
 			act = append(act, channel{sp.name, vals})
 		}
 	}

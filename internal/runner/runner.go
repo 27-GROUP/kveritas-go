@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"sync"
@@ -218,7 +219,17 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
-	hwSamples := hardware.Decimate(sampler.Stop(), 400)
+	// The cap is high enough to keep the full sampling rate for ordinary runs and
+	// to stay above the rate coherence analysis needs for runs up to about an hour.
+	// A low cap would make the stored rate depend on duration, which silently
+	// rescales anything later derived from how fast the counters move.
+	sampleCap := 7200
+	if v := os.Getenv("KVERITAS_SAMPLE_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 1 {
+			sampleCap = n
+		}
+	}
+	hwSamples := hardware.Decimate(sampler.Stop(), sampleCap)
 	if len(hwSamples) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
 	}
