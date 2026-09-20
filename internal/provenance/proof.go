@@ -151,6 +151,40 @@ func VerifyFile(pf *ProofFile, signedRoots map[string]bool) error {
 	return nil
 }
 
+// CommitRef is where a snapshot root sits in the signed report.
+type CommitRef struct {
+	Run   int
+	Index int
+	Event session.ProvEvent
+}
+
+// SignedCommits maps each signed root to every commit that carries it. A proof
+// states its own run and event but nothing commits to them, so those labels are
+// taken from the report instead. One root can appear at several commits: if no
+// tracked file changed between two boundaries the snapshot is identical, and the
+// file provably existed at all of them.
+func SignedCommits(canonicalJSON string) map[string][]CommitRef {
+	var doc struct {
+		Runs []struct {
+			Index      int                 `json:"index"`
+			Provenance *session.Provenance `json:"provenance"`
+		} `json:"runs"`
+	}
+	refs := map[string][]CommitRef{}
+	if json.Unmarshal([]byte(canonicalJSON), &doc) != nil {
+		return refs
+	}
+	for _, r := range doc.Runs {
+		if r.Provenance == nil {
+			continue
+		}
+		for _, c := range r.Provenance.Commits {
+			refs[c.Root] = append(refs[c.Root], CommitRef{Run: r.Index + 1, Index: c.Index, Event: c.Event})
+		}
+	}
+	return refs
+}
+
 // SignedRoots collects every provenance root committed in a report's canonical
 // JSON, which is what a proof's root must belong to.
 func SignedRoots(canonicalJSON string) map[string]bool {

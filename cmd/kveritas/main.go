@@ -277,6 +277,7 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 	if err := verifyReportSignature(seal); err != nil {
 		return fmt.Errorf("report signature: %w", err)
 	}
+	commits := provenance.SignedCommits(seal.CanonicalJSON)
 	roots := provenance.SignedRoots(seal.CanonicalJSON)
 	ok := 0
 	for _, pf := range proof.Files {
@@ -285,7 +286,25 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 			continue
 		}
 		content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
-		fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, pf.Run, pf.Event.Kind, len(content))
+		// Where the snapshot sits comes from the report, not from the proof: only
+		// the root is committed, so the proof's own labels prove nothing.
+		refs := commits[pf.Root]
+		run := 0
+		var where []string
+		seen := map[string]bool{}
+		for _, ref := range refs {
+			run = ref.Run
+			w := ref.Event.Kind
+			if ref.Event.Name != "" {
+				w += ":" + ref.Event.Name
+			}
+			if !seen[w] {
+				seen[w] = true
+				where = append(where, w)
+			}
+		}
+		fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, run,
+			strings.Join(where, "/"), len(content))
 		ok++
 	}
 	fmt.Printf("%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
