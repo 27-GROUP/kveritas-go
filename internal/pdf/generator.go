@@ -39,7 +39,6 @@ const (
 	bodyW = pageW - mL - mR
 )
 
-// EmbeddedData is the complete session state stored inside the PDF.
 type EmbeddedData struct {
 	Version string               `json:"version"`
 	Session *session.Session     `json:"session"`
@@ -47,7 +46,6 @@ type EmbeddedData struct {
 	Seal    *session.SealRecord  `json:"seal"`
 }
 
-// Generate writes a signed K-Veritas report to outPath.
 func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, hmcaResult *session.HMCAResult, outPath string) error {
 	b := newBuilder()
 
@@ -85,7 +83,6 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	if err != nil {
 		return err
 	}
-	// Hash the entire seal block content
 	blockHash := sha256.Sum256(metaJSON1)
 	seal.SealBlockHash = hex.EncodeToString(blockHash[:])
 
@@ -105,7 +102,6 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	return os.WriteFile(outPath, out.Bytes(), 0644)
 }
 
-// ExtractMetadata reads the embedded attestation data from a K-Veritas PDF.
 func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {

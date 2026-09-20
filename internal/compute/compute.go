@@ -30,7 +30,6 @@ const (
 	largeModelParams = 1e9
 )
 
-// Analyze produces the compute-cost certificate for a single run.
 func Analyze(rec *session.RunRecord) session.ComputeCert {
 	cert := session.ComputeCert{TimeBoundOK: true, EnergyBoundOK: true, MemoryBoundOK: true}
 

@@ -53,32 +53,25 @@ type RunRecord struct {
 	EnvDigest   string            `json:"env_digest"`
 	EnvPackages string            `json:"env_packages,omitempty"`
 
-	// Per-phase hardware snapshots
-	Phases []PhaseEvent `json:"phases,omitempty"`
-	// Inline claims committed in stdout
-	Claims []InlineClaim `json:"claims,omitempty"`
-	// Seed commitments declared in stdout
-	Seeds []SeedCommitment `json:"seeds,omitempty"`
-	// Hash of only the metric lines for ledger
-	MetricHash string `json:"metric_hash,omitempty"`
-	// Background hardware samples taken during the run
+	Phases          []PhaseEvent     `json:"phases,omitempty"`
+	Claims          []InlineClaim    `json:"claims,omitempty"`
+	Seeds           []SeedCommitment `json:"seeds,omitempty"`
+	MetricHash      string           `json:"metric_hash,omitempty"`
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
-	// Aggregate hash of all tracked source files
-	SourceCodeHash string `json:"source_code_hash,omitempty"`
-	// Author-declared model card (KVERITAS_MODEL / KVERITAS_WORKLOAD)
+	SourceCodeHash  string           `json:"source_code_hash,omitempty"`
+	// Declared from KVERITAS_MODEL / KVERITAS_WORKLOAD stdout lines.
 	Declared *DeclaredModel `json:"declared,omitempty"`
-	// File and subprocess activity observed during the run (Linux only for now)
-	Trace *RunTrace `json:"trace,omitempty"`
-	// Content-addressed state history of the run (Merkle snapshots at boundaries)
+	// Linux only for now.
+	Trace      *RunTrace   `json:"trace,omitempty"`
 	Provenance *Provenance `json:"provenance,omitempty"`
-	// SHA-256 of the checkout bundle (open disclosure only), binding it to the report
+	// Open disclosure only.
 	ProvBundleHash string `json:"prov_bundle_hash,omitempty"`
-	// Attested benchmark artifacts declared via KVERITAS_ARTIFACT
+	// Declared from KVERITAS_ARTIFACT stdout lines.
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 }
 
-// Artifact is a model or dataset declared for attestation. Public artifacts carry
-// a plain content hash; private ones a salted commitment that reveals nothing.
+// Public artifacts carry a plain content hash; private ones a salted commitment
+// that reveals nothing.
 type Artifact struct {
 	Role       string `json:"role"`
 	Name       string `json:"name,omitempty"`
@@ -87,9 +80,8 @@ type Artifact struct {
 	SizeBucket string `json:"size_bucket,omitempty"`
 }
 
-// Provenance is a run's hash-chained state history: content-addressed snapshots
-// at run boundaries. At the default disclosure level names are redacted, so it
-// proves what changed and when without revealing code or filenames.
+// At the default disclosure level names are redacted, so provenance proves what
+// changed and when without revealing code or filenames.
 type Provenance struct {
 	Disclosure string         `json:"disclosure"`
 	Root       string         `json:"root"`
@@ -106,15 +98,12 @@ type ProvEvent struct {
 	Name string `json:"name,omitempty"`
 }
 
-// ProvChange is one file that changed between two snapshots. Path is a stable
-// pseudonym unless the author disclosed real names.
+// Path is a stable pseudonym unless the author disclosed real names.
 type ProvChange struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
 }
 
-// ProvCommit is one state transition: the Merkle root of the tracked files, the
-// event that produced it, and a link binding it to the prior commit.
 type ProvCommit struct {
 	Index     int          `json:"index"`
 	Timestamp time.Time    `json:"timestamp"`
@@ -126,17 +115,16 @@ type ProvCommit struct {
 	Link      string       `json:"link"`
 }
 
-// WithheldFile is a file the author kept out of any bundle via .kveritasignore.
-// Its hash is still committed, so it is disclosed here rather than silently dropped.
+// Kept out of any bundle via .kveritasignore. The hash is still committed, so the
+// file is disclosed here rather than silently dropped.
 type WithheldFile struct {
 	Path       string `json:"path"`
 	Hash       string `json:"hash"`
 	SizeBucket string `json:"size_bucket"`
 }
 
-// FileEvent is one file the run touched. Op is "read" (opened, not written) or
-// "write" (created or modified). Reads coalesce to first open; writes carry the
-// final content hash.
+// Op is "read" (opened, not written) or "write" (created or modified). Reads
+// coalesce to first open; writes carry the final content hash.
 type FileEvent struct {
 	Op        string    `json:"op"`
 	Path      string    `json:"path"`
@@ -144,7 +132,6 @@ type FileEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// ProcEvent is one subprocess the run spawned, as seen by the activity tracer.
 type ProcEvent struct {
 	PID     int       `json:"pid"`
 	PPID    int       `json:"ppid"`
@@ -152,8 +139,7 @@ type ProcEvent struct {
 	StartAt time.Time `json:"start_at"`
 }
 
-// RunTrace is the file and subprocess activity captured during a run, shown as a
-// timeline at seal time. Truncated is set when distinct files exceeded the cap.
+// Truncated is set when distinct files exceeded the cap.
 type RunTrace struct {
 	Files     []FileEvent `json:"files,omitempty"`
 	Procs     []ProcEvent `json:"procs,omitempty"`
@@ -180,7 +166,6 @@ type HardwareInfo struct {
 	GPUNames []string `json:"gpu_names,omitempty"`
 }
 
-// HardwareCounters captures detailed hardware state at a point in time.
 // Values are best-effort; zero means the counter was unavailable.
 type HardwareCounters struct {
 	CPUTimeSec   float64 `json:"cpu_time_sec"`
@@ -223,7 +208,6 @@ type SeedCommitment struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// HardwareSample is a timestamped hardware reading taken during a run.
 type HardwareSample struct {
 	Timestamp time.Time        `json:"timestamp"`
 	Counters  HardwareCounters `json:"counters"`
@@ -236,8 +220,8 @@ type HMCAResult struct {
 	Verdict string   `json:"hmca_verdict"`
 }
 
-// DeclaredModel is the author-committed model card (KVERITAS_MODEL /
-// KVERITAS_WORKLOAD), the written claim the compute certificate checks.
+// Declared via KVERITAS_MODEL / KVERITAS_WORKLOAD: the written claim the compute
+// certificate checks.
 type DeclaredModel struct {
 	Params      int64   `json:"params,omitempty"`
 	Arch        string  `json:"arch,omitempty"`
@@ -248,9 +232,7 @@ type DeclaredModel struct {
 	SeqLen      int64   `json:"seq_len,omitempty"`
 }
 
-// ComputeCert is the per-run compute-cost certificate, derived from the model
-// card and hardware samples and recomputed at verify time so tampering breaks
-// the signature.
+// Recomputed at verify time, so tampering breaks the signature.
 type ComputeCert struct {
 	FDeclaredFLOPs float64  `json:"f_declared_flops,omitempty"`
 	GPUActiveSec   float64  `json:"gpu_active_sec,omitempty"`
@@ -266,7 +248,7 @@ type ComputeCert struct {
 	Notes          []string `json:"notes,omitempty"`
 }
 
-// LedgerRunEntry is a run record from the server ledger (no actual metric values).
+// A run record from the server ledger, carrying no actual metric values.
 type LedgerRunEntry struct {
 	RunIndex    int     `json:"run_index"`
 	StartedAt   string  `json:"started_at"`
@@ -295,10 +277,9 @@ type SealRecord struct {
 	VisualPDFHash string `json:"visual_pdf_hash,omitempty"`
 	SealBlockHash string `json:"seal_block_hash,omitempty"`
 	// SHA-256 of the combined multi-run checkout bundle, bound into the signature.
-	CheckoutBundleHash string `json:"checkout_bundle_hash,omitempty"`
-	// Run history from server ledger, embedded at seal time
-	RunHistory    []LedgerRunEntry `json:"run_history,omitempty"`
-	TotalRunCount int              `json:"total_run_count,omitempty"`
+	CheckoutBundleHash string           `json:"checkout_bundle_hash,omitempty"`
+	RunHistory         []LedgerRunEntry `json:"run_history,omitempty"`
+	TotalRunCount      int              `json:"total_run_count,omitempty"`
 }
 
 // Find walks up from the working directory to find a .kveritas directory.
@@ -376,7 +357,6 @@ func LoadSeal(kvDir string) (*SealRecord, error) {
 	return &seal, json.Unmarshal(data, &seal)
 }
 
-// FormatDuration formats seconds into a human-readable string.
 func FormatDuration(seconds float64) string {
 	if seconds < 60 {
 		return fmt.Sprintf("%.1f seconds", seconds)

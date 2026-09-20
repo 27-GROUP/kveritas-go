@@ -1,6 +1,6 @@
 // Package provenance records a run as a chain of content-addressed snapshots. At
 // each boundary (run start, phase, run end) it hashes the tracked files into a
-// Merkle root linked to the previous one, giving a tamper-evident timeline of what
+// Merkle root linked to the previous one, giving a verifiable timeline of what
 // changed. Leaves are salted per file, so a published hash cannot be guessed back
 // to known content and revealing one file never exposes the others.
 package provenance
@@ -60,7 +60,6 @@ type leaf struct {
 	content []byte
 }
 
-// Recorder accumulates snapshots over the life of a run.
 type Recorder struct {
 	root      string
 	salt      []byte
@@ -144,8 +143,6 @@ func SaltedLeaf(sessionSalt []byte, path string, content []byte) string {
 	return leafHash(m.Sum(nil), content)
 }
 
-// Snapshot hashes the tracked files now and appends a commit describing the
-// transition from the previous state.
 func (r *Recorder) Snapshot(kind, name string) {
 	if len(r.commits) >= maxCommits {
 		r.trunc = true

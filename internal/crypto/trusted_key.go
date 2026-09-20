@@ -21,12 +21,10 @@ HNBPgPZ242NH8JgE6CNF7ToL9syanS67u7UMgIcNgeNHNcy9blGpU5annzP9gN2l
 -----END PUBLIC KEY-----
 `
 
-// TrustedServerKey returns the pinned K-Veritas server public key.
 func TrustedServerKey() (*rsa.PublicKey, error) {
 	return LoadPublicKey([]byte(trustedServerKeyPEM))
 }
 
-// SamePublicKey reports whether two RSA public keys are identical.
 func SamePublicKey(a, b *rsa.PublicKey) bool {
 	return a != nil && b != nil && a.N.Cmp(b.N) == 0 && a.E == b.E
 }

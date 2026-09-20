@@ -51,7 +51,6 @@ var skipDirs = map[string]bool{
 	"build":        true,
 }
 
-// CollectSourceFiles walks rootDir and returns relative paths for all source files.
 func CollectSourceFiles(rootDir string) ([]string, error) {
 	var files []string
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
@@ -80,7 +79,6 @@ func CollectSourceFiles(rootDir string) ([]string, error) {
 	return files, err
 }
 
-// HashSourceFiles returns a map of relative path to SHA-256 hash for each file.
 // Files are hashed concurrently for speed.
 func HashSourceFiles(rootDir string, files []string) (map[string]string, error) {
 	if len(files) == 0 {
@@ -136,7 +134,6 @@ func HashSourceFiles(rootDir string, files []string) (map[string]string, error) 
 	return result, nil
 }
 
-// CreateBundle creates a zip archive of the listed files and returns the SHA-256 hash of the zip.
 func CreateBundle(rootDir string, files []string, outPath string) (string, error) {
 	out, err := os.Create(outPath)
 	if err != nil {
@@ -174,8 +171,7 @@ func CreateBundle(rootDir string, files []string, outPath string) (string, error
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// VerifySourceIntegrity checks current files against stored hashes.
-// Returns lists of modified and missing files.
+// Returns the modified and the missing files, in that order.
 func VerifySourceIntegrity(rootDir string, storedHashes map[string]string) (modified []string, missing []string, err error) {
 	for f, expectedHash := range storedHashes {
 		currentHash, err := crypto.HashFile(filepath.Join(rootDir, f))

@@ -35,7 +35,7 @@ const publicVerifyServer = "https://kveritas.org"
 
 var root = &cobra.Command{
 	Use:   "kveritas",
-	Short: "K-Veritas: tamper-evident experiment verification",
+	Short: "K-Veritas: cryptographic verification for computational experiments",
 	Long: `K-Veritas cryptographically binds a published result to the exact
 code, hardware, and time that produced it.
 
@@ -850,7 +850,6 @@ func mapToolType(tool string) string {
 	}
 }
 
-// harnessSeal signs the final chain head and writes the verifiable session report.
 func harnessSeal(kvDir string, sess *session.Session) error {
 	g, err := harness.LoadGenesis(kvDir)
 	if err != nil {
@@ -1060,7 +1059,6 @@ func renderArtifacts(idx int, arts []session.Artifact) {
 	}
 }
 
-// Prints a run's file and subprocess activity: reads, writes, and spawns.
 func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 	var reads, writes []session.FileEvent
 	for _, f := range t.Files {
@@ -1618,7 +1616,6 @@ var cmdVerify = &cobra.Command{
 		}
 		verifyHMCA := hmca.Analyze(runs, verifySamples)
 
-		// Step 1: recompute and verify the data hash.
 		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, &verifyHMCA)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
@@ -1645,7 +1642,6 @@ var cmdVerify = &cobra.Command{
 			}
 		}
 
-		// Step 2: verify the signed message hash.
 		payload := crypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
 		expectedMsgHash := crypto.HashBytes([]byte(payload))
 		if expectedMsgHash != seal.SignedMessageHash {
@@ -1654,8 +1650,7 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Step 3: verify the RSA-PSS signature against the embedded key. Proves internal
-		// consistency only; origin against the trust anchor is decided next.
+		// Proves internal consistency only; origin against the trust anchor is next.
 		embeddedKey, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
 			return fmt.Errorf("parsing embedded public key: %w", err)
@@ -1908,7 +1903,6 @@ var cmdCheck = &cobra.Command{
 			return err
 		}
 
-		// Verify integrity first.
 		seal := meta.Seal
 		sess := meta.Session
 		runs := meta.Runs

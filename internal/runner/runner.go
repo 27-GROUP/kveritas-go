@@ -27,14 +27,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Run executes command as a monitored subprocess, teeing its output while hashing
-// it and capturing metrics, phase boundaries with hardware snapshots, claims, and seeds.
 func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
 	}
 
-	// Pre-hash files and snapshot hardware concurrently.
 	var preHashes map[string]string
 	var preHashErr error
 	var hwInfo session.HardwareInfo
@@ -114,7 +111,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	obs.SetPID(cmd.Process.Pid)
 	sampler.SetPID(cmd.Process.Pid)
 
-	// Snapshots at start, each phase, and end make the run a tamper-evident state timeline.
+	// Snapshots at start, each phase, and end make the run a verifiable state timeline.
 	provLevel := provenance.ParseLevel(sess.Disclosure)
 	salt := decodeSalt(sess.ProvSalt)
 	prov := provenance.New(sess.ProjectDir, sess.Disclosure, sess.ID, salt)
@@ -283,7 +280,6 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		rec.Declared = declared
 	}
 
-	// Post-run: hash files, env digest, and source indexing concurrently.
 	var postHashes map[string]string
 	var postHashErr error
 	var envDig, envPackages string

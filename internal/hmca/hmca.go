@@ -34,8 +34,7 @@ type channel struct {
 	vals []float64
 }
 
-// Analyze computes per-run coherence from each run's scoped samples and returns
-// the session verdict. The samples argument is kept for signature compatibility.
+// The samples argument is unused; it is kept for signature compatibility.
 func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) session.HMCAResult {
 	var scores []float64
 	var flags []string
@@ -172,10 +171,9 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	return cross, shapeKurtosis(samples), ""
 }
 
-// shapeKurtosis measures how bursty the shared component is. It re-derives the
-// component at a fixed rate because sampling rate sets the scale of the statistic:
-// judged at the raw rate, the same run would change shape with its duration.
-// Returns NaN when the trace is too coarse to reach that rate.
+// Burstiness of the shared component, re-derived at a fixed rate because sampling
+// rate sets the scale of the statistic: judged at the raw rate, the same run would
+// change shape with its duration. NaN when the trace is too coarse to reach it.
 func shapeKurtosis(samples []session.HardwareSample) float64 {
 	rs, rate := resample(samples, analysisRateHz)
 	if rate < analysisRateHz*0.9 || len(rs) < minSamples {
@@ -289,12 +287,10 @@ func nullCoherence(k, n, top int) float64 {
 	return null
 }
 
-// activeChannels returns the per-process channels that carried real activity,
-// given the seconds between samples. cpu_freq and gpu_temp are deliberately
-// excluded: they are board/system-wide, so an external process could drive them
-// and inject a shared signal into a run that did nothing. Each channel must clear
-// an absolute floor, so the measurement-noise jitter of a near-idle loop does not
-// read as computation.
+// Channels that carried real activity, given the seconds between samples.
+// cpu_freq and gpu_temp are deliberately excluded: they are board-wide, so an
+// external process could drive them and inject a shared signal into a run that
+// did nothing.
 func activeChannels(samples []session.HardwareSample, dt float64) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))

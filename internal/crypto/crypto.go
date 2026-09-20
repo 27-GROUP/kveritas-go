@@ -20,13 +20,11 @@ import (
 
 const RSAKeyBits = 4096
 
-// HashBytes returns the SHA-256 hex digest of b.
 func HashBytes(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
 
-// HashFile returns the SHA-256 hex digest of the named file, streamed.
 func HashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -60,7 +58,6 @@ func CanonicalHashWithBytes(v interface{}) (string, []byte, error) {
 	return HashBytes(b), b, nil
 }
 
-// Payload constructs the signing payload string.
 func Payload(dataHash, nonce, signedAt string) string {
 	return fmt.Sprintf("%s:%s:%s", dataHash, nonce, signedAt)
 }
@@ -74,12 +71,10 @@ func RandomNonce() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// GenerateKey generates a 4096-bit RSA key pair.
 func GenerateKey() (*rsa.PrivateKey, error) {
 	return rsa.GenerateKey(rand.Reader, RSAKeyBits)
 }
 
-// MarshalPrivateKey encodes a private key as PKCS8 PEM.
 func MarshalPrivateKey(key *rsa.PrivateKey) ([]byte, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -88,7 +83,6 @@ func MarshalPrivateKey(key *rsa.PrivateKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
-// MarshalPublicKey encodes a public key as PKIX PEM.
 func MarshalPublicKey(key *rsa.PublicKey) ([]byte, error) {
 	der, err := x509.MarshalPKIXPublicKey(key)
 	if err != nil {
@@ -97,7 +91,6 @@ func MarshalPublicKey(key *rsa.PublicKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 }
 
-// LoadPublicKey parses a PEM-encoded RSA public key.
 func LoadPublicKey(pemData []byte) (*rsa.PublicKey, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
@@ -144,7 +137,6 @@ func SignPSS(privKey *rsa.PrivateKey, payload string) (string, error) {
 	return base64.StdEncoding.EncodeToString(sig), nil
 }
 
-// VerifyPSS verifies a base64-encoded RSA-PSS-SHA256 signature over payload.
 func VerifyPSS(pubKey *rsa.PublicKey, payload, sigBase64 string) error {
 	sigBytes, err := base64.StdEncoding.DecodeString(sigBase64)
 	if err != nil {

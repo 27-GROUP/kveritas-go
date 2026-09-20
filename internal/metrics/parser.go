@@ -78,7 +78,6 @@ var blocklist = map[string]bool{
 	"pid": true, "port": true, "gpu": true, "cpu": true,
 }
 
-// Parser accumulates metric state across a run's output lines.
 type Parser struct {
 	explicitCount  int
 	heuristicCount int
@@ -277,7 +276,6 @@ func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
 	return nil
 }
 
-// WarnIfEmpty writes a guidance message when no explicit metrics were captured.
 func (p *Parser) WarnIfEmpty() {
 	if p.explicitCount == 0 {
 		fmt.Fprintln(os.Stderr, "[kveritas] Warning: No explicit metrics captured in this run.")
@@ -309,5 +307,4 @@ func (p *Parser) WarnIfEmpty() {
 	}
 }
 
-// ExplicitCount returns the number of KVERITAS_METRIC lines parsed so far.
 func (p *Parser) ExplicitCount() int { return p.explicitCount }

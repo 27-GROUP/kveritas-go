@@ -42,7 +42,6 @@ const (
 	eventHeader = 16 // sizeof(struct inotify_event) without the name field
 )
 
-// Observer watches a project directory and the process tree of a run.
 type Observer struct {
 	root string
 
@@ -64,7 +63,7 @@ type Observer struct {
 	started bool
 }
 
-// New creates an observer scoped to root. It does not start watching yet.
+// Scoped to root; does not start watching yet.
 func New(root string) *Observer {
 	abs, err := filepath.Abs(root)
 	if err == nil {
@@ -82,8 +81,7 @@ func New(root string) *Observer {
 	}
 }
 
-// Start begins watching. It never fails the run: if inotify is unavailable the
-// observer simply records nothing.
+// Never fails the run: if inotify is unavailable the observer records nothing.
 func (o *Observer) Start() {
 	fd, err := syscall.InotifyInit1(syscall.IN_NONBLOCK | syscall.IN_CLOEXEC)
 	if err != nil {
@@ -96,8 +94,6 @@ func (o *Observer) Start() {
 	go o.readLoop()
 }
 
-// SetPID tells the observer which process to follow for subprocess spawns. It is
-// called after the child starts.
 func (o *Observer) SetPID(pid int) {
 	if !o.started {
 		return
@@ -107,7 +103,6 @@ func (o *Observer) SetPID(pid int) {
 	go o.procLoop()
 }
 
-// Stop ends observation and returns the assembled trace.
 func (o *Observer) Stop() *session.RunTrace {
 	if !o.started {
 		return nil
@@ -240,8 +235,6 @@ func (o *Observer) atCap() bool {
 	return len(o.opened)+len(o.wrote) >= maxFiles
 }
 
-// procLoop follows the run's process tree and records each subprocess the first
-// time it is seen.
 func (o *Observer) procLoop() {
 	defer o.wg.Done()
 	root := int(atomic.LoadInt32(&o.pid))
@@ -286,7 +279,6 @@ func (o *Observer) scanProcs(root int) {
 	}
 }
 
-// descends reports whether pid is a descendant of root by walking parent links.
 func descends(pid, root int, parent map[int]int) bool {
 	for depth := 0; depth < 64; depth++ {
 		pp, ok := parent[pid]
@@ -301,8 +293,8 @@ func descends(pid, root int, parent map[int]int) bool {
 	return false
 }
 
-// readProcTable reads /proc once, returning a pid->ppid map. Command lines are
-// read lazily, only for the descendants actually recorded, to keep each poll cheap.
+// Command lines are read lazily, only for the descendants actually recorded, to
+// keep each poll cheap.
 func readProcTable() map[int]int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {

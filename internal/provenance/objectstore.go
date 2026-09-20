@@ -16,7 +16,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// bundleMeta is the per-run bundle written by a Recorder.
 type bundleMeta struct {
 	SessionID string             `json:"session_id"`
 	Commits   []bundleMetaCommit `json:"commits"`

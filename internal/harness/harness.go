@@ -23,9 +23,8 @@ const (
 	lockFile    = "chain.lock"
 )
 
-// ServerSig is what the server hands back after signing a hash: the signature
-// plus the nonce and timestamp that went into it, and the public key a verifier
-// needs to check it later.
+// Carries the nonce and timestamp that went into the signature, and the public
+// key a verifier needs to check it later.
 type ServerSig struct {
 	Signature    string `json:"signature"`
 	Nonce        string `json:"nonce"`
@@ -51,7 +50,7 @@ type Genesis struct {
 // Entry is one designated action in session order. TopAgent names the top-level
 // agent it belongs to, AgentID a sub-agent within it, and SpawnedID (on a spawn
 // result) the sub-agent that action created. Together they let the agent forest be
-// rebuilt from signed facts, so attribution stays tamper-evident across sub-agents.
+// rebuilt from signed facts, so re-attribution across sub-agents is detectable.
 type Entry struct {
 	Index       int    `json:"index"`
 	Actor       string `json:"actor"`
@@ -68,8 +67,6 @@ type Entry struct {
 	Link        string `json:"link"`
 }
 
-// ActorNode is a node in the attribution tree: an actor, how many designated
-// actions it took, and the sub-agents it spawned.
 type ActorNode struct {
 	Name     string        `json:"name"`
 	Count    int           `json:"count"`
@@ -77,8 +74,6 @@ type ActorNode struct {
 	Children []*ActorNode  `json:"children,omitempty"`
 }
 
-// ActorAction is a bucketed count of what an actor did (reads, writes, spawns,
-// and so on), for the per-agent breakdown in the session tree.
 type ActorAction struct {
 	Label string `json:"label"`
 	Count int    `json:"count"`
@@ -210,9 +205,8 @@ func ActorTree(entries []Entry) []*ActorNode {
 	return roots
 }
 
-// Seal is the closing record of a session. It pins the final chain head and
-// carries the server's signature over it, so a verifier can confirm the chain
-// ends exactly where the server saw it end, and no entries were quietly dropped.
+// Pins the final chain head and the server's signature over it, so a verifier can
+// confirm the chain ends where the server saw it end and no entries were dropped.
 type Seal struct {
 	ChainHead  string    `json:"chain_head"`
 	EntryCount int       `json:"entry_count"`
@@ -220,7 +214,6 @@ type Seal struct {
 	Server     ServerSig `json:"server"`
 }
 
-// Report is the complete, verifiable record of a harness session.
 type Report struct {
 	Version string  `json:"version"`
 	Genesis Genesis `json:"genesis"`
@@ -240,7 +233,6 @@ type Proof struct {
 	Output string `json:"revealed_output,omitempty"`
 }
 
-// ProofResult reports whether a proof verifies and what it attests.
 type ProofResult struct {
 	Valid       bool
 	Detail      string
@@ -388,8 +380,7 @@ func LoadChain(kvDir string) ([]Entry, error) {
 	return entries, sc.Err()
 }
 
-// AppendEntry links a new action onto the chain under a file lock and returns
-// the committed entry with its index and link filled in.
+// Appends under a file lock and returns the entry with its index and link filled in.
 func AppendEntry(kvDir string, e Entry) (*Entry, error) {
 	unlock, err := lock(kvDir)
 	if err != nil {
@@ -456,8 +447,6 @@ func lock(kvDir string) (func(), error) {
 	return nil, fmt.Errorf("could not acquire chain lock at %s", path)
 }
 
-// Result is what verification hands back: a verdict, and on failure the exact entry
-// and actor it went wrong at.
 type Result struct {
 	Verdict     string
 	Detail      string

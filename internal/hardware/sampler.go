@@ -34,7 +34,6 @@ func (s *Sampler) SetPID(pid int) {
 	s.capture()
 }
 
-// NewSampler creates a new hardware sampler with the given polling interval.
 func NewSampler(interval time.Duration) *Sampler {
 	return &Sampler{
 		interval: interval,
@@ -43,7 +42,6 @@ func NewSampler(interval time.Duration) *Sampler {
 	}
 }
 
-// Start begins background hardware sampling.
 func (s *Sampler) Start() {
 	go func() {
 		defer close(s.done)
@@ -62,7 +60,6 @@ func (s *Sampler) Start() {
 	}()
 }
 
-// hasGPU reports whether a GPU counter set carries any signal.
 func hasGPU(c session.HardwareCounters) bool {
 	return c.GPUUtilPct > 0 || c.GPUMemUsedMB > 0 || c.GPUPowerW > 0 || c.GPUTempC > 0
 }
@@ -109,7 +106,6 @@ func Decimate(samples []session.HardwareSample, max int) []session.HardwareSampl
 	return out
 }
 
-// Stop terminates sampling and returns all collected samples.
 func (s *Sampler) Stop() []session.HardwareSample {
 	close(s.stop)
 	<-s.done

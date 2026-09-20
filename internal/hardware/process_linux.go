@@ -72,13 +72,11 @@ func ProcessGPUCounters(rootPID int) session.HardwareCounters {
 	return c
 }
 
-// ProcessAlive reports whether the process still exists.
 func ProcessAlive(pid int) bool {
 	_, err := os.Stat("/proc/" + strconv.Itoa(pid))
 	return err == nil
 }
 
-// descendantPIDs returns rootPID and every process descended from it.
 func descendantPIDs(rootPID int) map[int]bool {
 	parent := map[int]int{}
 	entries, err := os.ReadDir("/proc")
