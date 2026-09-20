@@ -1,5 +1,7 @@
 bin/
 dist/
+/kveritas
+/kveritas-server
 keys/private.pem
 **/.kveritas/
 *.pdf
