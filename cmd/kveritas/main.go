@@ -2011,6 +2011,21 @@ var cmdCheck = &cobra.Command{
 			fmt.Printf("INVALID: signature verification failed: %v\n", err)
 			return nil
 		}
+		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
+			fmt.Println("TAMPERED: stored canonical JSON does not match the signed data hash; claims check aborted")
+			return nil
+		}
+		// A valid signature only proves the report is self-consistent. Without this a
+		// reviewer checking a paper's numbers would accept a self-signed forgery.
+		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil)
+		if err != nil {
+			return fmt.Errorf("checking report origin: %w", err)
+		}
+		if !serverSigned {
+			fmt.Println("SELF-ATTESTED: signed with an author-supplied key, not K-Veritas.")
+			fmt.Println("The claims below are checked against an unverified report.")
+			fmt.Println()
+		}
 
 		claimsData, err := os.ReadFile(checkClaimsPath)
 		if err != nil {
@@ -2060,6 +2075,8 @@ func init() {
 }
 
 // runFilter is 1-indexed; 0 searches all runs.
+// findMetric returns the metric's last reading, which is the value a paper cites.
+// Taking the first would compare an author's final accuracy against epoch zero.
 func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bool, value float64, explicit bool) {
 	for i, r := range runs {
 		if runFilter > 0 && i+1 != runFilter {
@@ -2067,11 +2084,11 @@ func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bo
 		}
 		for _, m := range r.Metrics {
 			if strings.EqualFold(m.Name, name) {
-				return true, m.Value, m.Source == "explicit"
+				found, value, explicit = true, m.Value, m.Source == "explicit"
 			}
 		}
 	}
-	return false, 0, false
+	return found, value, explicit
 }
 
 var cmdStatus = &cobra.Command{
@@ -2149,15 +2166,18 @@ report for reviewer cross-referencing.`,
 			Claims []claimEntry `json:"claims"`
 		}
 
-		seen := map[string]bool{}
+		// The value a paper cites is the one the run ended on, so later readings of
+		// the same metric replace earlier ones while keeping first-seen order.
+		at := map[string]int{}
 		var claims []claimEntry
 
 		for _, r := range meta.Runs {
 			for _, m := range r.Metrics {
-				if seen[m.Name] {
+				if i, ok := at[m.Name]; ok {
+					claims[i].Value = m.Value
 					continue
 				}
-				seen[m.Name] = true
+				at[m.Name] = len(claims)
 				claims = append(claims, claimEntry{
 					Metric:    m.Name,
 					Value:     m.Value,
