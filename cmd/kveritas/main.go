@@ -1825,7 +1825,11 @@ var cmdVerify = &cobra.Command{
 				case got == seal.CheckoutBundleHash || got == seal.SourceBundleHash:
 					fmt.Printf("Source bundle: MATCH (this code is bound to the report)\n")
 				default:
+					// The caller asked whether this code belongs to this report and it
+					// does not, so the command has to fail rather than print VERIFIED
+					// at the top and bury the mismatch at the bottom.
 					fmt.Printf("Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
+					return fmt.Errorf("bundle does not match the signed report")
 				}
 			}
 			return nil
@@ -1840,6 +1844,9 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 		renderServerAudit(res)
+		if res.BundleVerification.Match != nil && !*res.BundleVerification.Match {
+			return fmt.Errorf("bundle does not match the signed report")
+		}
 		return nil
 	},
 }
