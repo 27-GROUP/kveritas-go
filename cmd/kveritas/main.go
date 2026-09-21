@@ -1948,7 +1948,7 @@ func renderServerAudit(r *client.ServerAuditResult) {
 }
 
 func init() {
-	cmdVerify.Flags().StringVar(&verifyKeyPath, "public-key", "", "path to public key PEM (default: use key embedded in report)")
+	cmdVerify.Flags().StringVar(&verifyKeyPath, "public-key", "", "trust anchor PEM the report's key must match (default: the pinned K-Veritas key)")
 	cmdVerify.Flags().BoolVar(&verifyOffline, "offline", false, "verify locally only, skip the server ledger check")
 	cmdVerify.Flags().StringVar(&verifyServer, "server", publicVerifyServer, "attestation server for the ledger check")
 	cmdVerify.Flags().StringVar(&verifyBundle, "bundle", "", "source bundle (.kvbundle.zip): checks the code matches and runs the AI code audit")
