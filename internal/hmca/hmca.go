@@ -28,9 +28,8 @@ const (
 	// square wave and lands near 1. Only meaningful at a known sampling rate.
 	analysisRateHz  = 2.0
 	uniformKurtosis = 2.0
-	// Telemetry belonging to a run cannot predate its start or outlive its end.
-	// Across 203 genuine runs no sample fell outside at all, so the tolerance only
-	// has to absorb clock granularity.
+	// Telemetry cannot predate a run's start or outlive its end; the tolerance only
+	// absorbs clock granularity.
 	windowTolerance = time.Second
 )
 
@@ -120,10 +119,8 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict}
 }
 
-// cpuTimeExceedsCores reports a run that accumulated more processor time than its
-// cores could have delivered in its wall-clock window. This is arithmetic, not a
-// heuristic: a replayed trace squeezed into a shorter run trips it. Genuine runs
-// reach 15.04 core-seconds per second on 16 cores, so the headroom is real.
+// More processor time than the cores could deliver in the wall-clock window is
+// arithmetically impossible, so a replayed trace squeezed into a shorter run trips it.
 func cpuTimeExceedsCores(run *session.RunRecord) bool {
 	cores := run.Hardware.CPUCores
 	n := len(run.HardwareSamples)
@@ -134,9 +131,8 @@ func cpuTimeExceedsCores(run *session.RunRecord) bool {
 	return used > float64(cores)*run.DurationSec*1.10
 }
 
-// telemetryInWindow reports whether a run's samples lie within the run's own start
-// and end. A replayed or borrowed trace is recorded at some other time, so it falls
-// outside even when it is perfectly coherent in itself.
+// A replayed or borrowed trace was recorded at some other time, so it falls outside
+// the run's own window even when it is perfectly coherent in itself.
 func telemetryInWindow(run *session.RunRecord) bool {
 	if run.StartAt.IsZero() || run.EndAt.IsZero() || len(run.HardwareSamples) == 0 {
 		return true
@@ -225,9 +221,8 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	return cross, shapeKurtosis(samples), ""
 }
 
-// Burstiness of the shared component, re-derived at a fixed rate because sampling
-// rate sets the scale of the statistic: judged at the raw rate, the same run would
-// change shape with its duration. NaN when the trace is too coarse to reach it.
+// Burstiness of the shared component, re-derived at a fixed rate: judged at the raw
+// rate the same run would change shape with its duration. NaN if the trace is coarser.
 func shapeKurtosis(samples []session.HardwareSample) float64 {
 	rs, rate := resample(samples, analysisRateHz)
 	if rate < analysisRateHz*0.9 || len(rs) < minSamples {
@@ -341,10 +336,8 @@ func nullCoherence(k, n, top int) float64 {
 	return null
 }
 
-// Channels that carried real activity, given the seconds between samples.
 // cpu_freq and gpu_temp are deliberately excluded: they are board-wide, so an
-// external process could drive them and inject a shared signal into a run that
-// did nothing.
+// external process could drive them and inject a shared signal into an idle run.
 func activeChannels(samples []session.HardwareSample, dt float64) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))

@@ -1430,10 +1430,8 @@ func init() {
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 }
 
-// signedAnalysis recovers the coherence verdict and compute certificates the seal
-// actually committed to. Verification has to hash those, not what today's analyzer
-// would produce, or any improvement to either analyzer would retroactively mark
-// every report ever issued as tampered.
+// Verification hashes the analysis the seal committed to, not what today's analyzer
+// would produce: otherwise improving either analyzer marks every old report tampered.
 func signedAnalysis(canonicalJSON string) (*session.HMCAResult, []session.ComputeCert, bool) {
 	if canonicalJSON == "" {
 		return nil, nil, false
@@ -1825,9 +1823,8 @@ var cmdVerify = &cobra.Command{
 				case got == seal.CheckoutBundleHash || got == seal.SourceBundleHash:
 					fmt.Printf("Source bundle: MATCH (this code is bound to the report)\n")
 				default:
-					// The caller asked whether this code belongs to this report and it
-					// does not, so the command has to fail rather than print VERIFIED
-					// at the top and bury the mismatch at the bottom.
+					// The caller asked whether this code belongs to this report, so a
+					// mismatch has to fail rather than print VERIFIED and bury it below.
 					fmt.Printf("Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
 					return fmt.Errorf("bundle does not match the signed report")
 				}
@@ -2082,8 +2079,7 @@ func init() {
 }
 
 // runFilter is 1-indexed; 0 searches all runs.
-// findMetric returns the metric's last reading, which is the value a paper cites.
-// Taking the first would compare an author's final accuracy against epoch zero.
+// The last reading is the value a paper cites; the first would be epoch zero.
 func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bool, value float64, explicit bool) {
 	for i, r := range runs {
 		if runFilter > 0 && i+1 != runFilter {
@@ -2173,8 +2169,7 @@ report for reviewer cross-referencing.`,
 			Claims []claimEntry `json:"claims"`
 		}
 
-		// The value a paper cites is the one the run ended on, so later readings of
-		// the same metric replace earlier ones while keeping first-seen order.
+		// Later readings replace earlier ones, keeping first-seen order.
 		at := map[string]int{}
 		var claims []claimEntry
 

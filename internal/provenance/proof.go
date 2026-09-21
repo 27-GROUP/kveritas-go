@@ -151,18 +151,15 @@ func VerifyFile(pf *ProofFile, signedRoots map[string]bool) error {
 	return nil
 }
 
-// CommitRef is where a snapshot root sits in the signed report.
 type CommitRef struct {
 	Run   int
 	Index int
 	Event session.ProvEvent
 }
 
-// SignedCommits maps each signed root to every commit that carries it. A proof
-// states its own run and event but nothing commits to them, so those labels are
-// taken from the report instead. One root can appear at several commits: if no
-// tracked file changed between two boundaries the snapshot is identical, and the
-// file provably existed at all of them.
+// A proof states its own run and event but nothing commits to them, so the labels are
+// taken from the report. One root can span several commits: when nothing changed
+// between two boundaries the snapshot is identical, and the file existed at both.
 func SignedCommits(canonicalJSON string) map[string][]CommitRef {
 	var doc struct {
 		Runs []struct {

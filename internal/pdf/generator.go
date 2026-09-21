@@ -124,10 +124,9 @@ func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 	return &meta, nil
 }
 
-// SealBlockHash re-derives the hash of the seal block. It covers fields the signed
-// canonical JSON does not, such as run_history and total_run_count, which verify
-// prints but the signature never bound. The field is hashed as it was before it
-// contained itself, so it is stripped back out before re-hashing.
+// Covers fields the signed canonical JSON does not, such as run_history, which verify
+// prints but the signature never bound. The field is stripped before re-hashing since
+// it was hashed before it contained itself.
 func SealBlockHash(pdfPath string) (string, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {
@@ -149,10 +148,8 @@ func SealBlockHash(pdfPath string) (string, error) {
 
 var sealBlockHashField = regexp.MustCompile(`,?\s*"seal_block_hash"\s*:\s*"[a-f0-9]*"`)
 
-// SealIsFinal reports whether the seal block ends the file. A PDF reader resolves
-// objects through the last cross-reference table in the file, so an incremental
-// update appended after the seal can redefine a page and change what a reader shows
-// while every hash in the seal still matches.
+// A PDF reader resolves objects through the last cross-reference table, so an update
+// appended after the seal can redefine a page while every hash still matches.
 func SealIsFinal(pdfPath string) (bool, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {

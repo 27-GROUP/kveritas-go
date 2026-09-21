@@ -220,10 +220,8 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 		}
 	}
 
-	// The cap is high enough to keep the full sampling rate for ordinary runs and
-	// to stay above the rate coherence analysis needs for runs up to about an hour.
-	// A low cap would make the stored rate depend on duration, which silently
-	// rescales anything later derived from how fast the counters move.
+	// A low cap would make the stored rate depend on duration, silently rescaling
+	// anything later derived from how fast the counters move.
 	sampleCap := 7200
 	if v := os.Getenv("KVERITAS_SAMPLE_CAP"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 1 {
