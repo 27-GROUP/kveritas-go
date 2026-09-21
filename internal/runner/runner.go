@@ -179,6 +179,10 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 					allArtifacts = append(allArtifacts, *art)
 					mu.Unlock()
 					fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, line %d)\n", decl.Role, art.Visibility, lineNum)
+				} else {
+					// Silence here would let a mistyped path look attested to its author.
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: artifact %q not attested, cannot read %s (line %d)\n",
+						decl.Role, decl.Path, lineNum)
 				}
 				continue
 			}
