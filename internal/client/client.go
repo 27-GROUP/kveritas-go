@@ -339,27 +339,78 @@ func (c *Client) AuditReport(reportPath, bundlePath, manuscriptPath string) (*Se
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", c.BaseURL+"/api/audit", &buf)
+	// The AI checks can outlast the proxy in front of the server, so the audit runs
+	// as a job that is polled. Servers without job support get the old single call.
+	status, body, err := c.postForm("/api/audit/start", buf.Bytes(), w.FormDataContentType())
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
+	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
+		status, body, err = c.postForm("/api/audit", buf.Bytes(), w.FormDataContentType())
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("server error %d: %s", status, strings.TrimSpace(string(body)))
+		}
+		var out ServerAuditResult
+		return &out, json.Unmarshal(body, &out)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("server error %d: %s", status, strings.TrimSpace(string(body)))
+	}
+	var job struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(body, &job); err != nil || job.JobID == "" {
+		return nil, fmt.Errorf("server did not start the audit")
+	}
 
+	poll := &http.Client{Timeout: 30 * time.Second}
+	deadline := time.Now().Add(15 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		resp, err := poll.Get(c.BaseURL + "/api/audit/" + job.JobID)
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+		var st struct {
+			Status string            `json:"status"`
+			Detail string            `json:"detail"`
+			Result ServerAuditResult `json:"result"`
+		}
+		if err := json.Unmarshal(data, &st); err != nil {
+			return nil, err
+		}
+		switch st.Status {
+		case "done":
+			return &st.Result, nil
+		case "error":
+			return nil, fmt.Errorf("audit failed: %s", st.Detail)
+		}
+	}
+	return nil, fmt.Errorf("audit did not finish in time")
+}
+
+func (c *Client) postForm(path string, body []byte, contentType string) (int, []byte, error) {
+	req, err := http.NewRequest("POST", c.BaseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("server unreachable: %w", err)
+		return 0, nil, fmt.Errorf("server unreachable: %w", err)
 	}
 	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server error %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	var out ServerAuditResult
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	data, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, data, err
 }
