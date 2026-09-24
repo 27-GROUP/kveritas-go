@@ -38,11 +38,18 @@ type InitResponse struct {
 }
 
 type sealRequest struct {
-	Token     string `json:"token"`
-	SessionID string `json:"session_id"`
-	MachineID string `json:"machine_id"`
-	DataHash  string `json:"data_hash"`
-	RunCount  int    `json:"run_count"`
+	Token     string       `json:"token"`
+	SessionID string       `json:"session_id"`
+	MachineID string       `json:"machine_id"`
+	DataHash  string       `json:"data_hash"`
+	RunCount  int          `json:"run_count"`
+	Anchors   []SealAnchor `json:"anchors,omitempty"`
+}
+
+type SealAnchor struct {
+	Run        int    `json:"run"`
+	Invocation int    `json:"invocation"`
+	RunDigest  string `json:"run_digest"`
 }
 
 type SealResponse struct {
@@ -53,7 +60,7 @@ type SealResponse struct {
 	PublicKeyPEM      string `json:"public_key_pem"`
 }
 
-type recordRunRequest struct {
+type RunAnchor struct {
 	Token       string  `json:"token"`
 	SessionID   string  `json:"session_id"`
 	MachineID   string  `json:"machine_id"`
@@ -64,6 +71,21 @@ type recordRunRequest struct {
 	ExitCode    int     `json:"exit_code"`
 	MetricHash  string  `json:"metric_hash"`
 	StdoutLines int     `json:"stdout_lines"`
+	Invocation  int     `json:"invocation"`
+	RunDigest   string  `json:"run_digest"`
+	Chain       string  `json:"chain"`
+	EndedAt     string  `json:"ended_at"`
+}
+
+// A reply from the server, as opposed to a network failure. A rejected anchor must
+// not be retried, while an unreachable server must.
+type ServerError struct {
+	Status int
+	Body   string
+}
+
+func (e *ServerError) Error() string {
+	return fmt.Sprintf("server error %d: %s", e.Status, e.Body)
 }
 
 type RunHistoryResponse struct {
@@ -113,7 +135,7 @@ func (c *Client) HarnessInit(sessionID, machineID string, initAt time.Time, gene
 	return &resp, nil
 }
 
-func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*SealResponse, error) {
+func (c *Client) Seal(sess *session.Session, dataHash string, runCount int, anchors []SealAnchor) (*SealResponse, error) {
 	var resp SealResponse
 	err := c.post("/api/v1/seal", sealRequest{
 		Token:     sess.Token,
@@ -121,6 +143,7 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 		MachineID: sess.MachineID,
 		DataHash:  dataHash,
 		RunCount:  runCount,
+		Anchors:   anchors,
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -128,9 +151,8 @@ func (c *Client) Seal(sess *session.Session, dataHash string, runCount int) (*Se
 	return &resp, nil
 }
 
-func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error {
-	var resp struct{}
-	return c.post("/api/v1/record-run", recordRunRequest{
+func NewRunAnchor(sess *session.Session, rec *session.RunRecord, chain string) RunAnchor {
+	return RunAnchor{
 		Token:       sess.Token,
 		SessionID:   sess.ID,
 		MachineID:   sess.MachineID,
@@ -141,7 +163,16 @@ func (c *Client) RecordRun(sess *session.Session, rec *session.RunRecord) error 
 		ExitCode:    rec.ExitCode,
 		MetricHash:  rec.MetricHash,
 		StdoutLines: rec.StdoutLines,
-	}, &resp)
+		Invocation:  rec.Invocation,
+		RunDigest:   rec.RunDigest,
+		Chain:       chain,
+		EndedAt:     rec.EndAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func (c *Client) SendRunAnchor(a RunAnchor) error {
+	var resp struct{}
+	return c.post("/api/v1/record-run", a, &resp)
 }
 
 func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) {
@@ -203,7 +234,7 @@ func (c *Client) post(path string, body, out interface{}) error {
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server error %d: %s", resp.StatusCode, respBody)
+		return &ServerError{Status: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
 	}
 	return json.Unmarshal(respBody, out)
 }
@@ -230,6 +261,14 @@ type PaperClaim struct {
 	Severity    string `json:"severity"`
 }
 
+type AnchorCheck struct {
+	Run        int      `json:"run"`
+	Invocation int      `json:"invocation"`
+	Status     string   `json:"status"`
+	Detail     string   `json:"detail"`
+	DelaySec   *float64 `json:"delay_sec"`
+}
+
 type ServerAuditResult struct {
 	CryptoStatus struct {
 		Valid     bool   `json:"valid"`
@@ -239,9 +278,11 @@ type ServerAuditResult struct {
 		Ledger    *struct {
 			SignedAt string `json:"signed_at"`
 		} `json:"ledger"`
-		HMCAScore   *float64 `json:"hmca_score"`
-		HMCAVerdict *string  `json:"hmca_verdict"`
-		HMCAFlags   []string `json:"hmca_flags"`
+		HMCAScore        *float64      `json:"hmca_score"`
+		HMCAVerdict      *string       `json:"hmca_verdict"`
+		HMCAFlags        []string      `json:"hmca_flags"`
+		RunAnchors       []AnchorCheck `json:"run_anchors"`
+		RunAnchorSummary string        `json:"run_anchor_summary"`
 	} `json:"crypto_status"`
 	CodeAudit struct {
 		Status    string    `json:"status"`

@@ -31,6 +31,25 @@ type runInvocation struct {
 	ExitCode    int     `json:"exit_code"`
 	MetricHash  string  `json:"metric_hash"`
 	StdoutLines int     `json:"stdout_lines"`
+	Invocation  *int    `json:"invocation,omitempty"`
+	RunDigest   string  `json:"run_digest,omitempty"`
+	Chain       string  `json:"-"`
+	EndedAt     string  `json:"ended_at,omitempty"`
+	ReceivedAt  string  `json:"received_at,omitempty"`
+}
+
+func anchorGenesis(sessionID string) string {
+	return crypto.HashBytes([]byte("kveritas-run-chain:" + sessionID))
+}
+
+func anchored(runs []runInvocation) map[int]runInvocation {
+	out := map[int]runInvocation{}
+	for _, r := range runs {
+		if r.Invocation != nil {
+			out[*r.Invocation] = r
+		}
+	}
+	return out
 }
 
 type srv struct {
@@ -210,6 +229,10 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 		ExitCode    int     `json:"exit_code"`
 		MetricHash  string  `json:"metric_hash"`
 		StdoutLines int     `json:"stdout_lines"`
+		Invocation  *int    `json:"invocation"`
+		RunDigest   string  `json:"run_digest"`
+		Chain       string  `json:"chain"`
+		EndedAt     string  `json:"ended_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -217,13 +240,17 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	sess, ok := s.sessions[req.SessionID]
 	if !ok || sess.Token != req.Token {
-		s.mu.Unlock()
 		writeError(w, http.StatusUnauthorized, "invalid session or token")
 		return
 	}
-	s.runHistory[req.SessionID] = append(s.runHistory[req.SessionID], runInvocation{
+	if sess.Sealed {
+		writeError(w, http.StatusConflict, "session is sealed; no more runs can be recorded")
+		return
+	}
+	inv := runInvocation{
 		RunIndex:    req.RunIndex,
 		StartedAt:   req.StartedAt,
 		DurationSec: req.DurationSec,
@@ -231,8 +258,40 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 		ExitCode:    req.ExitCode,
 		MetricHash:  req.MetricHash,
 		StdoutLines: req.StdoutLines,
-	})
-	s.mu.Unlock()
+	}
+	if req.Invocation != nil && req.RunDigest != "" {
+		k := *req.Invocation
+		have := anchored(s.runHistory[req.SessionID])
+		if prev, dup := have[k]; dup {
+			// A resend of a delivered anchor is fine; a different digest for the same
+			// invocation is an attempt to rewrite a finished run.
+			if prev.RunDigest == req.RunDigest {
+				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+			} else {
+				writeError(w, http.StatusConflict, fmt.Sprintf("invocation %d is already anchored with a different digest", k))
+			}
+			return
+		}
+		prevChain := anchorGenesis(req.SessionID)
+		if k > 0 {
+			p, ok := have[k-1]
+			if !ok {
+				writeError(w, http.StatusConflict, fmt.Sprintf("invocation %d arrived before invocation %d", k, k-1))
+				return
+			}
+			prevChain = p.Chain
+		}
+		if crypto.HashBytes([]byte(prevChain+":"+req.RunDigest)) != req.Chain {
+			writeError(w, http.StatusConflict, "run chain does not extend the anchored chain")
+			return
+		}
+		inv.Invocation = &k
+		inv.RunDigest = req.RunDigest
+		inv.Chain = req.Chain
+		inv.EndedAt = req.EndedAt
+		inv.ReceivedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	s.runHistory[req.SessionID] = append(s.runHistory[req.SessionID], inv)
 
 	log.Printf("Run recorded: session=%s run=%d exit=%d", req.SessionID, req.RunIndex, req.ExitCode)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -267,6 +326,10 @@ func (s *srv) handleSeal(w http.ResponseWriter, r *http.Request) {
 		MachineID string `json:"machine_id"`
 		DataHash  string `json:"data_hash"`
 		RunCount  int    `json:"run_count"`
+		Anchors   []struct {
+			Invocation int    `json:"invocation"`
+			RunDigest  string `json:"run_digest"`
+		} `json:"anchors"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -305,6 +368,32 @@ func (s *srv) handleSeal(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "cannot seal a session with no runs")
 		return
+	}
+	have := anchored(s.runHistory[req.SessionID])
+	if len(have) > 0 && len(req.Anchors) == 0 {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "this session's runs were anchored; the seal must carry their digests")
+		return
+	}
+	for k := 0; k < len(have); k++ {
+		if _, ok := have[k]; !ok {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, fmt.Sprintf("invocation %d was never anchored", k))
+			return
+		}
+	}
+	for _, a := range req.Anchors {
+		got, ok := have[a.Invocation]
+		if !ok {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, fmt.Sprintf("invocation %d was never anchored", a.Invocation))
+			return
+		}
+		if got.RunDigest != a.RunDigest {
+			s.mu.Unlock()
+			writeError(w, http.StatusConflict, fmt.Sprintf("run from invocation %d changed after it finished", a.Invocation))
+			return
+		}
 	}
 	sess.Sealed = true
 	s.mu.Unlock()

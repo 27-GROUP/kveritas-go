@@ -655,16 +655,33 @@ func (b *builder) addRunHistoryPage(seal *session.SealRecord) {
 
 	for _, entry := range seal.RunHistory {
 		status := "OK"
-		if entry.ExitCode != 0 {
+		switch {
+		case entry.ExitCode == -1:
+			status = "INTERRUPTED"
+		case entry.ExitCode != 0:
 			status = fmt.Sprintf("EXIT %d", entry.ExitCode)
 		}
 		dur := entry.DurationFmt
 		if dur == "" {
 			dur = fmt.Sprintf("%.1fs", entry.DurationSec)
 		}
-		b.body(fmt.Sprintf("  Run %d  [%s]  %s  %d stdout lines  started %s",
-			entry.RunIndex+1, status, dur, entry.StdoutLines, entry.StartedAt[:19]))
+		label := fmt.Sprintf("Run %d", entry.RunIndex+1)
+		if entry.Invocation != nil {
+			label = fmt.Sprintf("Invocation %d", *entry.Invocation+1)
+		}
+		started := entry.StartedAt
+		if len(started) > 19 {
+			started = started[:19]
+		}
+		b.body(fmt.Sprintf("  %s  [%s]  %s  %d stdout lines  started %s",
+			label, status, dur, entry.StdoutLines, started))
 		b.mono(fmt.Sprintf("    metric_hash: %s", entry.MetricHash))
+		if entry.RunDigest != "" {
+			b.mono(fmt.Sprintf("    run_digest:  %s", entry.RunDigest))
+			if d, ok := entry.AnchorDelay(); ok {
+				b.mono("    anchored:    " + session.DescribeAnchorDelay(d))
+			}
+		}
 	}
 }
 

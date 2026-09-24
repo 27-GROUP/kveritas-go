@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mamadou2727/kveritas-go/internal/anchor"
 	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/client"
 	"github.com/Mamadou2727/kveritas-go/internal/compute"
@@ -892,7 +894,7 @@ func harnessSeal(kvDir string, sess *session.Session) error {
 		sealSig = *s
 	} else {
 		c := client.New(sess.ServerURL)
-		resp, err := c.Seal(sess, chainHead, len(entries))
+		resp, err := c.Seal(sess, chainHead, len(entries), nil)
 		if err != nil {
 			return fmt.Errorf("server seal failed: %w", err)
 		}
@@ -1158,6 +1160,24 @@ Files listed with --files are hashed before and after the run.`,
 		if sess.Sealed {
 			return fmt.Errorf("session is already sealed; cannot add more runs")
 		}
+		release, err := anchor.AcquireRun(kvDir)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if err := recoverInterrupted(kvDir, sess); err != nil {
+			return err
+		}
+		online := sess.ServerURL != "local"
+		var c *client.Client
+		if online {
+			c = client.New(sess.ServerURL)
+			if left, _ := anchor.Flush(c, kvDir); left > 0 {
+				fmt.Fprintf(os.Stderr, "[kveritas] %d earlier run anchor(s) still queued; retrying in the background\n", left)
+			}
+			stop := anchor.Background(c, kvDir, 30*time.Second)
+			defer stop()
+		}
 
 		// Heuristically detect the script file from the command if --files is empty.
 		hints := runFiles
@@ -1169,16 +1189,28 @@ Files listed with --files are hashed before and after the run.`,
 			}
 		}
 
+		inv := sess.Invocations
+		if err := anchor.BeginRun(kvDir, anchor.Inflight{Invocation: inv, Index: len(sess.Runs), Command: args, StartedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
 		rec, err := runner.Run(sess, args, hints)
 		if err != nil {
+			anchor.EndRun(kvDir)
 			return err
 		}
 
-		// Record every run in the ledger, failures included, for the multi-run history.
-		if sess.ServerURL != "local" {
-			c := client.New(sess.ServerURL)
-			if ledgerErr := c.RecordRun(sess, rec); ledgerErr != nil {
-				fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record run in server ledger: %v\n", ledgerErr)
+		// Every invocation is anchored, failures included, so the server's history and
+		// the chain have no holes.
+		if err := anchorInvocation(kvDir, sess, rec, inv); err != nil {
+			return err
+		}
+		if online {
+			if left, ferr := anchor.FlushWithin(c, kvDir, 30*time.Second); left > 0 {
+				if anchor.Rejected(ferr) {
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: the server rejected this run's anchor: %v\n", ferr)
+				} else {
+					fmt.Fprintf(os.Stderr, "[kveritas] Server unreachable; run anchor queued and will be retried (the report shows the delay)\n")
+				}
 			}
 		}
 
@@ -1201,6 +1233,89 @@ Files listed with --files are hashed before and after the run.`,
 			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
 		return nil
 	},
+}
+
+func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int) error {
+	// Digest the record as it will read back from disk and from the report, not the
+	// in-memory copy, so the anchor matches at seal and at verify.
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	var stored session.RunRecord
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return err
+	}
+	digest, err := runDigest(&stored)
+	if err != nil {
+		return err
+	}
+	rec.Invocation = inv
+	rec.RunDigest = digest
+	prev := sess.ChainHead
+	if prev == "" {
+		prev = anchor.Genesis(sess.ID)
+	}
+	chain := anchor.Next(prev, digest)
+	if sess.ServerURL != "local" {
+		if err := anchor.Enqueue(kvDir, client.NewRunAnchor(sess, rec, chain)); err != nil {
+			return err
+		}
+	}
+	sess.Invocations = inv + 1
+	sess.ChainHead = chain
+	if err := sess.Save(kvDir); err != nil {
+		return err
+	}
+	anchor.EndRun(kvDir)
+	return nil
+}
+
+// A run whose process died with its terminal still gets an entry, marked interrupted,
+// so its invocation number is never left as a gap the seal would refuse.
+func recoverInterrupted(kvDir string, sess *session.Session) error {
+	inf, ok := anchor.LoadInflight(kvDir)
+	if !ok {
+		return nil
+	}
+	if _, live := anchor.RunLockHolder(kvDir); live {
+		return nil
+	}
+	if sess.Invocations > inf.Invocation {
+		anchor.EndRun(kvDir)
+		return nil
+	}
+	for _, a := range anchor.Pending(kvDir) {
+		if a.Invocation == inf.Invocation {
+			sess.Invocations = inf.Invocation + 1
+			sess.ChainHead = a.Chain
+			if err := sess.Save(kvDir); err != nil {
+				return err
+			}
+			anchor.EndRun(kvDir)
+			return nil
+		}
+	}
+	end := inf.LastSeen
+	if end.Before(inf.StartedAt) {
+		end = inf.StartedAt
+	}
+	rec := &session.RunRecord{
+		ID:          uuid.New().String()[:8],
+		SessionID:   sess.ID,
+		Index:       inf.Index,
+		Command:     inf.Command,
+		StartAt:     inf.StartedAt,
+		EndAt:       end,
+		DurationSec: end.Sub(inf.StartedAt).Seconds(),
+		ExitCode:    -1,
+		Modified:    []string{},
+		Metrics:     []session.Metric{},
+	}
+	rec.DurationFmt = session.FormatDuration(rec.DurationSec)
+	fmt.Fprintf(os.Stderr, "[kveritas] Run %d (%s) was interrupted before it finished; recorded as interrupted\n",
+		inf.Invocation+1, strings.Join(inf.Command, " "))
+	return anchorInvocation(kvDir, sess, rec, inf.Invocation)
 }
 
 func init() {
@@ -1230,8 +1345,22 @@ var cmdSeal = &cobra.Command{
 		if sess.Type == "harness" {
 			return harnessSeal(kvDir, sess)
 		}
+		release, err := anchor.AcquireRun(kvDir)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if err := recoverInterrupted(kvDir, sess); err != nil {
+			return err
+		}
 		if len(sess.Runs) == 0 {
 			return fmt.Errorf("no runs recorded; use 'kveritas run' first")
+		}
+		if sess.ServerURL != "local" && sealKeyPath == "" {
+			left, ferr := anchor.FlushWithin(client.New(sess.ServerURL), kvDir, 30*time.Second)
+			if left > 0 {
+				return fmt.Errorf("%d run anchor(s) have not reached the server yet (%v); reconnect and seal again", left, ferr)
+			}
 		}
 
 		runs := make([]*session.RunRecord, 0, len(sess.Runs))
@@ -1239,6 +1368,11 @@ var cmdSeal = &cobra.Command{
 			r, err := session.LoadRun(kvDir, id)
 			if err != nil {
 				return fmt.Errorf("loading run %s: %w", id, err)
+			}
+			if r.RunDigest != "" {
+				if d, derr := runDigest(r); derr != nil || d != r.RunDigest {
+					return fmt.Errorf("run %d was modified after it finished: its record no longer matches the digest anchored at run end", len(runs)+1)
+				}
 			}
 			runs = append(runs, r)
 		}
@@ -1321,6 +1455,7 @@ var cmdSeal = &cobra.Command{
 				seal.RunHistory = history.Runs
 				seal.TotalRunCount = history.TotalRuns
 				fmt.Fprintf(os.Stderr, "[kveritas] Run history: %d total invocations for this session\n", history.TotalRuns)
+				printAnchorSummary(runs, history.Runs)
 			}
 		}
 
@@ -1407,6 +1542,27 @@ var cmdSeal = &cobra.Command{
 	},
 }
 
+func printAnchorSummary(runs []*session.RunRecord, history []session.LedgerRunEntry) {
+	byInv := map[int]session.LedgerRunEntry{}
+	for _, e := range history {
+		if e.Invocation != nil {
+			byInv[*e.Invocation] = e
+		}
+	}
+	for i, r := range runs {
+		if r.RunDigest == "" {
+			continue
+		}
+		e, ok := byInv[r.Invocation]
+		if !ok {
+			continue
+		}
+		if d, ok := e.AnchorDelay(); ok {
+			fmt.Fprintf(os.Stderr, "[kveritas] Run %d anchored %s\n", i+1, session.DescribeAnchorDelay(d))
+		}
+	}
+}
+
 func reportComputeCert(c session.ComputeCert) {
 	if c.Verdict == "" || c.Verdict == "N/A" {
 		return
@@ -1446,72 +1602,81 @@ func signedAnalysis(canonicalJSON string) (*session.HMCAResult, []session.Comput
 	return doc.HMCA, doc.Compute, true
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult, certsOverride []session.ComputeCert) (string, []byte, error) {
-	type runPayload struct {
-		ID          string               `json:"id"`
-		Index       int                  `json:"index"`
-		Command     []string             `json:"command"`
-		StartAt     string               `json:"start_at"`
-		EndAt       string               `json:"end_at"`
-		DurationSec float64              `json:"duration_sec"`
-		ExitCode    int                  `json:"exit_code"`
-		PreHashes   map[string]string    `json:"pre_hashes"`
-		PostHashes  map[string]string    `json:"post_hashes"`
-		Modified    []string             `json:"modified_files"`
-		StdoutHash  string               `json:"stdout_hash"`
-		StderrHash  string               `json:"stderr_hash"`
-		StdoutLines int                  `json:"stdout_lines"`
-		Metrics     []session.Metric     `json:"metrics"`
-		Hardware    session.HardwareInfo `json:"hardware"`
-		EnvDigest   string               `json:"env_digest"`
-		// Below: omitempty for backward compat with old verifiers.
-		Phases         []session.PhaseEvent     `json:"phases,omitempty"`
-		Claims         []session.InlineClaim    `json:"claims,omitempty"`
-		Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
-		MetricHash     string                   `json:"metric_hash,omitempty"`
-		DurationFmt    string                   `json:"duration_fmt,omitempty"`
-		SourceCodeHash string                   `json:"source_code_hash,omitempty"`
-		Declared       *session.DeclaredModel   `json:"declared,omitempty"`
-		Trace          *session.RunTrace        `json:"trace,omitempty"`
-		Provenance      *session.Provenance       `json:"provenance,omitempty"`
-		ProvBundleHash  string                    `json:"prov_bundle_hash,omitempty"`
-		Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
-		HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
-	}
+type runPayload struct {
+	ID          string               `json:"id"`
+	Index       int                  `json:"index"`
+	Command     []string             `json:"command"`
+	StartAt     string               `json:"start_at"`
+	EndAt       string               `json:"end_at"`
+	DurationSec float64              `json:"duration_sec"`
+	ExitCode    int                  `json:"exit_code"`
+	PreHashes   map[string]string    `json:"pre_hashes"`
+	PostHashes  map[string]string    `json:"post_hashes"`
+	Modified    []string             `json:"modified_files"`
+	StdoutHash  string               `json:"stdout_hash"`
+	StderrHash  string               `json:"stderr_hash"`
+	StdoutLines int                  `json:"stdout_lines"`
+	Metrics     []session.Metric     `json:"metrics"`
+	Hardware    session.HardwareInfo `json:"hardware"`
+	EnvDigest   string               `json:"env_digest"`
+	// Below: omitempty for backward compat with old verifiers.
+	Phases         []session.PhaseEvent     `json:"phases,omitempty"`
+	Claims         []session.InlineClaim    `json:"claims,omitempty"`
+	Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
+	MetricHash     string                   `json:"metric_hash,omitempty"`
+	DurationFmt    string                   `json:"duration_fmt,omitempty"`
+	SourceCodeHash string                   `json:"source_code_hash,omitempty"`
+	Declared       *session.DeclaredModel   `json:"declared,omitempty"`
+	Trace          *session.RunTrace        `json:"trace,omitempty"`
+	Provenance      *session.Provenance       `json:"provenance,omitempty"`
+	ProvBundleHash  string                    `json:"prov_bundle_hash,omitempty"`
+	Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
+	HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
+}
 
+func runPayloadOf(r *session.RunRecord) runPayload {
+	return runPayload{
+		ID:             r.ID,
+		Index:          r.Index,
+		Command:        r.Command,
+		StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
+		EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
+		DurationSec:    r.DurationSec,
+		ExitCode:       r.ExitCode,
+		PreHashes:      r.PreHashes,
+		PostHashes:     r.PostHashes,
+		Modified:       r.Modified,
+		StdoutHash:     r.StdoutHash,
+		StderrHash:     r.StderrHash,
+		StdoutLines:    r.StdoutLines,
+		Metrics:        r.Metrics,
+		Hardware:       r.Hardware,
+		EnvDigest:      r.EnvDigest,
+		Phases:         r.Phases,
+		Claims:         r.Claims,
+		Seeds:          r.Seeds,
+		MetricHash:     r.MetricHash,
+		DurationFmt:    r.DurationFmt,
+		SourceCodeHash: r.SourceCodeHash,
+		Declared:       r.Declared,
+		Trace:          r.Trace,
+		Provenance:      r.Provenance,
+		ProvBundleHash:  r.ProvBundleHash,
+		Artifacts:       r.Artifacts,
+		HardwareSamples: r.HardwareSamples,
+	}
+}
+
+// Hashes the exact bytes this run occupies inside the signed canonical JSON, so a
+// verifier can check a run against its run-end anchor without re-encoding it.
+func runDigest(r *session.RunRecord) (string, error) {
+	return crypto.CanonicalHash(runPayloadOf(r))
+}
+
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult, certsOverride []session.ComputeCert) (string, []byte, error) {
 	runPayloads := make([]runPayload, 0, len(runs))
 	for _, r := range runs {
-		rp := runPayload{
-			ID:             r.ID,
-			Index:          r.Index,
-			Command:        r.Command,
-			StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
-			EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
-			DurationSec:    r.DurationSec,
-			ExitCode:       r.ExitCode,
-			PreHashes:      r.PreHashes,
-			PostHashes:     r.PostHashes,
-			Modified:       r.Modified,
-			StdoutHash:     r.StdoutHash,
-			StderrHash:     r.StderrHash,
-			StdoutLines:    r.StdoutLines,
-			Metrics:        r.Metrics,
-			Hardware:       r.Hardware,
-			EnvDigest:      r.EnvDigest,
-			Phases:         r.Phases,
-			Claims:         r.Claims,
-			Seeds:          r.Seeds,
-			MetricHash:     r.MetricHash,
-			DurationFmt:    r.DurationFmt,
-			SourceCodeHash: r.SourceCodeHash,
-			Declared:       r.Declared,
-			Trace:          r.Trace,
-			Provenance:      r.Provenance,
-			ProvBundleHash:  r.ProvBundleHash,
-			Artifacts:       r.Artifacts,
-			HardwareSamples: r.HardwareSamples,
-		}
-		runPayloads = append(runPayloads, rp)
+		runPayloads = append(runPayloads, runPayloadOf(r))
 	}
 
 	// Compute certs are deterministic, so binding them makes declared-card or sample
@@ -1547,14 +1712,31 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	if anyDeclared {
 		signingData["compute"] = certs
 	}
+	if anchors := sealAnchors(runs); len(anchors) > 0 {
+		signingData["run_anchors"] = anchors
+	}
 
 	return crypto.CanonicalHashWithBytes(signingData)
 }
 
+func sealAnchors(runs []*session.RunRecord) []client.SealAnchor {
+	var out []client.SealAnchor
+	for i, r := range runs {
+		if r.RunDigest != "" {
+			out = append(out, client.SealAnchor{Run: i, Invocation: r.Invocation, RunDigest: r.RunDigest})
+		}
+	}
+	return out
+}
+
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
 	c := client.New(sess.ServerURL)
-	resp, err := c.Seal(sess, dataHash, len(runs))
+	resp, err := c.Seal(sess, dataHash, len(runs), sealAnchors(runs))
 	if err != nil {
+		var se *client.ServerError
+		if errors.As(err, &se) {
+			return nil, fmt.Errorf("server refused to seal: %s", se.Body)
+		}
 		return nil, fmt.Errorf("server attestation failed: %w\n\nEnsure the server is running: kveritas-server", err)
 	}
 
@@ -1673,6 +1855,18 @@ var cmdVerify = &cobra.Command{
 		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
 			fmt.Printf("TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
 			return nil
+		}
+
+		// The signature covers each run's anchored digest; a run whose content does not
+		// hash to it was signed by a client that lied about what it anchored.
+		for i, r := range runs {
+			if r.RunDigest == "" {
+				continue
+			}
+			if d, derr := runDigest(r); derr != nil || d != r.RunDigest {
+				fmt.Printf("TAMPERED\nRun %d does not match the digest anchored when it finished.\n", i+1)
+				return nil
+			}
 		}
 
 		if final, ferr := pdf.SealIsFinal(reportPath); ferr == nil && !final {
@@ -1863,6 +2057,19 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	}
 	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
 		fmt.Printf("  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
+	}
+	if len(cs.RunAnchors) > 0 {
+		fmt.Printf("  Run anchors:          %s\n", cs.RunAnchorSummary)
+		for _, a := range cs.RunAnchors {
+			switch a.Status {
+			case "anchored":
+				if a.DelaySec != nil && *a.DelaySec >= 60 {
+					fmt.Printf("    run %d: anchored %s after run end (unwitnessed gap)\n", a.Run+1, session.FormatDuration(*a.DelaySec))
+				}
+			default:
+				fmt.Printf("    run %d: %s\n", a.Run+1, a.Detail)
+			}
+		}
 	}
 	if cs.HMCAVerdict != nil {
 		coh := ""
@@ -2113,6 +2320,20 @@ var cmdStatus = &cobra.Command{
 		fmt.Printf("Server:       %s\n", sess.ServerURL)
 		fmt.Printf("Sealed:       %v\n", sess.Sealed)
 		fmt.Printf("Runs:         %d\n", len(sess.Runs))
+		if !sess.Sealed {
+			if err := recoverInterrupted(kvDir, sess); err != nil {
+				fmt.Printf("Interrupted run could not be recorded: %v\n", err)
+			}
+			if sess.ServerURL != "local" {
+				if _, live := anchor.RunLockHolder(kvDir); !live {
+					_, _ = anchor.Flush(client.New(sess.ServerURL), kvDir)
+				}
+			}
+			fmt.Printf("Invocations:  %d (failed and interrupted included)\n", sess.Invocations)
+			if q := anchor.Pending(kvDir); len(q) > 0 {
+				fmt.Printf("Queued:       %d run anchor(s) not yet delivered; they are retried automatically\n", len(q))
+			}
+		}
 
 		for i, id := range sess.Runs {
 			r, err := session.LoadRun(kvDir, id)

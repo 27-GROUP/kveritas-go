@@ -30,6 +30,9 @@ type Session struct {
 	Disclosure string `json:"disclosure,omitempty"`
 	// Per-session salt for provenance leaf hashes. Kept local, never published.
 	ProvSalt string `json:"prov_salt,omitempty"`
+	// Every invocation, failed and interrupted ones included, advances the anchor chain.
+	Invocations int    `json:"invocations,omitempty"`
+	ChainHead   string `json:"chain_head,omitempty"`
 }
 
 type RunRecord struct {
@@ -67,7 +70,9 @@ type RunRecord struct {
 	// Open disclosure only.
 	ProvBundleHash string `json:"prov_bundle_hash,omitempty"`
 	// Declared from KVERITAS_ARTIFACT stdout lines.
-	Artifacts []Artifact `json:"artifacts,omitempty"`
+	Artifacts  []Artifact `json:"artifacts,omitempty"`
+	Invocation int        `json:"invocation,omitempty"`
+	RunDigest  string     `json:"run_digest,omitempty"`
 }
 
 // Public artifacts carry a plain content hash; private ones a salted commitment
@@ -257,6 +262,30 @@ type LedgerRunEntry struct {
 	ExitCode    int     `json:"exit_code"`
 	MetricHash  string  `json:"metric_hash"`
 	StdoutLines int     `json:"stdout_lines"`
+	Invocation  *int    `json:"invocation,omitempty"`
+	RunDigest   string  `json:"run_digest,omitempty"`
+	EndedAt     string  `json:"ended_at,omitempty"`
+	ReceivedAt  string  `json:"received_at,omitempty"`
+}
+
+// Nothing in this window was witnessed: the record existed only on the author's machine.
+func (e LedgerRunEntry) AnchorDelay() (time.Duration, bool) {
+	end, err1 := time.Parse(time.RFC3339Nano, e.EndedAt)
+	got, err2 := time.Parse(time.RFC3339Nano, e.ReceivedAt)
+	if err1 != nil || err2 != nil {
+		return 0, false
+	}
+	if d := got.Sub(end); d > 0 {
+		return d, true
+	}
+	return 0, true
+}
+
+func DescribeAnchorDelay(d time.Duration) string {
+	if d < time.Minute {
+		return "at run end"
+	}
+	return FormatDuration(d.Seconds()) + " after run end (unwitnessed gap)"
 }
 
 type SealRecord struct {
