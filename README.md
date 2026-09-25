@@ -2,6 +2,8 @@
 
 Cryptographic verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
 
+K-Veritas is the reference implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
+
 **Platform.** Core features are cross-platform. The activity map and per-process hardware are Linux only, with a system-wide fallback elsewhere.
 
 ## Install
@@ -90,3 +92,17 @@ Upload the report PDF at [kveritas.org/verify](https://kveritas.org/verify), opt
 CLI, protocol, libraries: **Apache-2.0** ([LICENSE](LICENSE)). Server under `server/`: **AGPL-3.0** ([LICENSE-AGPL](LICENSE-AGPL)); a modified network service must publish its source or hold a commercial license.
 
 "K-Veritas" is a trademark and cannot be used in any way that implies official certification.
+
+## Citation
+
+```bibtex
+@misc{keita2026computerscienceconferencesrequire,
+      title={Computer Science Conferences Should Require Nonrepudiable Experimental Results},
+      author={Mamadou K. Keita and Christopher Homan},
+      year={2026},
+      eprint={2605.08586},
+      archivePrefix={arXiv},
+      primaryClass={cs.CR},
+      url={https://arxiv.org/abs/2605.08586},
+}
+```
