@@ -2,6 +2,10 @@
 
 Cryptographic verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
 
+**What it proves.** These numbers came from this code, at this time, unchanged since. Not that the experiment is correct: that stays with the reviewer.
+
+**Faking it.** Several independent checks, and everything run is sealed, an attempt to cheat included. A careful look at the artifact exposes it, and it cannot be denied.
+
 K-Veritas is the official implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
 
 **Platform.** Core features are cross-platform. The activity map and per-process hardware are Linux only, with a system-wide fallback elsewhere.
