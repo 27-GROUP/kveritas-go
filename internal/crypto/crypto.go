@@ -58,6 +58,10 @@ func CanonicalHashWithBytes(v interface{}) (string, []byte, error) {
 	return HashBytes(b), b, nil
 }
 
+func RecordPayload(dataHash, nonce, signedAt string) string {
+	return "record:" + Payload(dataHash, nonce, signedAt)
+}
+
 func Payload(dataHash, nonce, signedAt string) string {
 	return fmt.Sprintf("%s:%s:%s", dataHash, nonce, signedAt)
 }

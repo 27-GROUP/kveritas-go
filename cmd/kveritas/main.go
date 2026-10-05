@@ -86,6 +86,7 @@ func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
+	root.AddCommand(cmdArchiveRecord)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -1823,6 +1824,9 @@ var cmdVerify = &cobra.Command{
 		meta, err := pdf.ExtractMetadata(reportPath)
 		if err != nil {
 			return err
+		}
+		if meta.Kind == pdf.RecordKind {
+			return verifyArchiveRecord(reportPath, meta)
 		}
 
 		seal := meta.Seal

@@ -410,3 +410,36 @@ func FormatDuration(seconds float64) string {
 	remainDays := days % 30
 	return fmt.Sprintf("%d months %d days", months, remainDays)
 }
+
+// ArchiveRecord is the signed content of a published record. Author-provided
+// fields are reviewed text; every number in the record PDF comes from the sealed
+// reports, which stay authoritative.
+type ArchiveRecord struct {
+	ID            string          `json:"id"`
+	Version       int             `json:"version"`
+	Title         string          `json:"title"`
+	Authors       []RecordAuthor  `json:"authors"`
+	Abstract      string          `json:"abstract"`
+	Tags          []string        `json:"tags,omitempty"`
+	License       string          `json:"license,omitempty"`
+	Published     string          `json:"published"`
+	Reports       []ArchiveReport `json:"reports"`
+	VisualPDFHash string          `json:"visual_pdf_hash"`
+}
+
+type RecordAuthor struct {
+	Name        string `json:"name" yaml:"name"`
+	Affiliation string `json:"affiliation,omitempty" yaml:"affiliation,omitempty"`
+}
+
+type ArchiveReport struct {
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	SessionID    string `json:"session_id"`
+	DataHash     string `json:"data_hash"`
+	SealedAt     string `json:"sealed_at"`
+	ReportSHA256 string `json:"report_sha256"`
+	ReportSize   int64  `json:"report_size"`
+	BundleSHA256 string `json:"bundle_sha256,omitempty"`
+	BundleSize   int64  `json:"bundle_size,omitempty"`
+}

@@ -221,10 +221,10 @@ func (b *builder) box(title string, lines []string) {
 	b.curY = top + h + 8
 }
 
-func (b *builder) decorate() {
+func (b *builder) decorate(label string) {
 	n := len(b.pages)
 	for i, p := range b.pages {
-		head := fmt.Sprintf("q 0.4 0.4 0.4 rg BT /Ti 8.5 Tf %.2f %.2f Td (Sealed Experiment Record) Tj ET Q\n", mL, pageH-40)
+		head := fmt.Sprintf("q 0.4 0.4 0.4 rg BT /Ti 8.5 Tf %.2f %.2f Td (%s) Tj ET Q\n", mL, pageH-40, pdfEscape(label))
 		num := fmt.Sprintf("page %d of %d", i+1, n)
 		head += fmt.Sprintf("q 0.4 0.4 0.4 rg BT /T 8.5 Tf %.2f %.2f Td (%s) Tj ET Q\n", pageW-mR-textWidth(num, "T", 8.5), pageH-40, num)
 		head += fmt.Sprintf("q 0.75 0.75 0.75 RG 0.4 w %.2f %.2f m %.2f %.2f l S Q\n", mL, pageH-46, pageW-mR, pageH-46)
@@ -326,7 +326,7 @@ func (b *builder) paperReport(sess *session.Session, runs []*session.RunRecord, 
 	b.section("References")
 	b.paraIn("[1] "+citeText, "T", bodySize, mL, bodyW)
 	b.appendix(runs, seal)
-	b.decorate()
+	b.decorate("Sealed Experiment Record")
 }
 
 func (b *builder) titleBlock(sess *session.Session, seal *session.SealRecord) {
