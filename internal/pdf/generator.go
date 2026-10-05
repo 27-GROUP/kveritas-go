@@ -50,18 +50,7 @@ type EmbeddedData struct {
 func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, hmcaResult *session.HMCAResult, outPath string) error {
 	b := newBuilder()
 
-	b.addCoverPage(sess, seal, runs)
-	for i, r := range runs {
-		b.addRunPage(i+1, r)
-		b.addProvenancePage(i+1, r.Provenance)
-		b.addTracePage(i+1, r)
-	}
-	b.addRunHistoryPage(seal)
-	if hmcaResult != nil {
-		b.addHMCAPage(hmcaResult)
-	}
-	b.addComputePage(runs)
-	b.addCryptoPage(seal)
+	b.paperReport(sess, runs, seal, hmcaResult)
 
 	pdfBytes, err := b.render()
 	if err != nil {
@@ -840,7 +829,11 @@ func (b *builder) render() ([]byte, error) {
 	fontHb := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
 	fontC := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>")
 
-	fontDict := fmt.Sprintf("<< /H %d 0 R /Hb %d 0 R /C %d 0 R >>", fontH, fontHb, fontC)
+	fontT := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>")
+	fontTb := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Bold /Encoding /WinAnsiEncoding >>")
+	fontTi := writeObj("<< /Type /Font /Subtype /Type1 /BaseFont /Times-Italic /Encoding /WinAnsiEncoding >>")
+
+	fontDict := fmt.Sprintf("<< /H %d 0 R /Hb %d 0 R /C %d 0 R /T %d 0 R /Tb %d 0 R /Ti %d 0 R >>", fontH, fontHb, fontC, fontT, fontTb, fontTi)
 
 	pageNums := make([]int, 0, len(b.pages))
 	for _, pg := range b.pages {
