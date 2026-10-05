@@ -1,67 +1,23 @@
 package pdf
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-const (
-	RecordKind = "archive-record"
-	recordsURL = "https://kveritas.org/records"
-)
+const recordsURL = "https://kveritas.org/records"
 
-// The visual pages are rendered first and their hash goes into the signed record,
-// so unlike a sealed report the signature itself covers what a reader sees.
-func GenerateRecord(rec *session.ArchiveRecord, reports []*EmbeddedData, sign func(dataHash string) (*session.SealRecord, error), outPath string) error {
+func GenerateRecord(rec *session.ArchiveRecord, reports []*EmbeddedData, outPath string) error {
 	b := newBuilder()
 	b.archiveRecord(rec, reports)
 	pdfBytes, err := b.render()
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(pdfBytes)
-	rec.VisualPDFHash = hex.EncodeToString(sum[:])
-
-	dataHash, canonical, err := crypto.CanonicalHashWithBytes(rec)
-	if err != nil {
-		return err
-	}
-	seal, err := sign(dataHash)
-	if err != nil {
-		return err
-	}
-	seal.DataHash = dataHash
-	seal.CanonicalJSON = string(canonical)
-	seal.VisualPDFHash = rec.VisualPDFHash
-	seal.SealedAt = time.Now().UTC()
-
-	meta := EmbeddedData{Version: "1.0", Kind: RecordKind, Record: rec, Seal: seal}
-	first, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	blockHash := sha256.Sum256(first)
-	seal.SealBlockHash = hex.EncodeToString(blockHash[:])
-	metaJSON, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	var out bytes.Buffer
-	out.Write(pdfBytes)
-	out.WriteString("\n" + metaBegin + "\n")
-	out.Write(metaJSON)
-	out.WriteString("\n" + metaEnd + "\n")
-	return os.WriteFile(outPath, out.Bytes(), 0644)
+	return os.WriteFile(outPath, pdfBytes, 0644)
 }
 
 func recordID(rec *session.ArchiveRecord) string {
@@ -102,7 +58,8 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 	b.box("About this record", []string{
 		"Title, authors and abstract were provided by the authors and reviewed for completeness, not for scientific soundness. " +
 			"Every number in this record is copied from the signed data of the sealed reports " + strings.Join(cites, ", ") + ", which remain authoritative.",
-		"Verify: kveritas verify record.pdf, and each report with its code bundle at " + recordsURL + "/" + recordID(rec),
+		"This cover page is not signed. Check it against the SHA-256 listed at " + recordsURL + "/" + recordID(rec) +
+			", and verify each report with its code bundle: kveritas verify <report.pdf> --bundle <bundle.zip>.",
 	})
 
 	b.section("1  Sealed reports")

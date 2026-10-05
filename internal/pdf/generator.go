@@ -39,12 +39,10 @@ const (
 )
 
 type EmbeddedData struct {
-	Version string                 `json:"version"`
-	Kind    string                 `json:"kind,omitempty"`
-	Session *session.Session       `json:"session"`
-	Runs    []*session.RunRecord   `json:"runs"`
-	Record  *session.ArchiveRecord `json:"record,omitempty"`
-	Seal    *session.SealRecord    `json:"seal"`
+	Version string               `json:"version"`
+	Session *session.Session     `json:"session"`
+	Runs    []*session.RunRecord `json:"runs"`
+	Seal    *session.SealRecord  `json:"seal"`
 }
 
 func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.SealRecord, hmcaResult *session.HMCAResult, outPath string) error {

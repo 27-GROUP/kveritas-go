@@ -1,13 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/Mamadou2727/kveritas-go/internal/client"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 	"github.com/Mamadou2727/kveritas-go/internal/pdf"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
@@ -42,21 +40,14 @@ type recordMetadata struct {
 	} `yaml:"reports"`
 }
 
-var (
-	archiveOut    string
-	archiveServer string
-)
+var archiveOut string
 
 var cmdArchiveRecord = &cobra.Command{
 	Use:    "archive-record <metadata.yaml>",
-	Short:  "Generate and sign the Archive Record for a published record (maintainers)",
+	Short:  "Generate the Archive Record cover page for a published record (maintainers)",
 	Args:   cobra.ExactArgs(1),
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		token := os.Getenv("VERITAS_SIGN_TOKEN")
-		if token == "" {
-			return fmt.Errorf("VERITAS_SIGN_TOKEN is not set")
-		}
 		raw, err := os.ReadFile(args[0])
 		if err != nil {
 			return err
@@ -92,7 +83,7 @@ var cmdArchiveRecord = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			if meta.Kind != "" || meta.Session == nil || meta.Seal == nil {
+			if meta.Session == nil || meta.Seal == nil {
 				return fmt.Errorf("%s: not a sealed report", path)
 			}
 			if problem := sealedReportProblem(path, meta); problem != "" {
@@ -117,32 +108,11 @@ var cmdArchiveRecord = &cobra.Command{
 			reports = append(reports, meta)
 		}
 
-		c := client.New(archiveServer)
-		sign := func(dataHash string) (*session.SealRecord, error) {
-			resp, err := c.SignRecord(dataHash, token)
-			if err != nil {
-				return nil, err
-			}
-			payload := crypto.RecordPayload(dataHash, resp.Nonce, resp.SignedAt)
-			key, err := crypto.LoadPublicKey([]byte(resp.PublicKeyPEM))
-			if err != nil {
-				return nil, err
-			}
-			if err := crypto.VerifyPSS(key, payload, resp.Signature); err != nil {
-				return nil, fmt.Errorf("server returned an invalid record signature: %w", err)
-			}
-			return &session.SealRecord{
-				Nonce: resp.Nonce, SignedAt: resp.SignedAt, Signature: resp.Signature,
-				SignedMessageHash: crypto.HashBytes([]byte(payload)), PublicKeyPEM: resp.PublicKeyPEM,
-				ServerURL: archiveServer,
-			}, nil
-		}
-
 		out := archiveOut
 		if out == "" {
 			out = filepath.Join(dir, "record.pdf")
 		}
-		if err := pdf.GenerateRecord(rec, reports, sign, out); err != nil {
+		if err := pdf.GenerateRecord(rec, reports, out); err != nil {
 			return err
 		}
 		sum, err := crypto.HashFile(out)
@@ -161,7 +131,6 @@ var cmdArchiveRecord = &cobra.Command{
 
 func init() {
 	cmdArchiveRecord.Flags().StringVarP(&archiveOut, "output", "o", "", "output path (default: record.pdf next to the metadata)")
-	cmdArchiveRecord.Flags().StringVar(&archiveServer, "server", defaultServer, "signing server URL")
 }
 
 // Checks a sealed report the way verify does, without printing.
@@ -200,79 +169,4 @@ func sealedReportProblem(path string, meta *pdf.EmbeddedData) string {
 		return "not signed by the K-Veritas server"
 	}
 	return ""
-}
-
-func verifyArchiveRecord(path string, meta *pdf.EmbeddedData) error {
-	seal := meta.Seal
-	if seal == nil || seal.CanonicalJSON == "" {
-		fmt.Printf("TAMPERED\nArchive record has no signed data.\n")
-		return nil
-	}
-	if crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
-		fmt.Printf("TAMPERED\nStored record data does not match the signed data hash.\n")
-		return nil
-	}
-	var rec session.ArchiveRecord
-	if err := json.Unmarshal([]byte(seal.CanonicalJSON), &rec); err != nil {
-		fmt.Printf("TAMPERED\nSigned record data is unreadable.\n")
-		return nil
-	}
-	if final, err := pdf.SealIsFinal(path); err == nil && !final {
-		fmt.Printf("TAMPERED\nContent was appended after the seal; a PDF reader may render it in place of the signed pages.\n")
-		return nil
-	}
-	if seal.SealBlockHash != "" {
-		if h, err := pdf.SealBlockHash(path); err == nil && h != seal.SealBlockHash {
-			fmt.Printf("TAMPERED\nThe seal block was modified after signing.\n")
-			return nil
-		}
-	}
-	if h, err := pdf.VisualPDFHash(path); err != nil || h != rec.VisualPDFHash {
-		fmt.Printf("TAMPERED\nThe record pages were modified after signing.\n")
-		return nil
-	}
-	payload := crypto.RecordPayload(seal.DataHash, seal.Nonce, seal.SignedAt)
-	if crypto.HashBytes([]byte(payload)) != seal.SignedMessageHash {
-		fmt.Printf("TAMPERED\nSigned message hash mismatch.\n")
-		return nil
-	}
-	key, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
-	if err != nil {
-		return fmt.Errorf("parsing embedded public key: %w", err)
-	}
-	if err := crypto.VerifyPSS(key, payload, seal.Signature); err != nil {
-		fmt.Printf("INVALID\nSignature verification failed: %v\n", err)
-		return nil
-	}
-	var anchorPEM []byte
-	if verifyKeyPath != "" {
-		if anchorPEM, err = os.ReadFile(verifyKeyPath); err != nil {
-			return fmt.Errorf("reading public key: %w", err)
-		}
-	}
-	serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM)
-	if err != nil {
-		return fmt.Errorf("checking record origin: %w", err)
-	}
-	if serverSigned {
-		fmt.Printf("VERIFIED\n")
-	} else {
-		fmt.Printf("SELF-ATTESTED\nSignature valid, but not signed by K-Veritas. Not a K-Veritas record.\n")
-	}
-	fmt.Printf("Archive record %s\n", rec.ID)
-	fmt.Printf("Title:      %s\n", rec.Title)
-	fmt.Printf("Published:  %s\n", rec.Published)
-	fmt.Printf("Signed at:  %s\n", seal.SignedAt)
-	fmt.Printf("Reports:\n")
-	for _, r := range rec.Reports {
-		fmt.Printf("  %s  %s\n", r.ID, r.Label)
-		fmt.Printf("      data hash  %s\n", r.DataHash)
-		fmt.Printf("      report     %s\n", r.ReportSHA256)
-		if r.BundleSHA256 != "" {
-			fmt.Printf("      bundle     %s\n", r.BundleSHA256)
-		}
-	}
-	fmt.Printf("\nThe sealed reports are authoritative. Verify each one with its bundle:\n")
-	fmt.Printf("  kveritas verify <report.pdf> --bundle <bundle.zip>\n")
-	return nil
 }

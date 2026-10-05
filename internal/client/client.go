@@ -219,33 +219,6 @@ func (c *Client) PublicKeyPEM() (string, error) {
 	return result.PublicKey, nil
 }
 
-func (c *Client) SignRecord(dataHash, token string) (*SealResponse, error) {
-	payload, err := json.Marshal(map[string]string{"data_hash": dataHash})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/sign-record", bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("server unreachable at %s: %w", c.BaseURL, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &ServerError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
-	}
-	var out SealResponse
-	return &out, json.Unmarshal(body, &out)
-}
-
 func (c *Client) post(path string, body, out interface{}) error {
 	payload, err := json.Marshal(body)
 	if err != nil {

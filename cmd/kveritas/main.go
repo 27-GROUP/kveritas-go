@@ -1825,9 +1825,6 @@ var cmdVerify = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if meta.Kind == pdf.RecordKind {
-			return verifyArchiveRecord(reportPath, meta)
-		}
 
 		seal := meta.Seal
 		sess := meta.Session
