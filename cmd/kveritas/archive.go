@@ -53,9 +53,9 @@ var cmdArchiveRecord = &cobra.Command{
 	Args:   cobra.ExactArgs(1),
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		token := os.Getenv("KVERITAS_RECORDS_TOKEN")
+		token := os.Getenv("VERITAS_SIGN_TOKEN")
 		if token == "" {
-			return fmt.Errorf("KVERITAS_RECORDS_TOKEN is not set")
+			return fmt.Errorf("VERITAS_SIGN_TOKEN is not set")
 		}
 		raw, err := os.ReadFile(args[0])
 		if err != nil {
