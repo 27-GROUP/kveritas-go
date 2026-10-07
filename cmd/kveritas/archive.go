@@ -29,6 +29,12 @@ type recordMetadata struct {
 	Tags        []string               `yaml:"tags"`
 	License     string                 `yaml:"license"`
 	Published   string                 `yaml:"published"`
+	Purpose     string                 `yaml:"purpose"`
+	WorkType    string                 `yaml:"type"`
+	Field       string                 `yaml:"field"`
+	Paper       string                 `yaml:"paper"`
+	Code        string                 `yaml:"code"`
+	Original    string                 `yaml:"original_code"`
 	Reports     []struct {
 		ID       string `yaml:"id"`
 		Label    string `yaml:"label"`
@@ -65,6 +71,7 @@ var cmdArchiveRecord = &cobra.Command{
 		rec := &session.ArchiveRecord{
 			ID: md.ID, Version: md.Version, Title: md.Title, Authors: md.Authors, SubmittedBy: md.SubmittedBy, Abstract: md.Abstract,
 			Tags: md.Tags, License: md.License, Published: md.Published,
+			Purpose: md.Purpose, WorkType: md.WorkType, Field: md.Field, Paper: md.Paper, Code: md.Code, Original: md.Original,
 		}
 		var reports []*pdf.EmbeddedData
 		for _, r := range md.Reports {

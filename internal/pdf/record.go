@@ -45,6 +45,15 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 	b.centered("Submitted by "+authorName(rec.SubmittedBy), "Ti", bodySize)
 	b.gap(4)
 	b.centered(fmt.Sprintf("%s · Published %s", rec.ID, rec.Published), "T", bodySize)
+	var kind []string
+	for _, s := range []string{rec.Purpose, rec.WorkType, rec.Field} {
+		if s != "" {
+			kind = append(kind, s)
+		}
+	}
+	if len(kind) > 0 {
+		b.centered(strings.Join(kind, " · "), "T", bodySize)
+	}
 	b.gap(16)
 
 	b.centered("Abstract", "Tb", bodySize+0.5)
@@ -139,7 +148,12 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 	}
 	b.table([]string{"File", "SHA-256", "Size"}, []float64{1.1, 4, 0.6}, rows)
 
-	b.section("5  Licence")
+	b.section("5  Links and licence")
+	for _, l := range [][2]string{{"Paper", rec.Paper}, {"Code", rec.Code}, {"Reproduction of", rec.Original}} {
+		if l[1] != "" {
+			b.para(l[0] + ": " + l[1])
+		}
+	}
 	lic := "Record: CC-BY 4.0."
 	if rec.License != "" {
 		lic += " Code: " + rec.License + ", as declared by the authors."
@@ -148,7 +162,7 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 		lic += " Tags: " + strings.Join(rec.Tags, ", ") + "."
 	}
 	b.para(lic)
-	b.para("Listed, not endorsed. Review checks the artifact, never the science. Records are never edited; corrections are new versions.")
+	b.para("Listed, not endorsed. Review checks the artifact, never the science. Reports are never edited; changing them makes a new version. Other fields are corrected in place, and every correction is logged in metadata.yaml.")
 
 	b.section("References")
 	b.paraIn("[1] "+citeText, "T", bodySize, mL, bodyW)

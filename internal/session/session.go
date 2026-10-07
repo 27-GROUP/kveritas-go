@@ -424,6 +424,12 @@ type ArchiveRecord struct {
 	Tags        []string        `json:"tags,omitempty"`
 	License     string          `json:"license,omitempty"`
 	Published   string          `json:"published"`
+	Purpose     string          `json:"purpose,omitempty"`
+	WorkType    string          `json:"type,omitempty"`
+	Field       string          `json:"field,omitempty"`
+	Paper       string          `json:"paper,omitempty"`
+	Code        string          `json:"code,omitempty"`
+	Original    string          `json:"original_code,omitempty"`
 	Reports     []ArchiveReport `json:"reports"`
 }
 
