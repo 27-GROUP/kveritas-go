@@ -415,15 +415,16 @@ func FormatDuration(seconds float64) string {
 // are reviewed text; every number on it comes from the sealed reports, which stay
 // authoritative.
 type ArchiveRecord struct {
-	ID        string          `json:"id"`
-	Version   int             `json:"version"`
-	Title     string          `json:"title"`
-	Authors   []RecordAuthor  `json:"authors"`
-	Abstract  string          `json:"abstract"`
-	Tags      []string        `json:"tags,omitempty"`
-	License   string          `json:"license,omitempty"`
-	Published string          `json:"published"`
-	Reports   []ArchiveReport `json:"reports"`
+	ID          string          `json:"id"`
+	Version     int             `json:"version"`
+	Title       string          `json:"title"`
+	Authors     []RecordAuthor  `json:"authors"`
+	SubmittedBy RecordAuthor    `json:"submitted_by"`
+	Abstract    string          `json:"abstract"`
+	Tags        []string        `json:"tags,omitempty"`
+	License     string          `json:"license,omitempty"`
+	Published   string          `json:"published"`
+	Reports     []ArchiveReport `json:"reports"`
 }
 
 type RecordAuthor struct {

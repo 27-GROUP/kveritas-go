@@ -20,15 +20,16 @@ type recordFileRef struct {
 }
 
 type recordMetadata struct {
-	ID        string                 `yaml:"id"`
-	Version   int                    `yaml:"version"`
-	Title     string                 `yaml:"title"`
-	Authors   []session.RecordAuthor `yaml:"authors"`
-	Abstract  string                 `yaml:"abstract"`
-	Tags      []string               `yaml:"tags"`
-	License   string                 `yaml:"license"`
-	Published string                 `yaml:"published"`
-	Reports   []struct {
+	ID          string                 `yaml:"id"`
+	Version     int                    `yaml:"version"`
+	Title       string                 `yaml:"title"`
+	Authors     []session.RecordAuthor `yaml:"authors"`
+	SubmittedBy session.RecordAuthor   `yaml:"submitted_by"`
+	Abstract    string                 `yaml:"abstract"`
+	Tags        []string               `yaml:"tags"`
+	License     string                 `yaml:"license"`
+	Published   string                 `yaml:"published"`
+	Reports     []struct {
 		ID       string `yaml:"id"`
 		Label    string `yaml:"label"`
 		Session  string `yaml:"session"`
@@ -56,13 +57,13 @@ var cmdArchiveRecord = &cobra.Command{
 		if err := yaml.Unmarshal(raw, &md); err != nil {
 			return fmt.Errorf("reading %s: %w", args[0], err)
 		}
-		if md.ID == "" || md.Title == "" || len(md.Authors) == 0 || len(md.Reports) == 0 {
-			return fmt.Errorf("%s needs id, title, authors and at least one report", args[0])
+		if md.ID == "" || md.Title == "" || len(md.Authors) == 0 || md.SubmittedBy.Name == "" || len(md.Reports) == 0 {
+			return fmt.Errorf("%s needs id, title, authors, submitted_by and at least one report", args[0])
 		}
 		dir := filepath.Dir(args[0])
 
 		rec := &session.ArchiveRecord{
-			ID: md.ID, Version: md.Version, Title: md.Title, Authors: md.Authors, Abstract: md.Abstract,
+			ID: md.ID, Version: md.Version, Title: md.Title, Authors: md.Authors, SubmittedBy: md.SubmittedBy, Abstract: md.Abstract,
 			Tags: md.Tags, License: md.License, Published: md.Published,
 		}
 		var reports []*pdf.EmbeddedData

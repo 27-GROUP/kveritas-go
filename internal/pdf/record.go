@@ -41,6 +41,8 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 	for _, l := range wrapToWidth(strings.Join(names, ", "), "T", 12, bodyW-40) {
 		b.centered(l, "T", 12)
 	}
+	b.gap(2)
+	b.centered("Submitted by "+authorName(rec.SubmittedBy), "Ti", bodySize)
 	b.gap(4)
 	b.centered(fmt.Sprintf("%s · Published %s", rec.ID, rec.Published), "T", bodySize)
 	b.gap(16)
@@ -157,6 +159,13 @@ func (b *builder) archiveRecord(rec *session.ArchiveRecord, reports []*EmbeddedD
 	}
 
 	b.decorate("K-Veritas Records · " + rec.ID)
+}
+
+func authorName(a session.RecordAuthor) string {
+	if a.Affiliation != "" {
+		return fmt.Sprintf("%s (%s)", a.Name, a.Affiliation)
+	}
+	return a.Name
 }
 
 func formatBytes(n int64) string {
