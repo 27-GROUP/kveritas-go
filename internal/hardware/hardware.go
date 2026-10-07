@@ -15,11 +15,9 @@ import (
 )
 
 func Snapshot() session.HardwareInfo {
-	hostname, _ := os.Hostname()
 	gpuNames := gpuNames()
 	gpuSummary := gpuInfo()
 	return session.HardwareInfo{
-		Hostname: hostname,
 		OS:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
 		CPUCores: runtime.NumCPU(),

@@ -160,7 +160,7 @@ type Metric struct {
 }
 
 type HardwareInfo struct {
-	Hostname string   `json:"hostname"`
+	Hostname string   `json:"hostname,omitempty"`
 	OS       string   `json:"os"`
 	Arch     string   `json:"arch"`
 	CPUCores int      `json:"cpu_cores"`
