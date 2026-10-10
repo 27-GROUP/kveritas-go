@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/27-GROUP/kveritas-web/main/public/logo-white.svg">
+    <img src="https://raw.githubusercontent.com/27-GROUP/kveritas-web/main/public/logo-black.svg" alt="K-Veritas" width="120">
+  </picture>
+</p>
+
 # K-Veritas Go
 
 Cryptographic verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
