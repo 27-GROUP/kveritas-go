@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/27-GROUP/kveritas-web/main/public/logo-white.svg">
-    <img src="https://raw.githubusercontent.com/27-GROUP/kveritas-web/main/public/logo-black.svg" alt="K-Veritas" width="120">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-white.svg">
+    <img src="assets/logo-black.svg" alt="K-Veritas" width="120">
   </picture>
 </p>
 
