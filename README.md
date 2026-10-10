@@ -54,6 +54,8 @@ Auto-detected too: Keras history, sklearn CV, metric-like locals.
 - **Selective-disclosure proofs.** Prove one file, or one agent prompt/output, was in a signed snapshot without revealing the rest.
 - **Checkout bundle.** `--disclosure open` writes a source bundle bound to the report; files re-hashed on checkout.
 - **Benchmark artifacts.** Attest a score without exposing the model or data (public content hash, or private salted commitment).
+- **Run anchors.** Each run is anchored at the server when it ends, failed and interrupted ones too. A changed run cannot be sealed.
+- **Paper-style report.** Abstract from the signed data, numbered sections, full detail in the appendix. No machine name.
 - **Agent sessions.** `init --harness` records a hash-chained log of agent actions; verify localizes tampering to the exact entry.
 - **Authenticity.** Signed by the K-Veritas key: `VERIFIED`. Any other key (e.g. `--local`): `SELF-ATTESTED`. The ledger is a hash chain.
 
@@ -64,7 +66,7 @@ Auto-detected too: Keras history, sklearn CV, metric-like locals.
 | `init [--local] [--harness] [--disclosure redacted\|names\|open] [--show-names]` | Start a session. |
 | `run -- <cmd>` | Run a command under kveritas. |
 | `seal [-o path] [--local-key pem]` | Sign the session into a PDF. |
-| `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |
+| `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf] [--public-key pem]` | Local checks plus server audit. |
 | `prove <report.pdf> <file...>` / `verify-proof <proof.json>` | File proof. |
 | `harness-prove <session.json> <index\|--tool-use-id ID>` / `verify-harness-proof <proof.json>` | Prompt/output proof. |
 | `checkout <bundle.zip> <[run:]snapshot> <dir> [--report r.pdf]` | Reconstruct a snapshot. |
@@ -85,6 +87,10 @@ The canonical JSON, signature, and public key are embedded after `%%EOF` between
 ## Web verification
 
 Upload the report PDF at [kveritas.org/verify](https://kveritas.org/verify), optionally with the bundle and a manuscript. No account.
+
+## Records
+
+Publish an open-disclosure report and its bundle as a citable record: [kveritas.org/records](https://kveritas.org/records). Submit through [KVERITAS-SCIENCE/records](https://github.com/KVERITAS-SCIENCE/records).
 
 ## Related repositories
 
