@@ -62,6 +62,8 @@ func textWidth(s, font string, size float64) float64 {
 			units += timesBoldW[r-32]
 		case r >= 32 && r <= 126:
 			units += timesW[r-32]
+		case r == 0x2026 || r == 0x2014:
+			units += 1000
 		default:
 			units += 500
 		}
@@ -76,7 +78,19 @@ func wrapToWidth(text, font string, size, maxW float64) []string {
 	}
 	var lines []string
 	cur := ""
-	for _, w := range words {
+	for _, word := range words {
+		pieces := []string{word}
+		if textWidth(word, font, size) > maxW {
+			pieces = breakWord(word, font, size, maxW)
+		}
+		for _, w := range pieces[:len(pieces)-1] {
+			if cur != "" {
+				lines = append(lines, cur)
+				cur = ""
+			}
+			lines = append(lines, w)
+		}
+		w := pieces[len(pieces)-1]
 		try := w
 		if cur != "" {
 			try = cur + " " + w
@@ -89,6 +103,19 @@ func wrapToWidth(text, font string, size, maxW float64) []string {
 		cur = w
 	}
 	return append(lines, cur)
+}
+
+func breakWord(word, font string, size, maxW float64) []string {
+	var out []string
+	cur := ""
+	for _, r := range word {
+		if cur != "" && textWidth(cur+string(r), font, size) > maxW {
+			out = append(out, cur)
+			cur = ""
+		}
+		cur += string(r)
+	}
+	return append(out, cur)
 }
 
 func fitWidth(s, font string, size, maxW float64) string {
@@ -113,7 +140,9 @@ func (b *builder) line(s, font string, size, x float64) {
 }
 
 func (b *builder) centered(s, font string, size float64) {
-	b.line(s, font, size, (pageW-textWidth(s, font, size))/2)
+	for _, l := range wrapToWidth(s, font, size, bodyW) {
+		b.line(l, font, size, (pageW-textWidth(l, font, size))/2)
+	}
 }
 
 func (b *builder) para(text string) {
@@ -139,14 +168,14 @@ func (b *builder) rule(y, x1, x2, width float64) {
 func (b *builder) section(title string) {
 	b.checkSpace(110)
 	b.gap(14)
-	b.line(title, "Tb", 13, mL)
+	b.paraIn(title, "Tb", 13, mL, bodyW)
 	b.gap(3)
 }
 
 func (b *builder) subsection(title string) {
 	b.checkSpace(70)
 	b.gap(6)
-	b.line(title, "Tb", bodySize, mL)
+	b.paraIn(title, "Tb", bodySize, mL, bodyW)
 	b.gap(1)
 }
 
