@@ -106,7 +106,7 @@ Publish an open-disclosure report and its bundle as a citable record: [kveritas.
 
 ## License
 
-CLI, protocol, libraries: **Apache-2.0** ([LICENSE](LICENSE)). Server under `server/`: **AGPL-3.0** ([LICENSE-AGPL](LICENSE-AGPL)); a modified network service must publish its source or hold a commercial license.
+**AGPL-3.0** ([LICENSE](LICENSE)), CLI and server. A modified network service must publish its source or hold a commercial license.
 
 "K-Veritas" is a trademark and cannot be used in any way that implies official certification.
 
