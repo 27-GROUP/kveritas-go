@@ -20,6 +20,7 @@ const cellDir = ".kveritas_cells"
 
 type channelMessage struct {
 	Seq            int             `json:"seq"`
+	Proc           int             `json:"proc,omitempty"`
 	Kind           string          `json:"kind"`
 	Name           string          `json:"name,omitempty"`
 	Metric         string          `json:"metric,omitempty"`

@@ -289,7 +289,8 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 			defer close(chanDone)
 			sc := bufio.NewScanner(chanR)
 			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-			next := 1
+			// Each sending process numbers its own messages; the record uses arrival order.
+			next := map[int]int{}
 			for sc.Scan() {
 				raw := sc.Bytes()
 				chanBuf.Write(raw)
@@ -300,11 +301,16 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 					continue
 				}
 				chanMsgs++
-				if msg.Seq != next {
-					chanGaps++
-					fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d arrived where %d was expected\n", msg.Seq, next)
+				want := next[msg.Proc]
+				if want == 0 {
+					want = 1
 				}
-				next = msg.Seq + 1
+				if msg.Seq != want {
+					chanGaps++
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d arrived where %d was expected\n", msg.Seq, want)
+				}
+				next[msg.Proc] = msg.Seq + 1
+				msg.Seq = chanMsgs
 				switch msg.Kind {
 				case "hello":
 					dist = msg.distributed()
@@ -339,6 +345,24 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 
 	if att != nil && att.Live != nil {
 		go streamLive(sampler, att.Live, chanDone)
+	}
+	// An attached process that dies never sends bye; stop reading so the run closes as interrupted.
+	if att != nil {
+		go func() {
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-chanDone:
+					return
+				case <-t.C:
+					if !hardware.ProcessAlive(pid) {
+						chanR.Close()
+						return
+					}
+				}
+			}
+		}()
 	}
 
 	echoOut, echoErr := io.Writer(os.Stdout), io.Writer(os.Stderr)

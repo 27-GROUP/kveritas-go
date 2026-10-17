@@ -58,7 +58,13 @@ var cmdObserve = &cobra.Command{
 
 func observe() (observeResult, error) {
 	res := observeResult{Kind: "result"}
-	channel, err := fdFile(observeChannel, "kveritas-channel")
+	var channel *os.File
+	var err error
+	if path, ok := strings.CutPrefix(observeChannel, "fifo:"); ok {
+		channel, err = runner.OpenFIFOReader(path)
+	} else {
+		channel, err = fdFile(observeChannel, "kveritas-channel")
+	}
 	if err != nil || channel == nil {
 		return res, fmt.Errorf("--channel: %v", err)
 	}
@@ -67,8 +73,12 @@ func observe() (observeResult, error) {
 		spec string
 		dst  **os.File
 	}{{observeStdout, &att.Stdout}, {observeStderr, &att.Stderr}} {
-		if *f.dst, err = fdFile(f.spec, "kveritas-output"); err != nil {
+		fd, err := fdNumber(f.spec)
+		if err != nil {
 			return res, err
+		}
+		if fd > 0 {
+			*f.dst = runner.InheritedReader(fd, "kveritas-output")
 		}
 	}
 	for _, f := range []struct {
@@ -150,15 +160,23 @@ func observe() (observeResult, error) {
 	return res, nil
 }
 
-// An empty spec means the descriptor was not passed.
-func fdFile(spec, name string) (*os.File, error) {
+// An empty spec means the descriptor was not passed (0).
+func fdNumber(spec string) (int, error) {
 	if spec == "" {
-		return nil, nil
+		return 0, nil
 	}
 	text, ok := strings.CutPrefix(spec, "fd:")
 	fd, err := strconv.Atoi(text)
 	if !ok || err != nil || fd < 3 {
-		return nil, fmt.Errorf("invalid descriptor %q, expected fd:<n>", spec)
+		return 0, fmt.Errorf("invalid descriptor %q, expected fd:<n>", spec)
+	}
+	return fd, nil
+}
+
+func fdFile(spec, name string) (*os.File, error) {
+	fd, err := fdNumber(spec)
+	if err != nil || fd == 0 {
+		return nil, err
 	}
 	f := os.NewFile(uintptr(fd), name)
 	if f == nil {
@@ -173,7 +191,7 @@ func init() {
 	cmdObserve.Flags().StringVar(&observeStderr, "stderr", "", "read end of the observed process's redirected stderr, fd:<n>")
 	cmdObserve.Flags().StringVar(&observeEchoStdout, "echo-stdout", "", "where to pass captured stdout on, fd:<n>")
 	cmdObserve.Flags().StringVar(&observeEchoStderr, "echo-stderr", "", "where to pass captured stderr on, fd:<n>")
-	cmdObserve.Flags().StringVar(&observeChannel, "channel", "", "result channel, fd:<n>")
+	cmdObserve.Flags().StringVar(&observeChannel, "channel", "", "result channel, fd:<n> or fifo:<path>")
 	cmdObserve.Flags().BoolVar(&observeLive, "live", false, "stream hardware samples to stdout while observing")
 	_ = cmdObserve.MarkFlagRequired("pid")
 	_ = cmdObserve.MarkFlagRequired("channel")
