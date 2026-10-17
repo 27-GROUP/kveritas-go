@@ -69,15 +69,20 @@ func observe() (observeResult, error) {
 	}
 	var channel *os.File
 	var err error
+	connected := func() {}
 	if path, ok := strings.CutPrefix(observeChannel, "fifo:"); ok {
-		channel, err = runner.OpenFIFOReader(path)
+		var keep func()
+		if channel, keep, err = runner.OpenFIFOReader(path); err == nil {
+			defer keep()
+			connected = keep
+		}
 	} else {
 		channel, err = fdFile(observeChannel, "kveritas-channel")
 	}
 	if err != nil || channel == nil {
 		return res, fmt.Errorf("--channel: %v", err)
 	}
-	att := &runner.Attachment{PID: observePID, Channel: channel}
+	att := &runner.Attachment{PID: observePID, Channel: channel, Connected: connected}
 	for _, f := range []struct {
 		spec string
 		dst  **os.File

@@ -5,6 +5,7 @@ package runner
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
@@ -19,8 +20,20 @@ func InheritedReader(fd int, name string) *os.File {
 	return os.NewFile(uintptr(fd), name)
 }
 
-func OpenFIFOReader(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+// A pipe no writer has opened yet reads as EOF, which would end an attached run
+// before the SDK connects. A write end is held until release, called once the
+// SDK is connected so the SDK closing the pipe still reads as EOF. Safe to call twice.
+func OpenFIFOReader(path string) (reader *os.File, release func(), err error) {
+	if reader, err = os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0); err != nil {
+		return nil, nil, err
+	}
+	w, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		reader.Close()
+		return nil, nil, err
+	}
+	var once sync.Once
+	return reader, func() { once.Do(func() { w.Close() }) }, nil
 }
 
 func openFIFO() (reader, keep *os.File, path string, cleanup func(), err error) {

@@ -43,7 +43,9 @@ type Attachment struct {
 	Stderr  *os.File
 	Echo    io.Writer
 	EchoErr io.Writer
-	exe     string
+	// Releases the observer's own hold on the channel once the SDK has connected.
+	Connected func()
+	exe       string
 }
 
 // Attach observes pid from now until the SDK sends bye or closes the channel.
@@ -295,6 +297,10 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 			// Each sending process numbers its own messages; the record uses arrival order.
 			next := map[int]int{}
 			for sc.Scan() {
+				if att != nil && att.Connected != nil {
+					att.Connected()
+					att.Connected = nil
+				}
 				raw := sc.Bytes()
 				chanBuf.Write(raw)
 				chanBuf.WriteByte('\n')
