@@ -2007,6 +2007,7 @@ var cmdVerify = &cobra.Command{
 					Index: i + 1, Command: r.Command, StartAt: r.StartAt.UTC().Format(time.RFC3339Nano),
 					DurationSec: r.DurationSec, ExitCode: r.ExitCode, Launch: launchOf(r),
 					Distributed: r.Distributed, ChannelMessages: r.ChannelMessages, ChannelGaps: r.ChannelGaps,
+					NotebookCells: len(r.Cells),
 					Metrics: r.Metrics, Claims: r.Claims, Seeds: r.Seeds,
 				}
 				if r.Declared != nil {
@@ -2081,6 +2082,9 @@ var cmdVerify = &cobra.Command{
 			}
 			if d := r.Distributed; d != nil {
 				fmt.Fprintf(out, "Run %d:      distributed, world size %d, %d node(s) (%s)\n", i+1, d.WorldSize, d.Nodes, d.Launcher)
+			}
+			if len(r.Cells) > 0 {
+				fmt.Fprintf(out, "Run %d:      notebook, %d cells recorded in execution order\n", i+1, len(r.Cells))
 			}
 			if r.ChannelGaps > 0 {
 				fmt.Fprintf(out, "Run %d:      %d gap(s) in the SDK channel\n", i+1, r.ChannelGaps)

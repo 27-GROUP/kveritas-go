@@ -37,6 +37,7 @@ type runDoc struct {
 	Distributed     *session.Distributed     `json:"distributed,omitempty"`
 	ChannelMessages int                      `json:"channel_messages,omitempty"`
 	ChannelGaps     int                      `json:"channel_gaps,omitempty"`
+	NotebookCells   int                      `json:"notebook_cells,omitempty"`
 	Metrics         []session.Metric         `json:"metrics"`
 	Claims          []session.InlineClaim    `json:"claims,omitempty"`
 	Seeds           []session.SeedCommitment `json:"seeds,omitempty"`

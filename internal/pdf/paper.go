@@ -470,6 +470,10 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 		if r.Launch == "attached" {
 			rows = append(rows, []string{fmt.Sprintf("Launch, run %d", i+1), "attached: observed from the SDK call, output not captured"})
 		}
+		if len(r.Cells) > 0 {
+			rows = append(rows, []string{fmt.Sprintf("Notebook, run %d", i+1),
+				fmt.Sprintf("%d cells recorded in execution order", len(r.Cells))})
+		}
 		if d := r.Distributed; d != nil {
 			rows = append(rows, []string{fmt.Sprintf("Distributed, run %d", i+1),
 				fmt.Sprintf("world size %d, %d node(s), %s", d.WorldSize, d.Nodes, d.Launcher)})

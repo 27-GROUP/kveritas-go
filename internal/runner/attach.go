@@ -36,6 +36,12 @@ func processCommand(pid int) (args []string, exe string) {
 		exe = args[0]
 	}
 	args[0] = filepath.Base(args[0])
+	// A notebook kernel's arguments name its connection file under the home folder.
+	if home, err := os.UserHomeDir(); err == nil && len(home) > 1 {
+		for i := range args {
+			args[i] = strings.ReplaceAll(args[i], home, "~")
+		}
+	}
 	return args, exe
 }
 
