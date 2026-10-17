@@ -40,7 +40,7 @@ def build(version: str, dist: str) -> None:
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
             for name, data in files.items():
                 zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-                zi.external_attr = (0o755 if "/scripts/" in name else 0o644) << 16
+                zi.external_attr = (0o100755 if "/scripts/" in name else 0o100644) << 16
                 z.writestr(zi, data, zipfile.ZIP_DEFLATED)
         print(out)
 
