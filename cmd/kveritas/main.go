@@ -1668,6 +1668,7 @@ type runPayload struct {
 	Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
 	HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
 	Launch          string                    `json:"launch,omitempty"`
+	OutputCaptured  bool                      `json:"output_captured,omitempty"`
 	ChannelHash     string                    `json:"channel_hash,omitempty"`
 	ChannelMessages int                       `json:"channel_messages,omitempty"`
 	ChannelGaps     int                       `json:"channel_gaps,omitempty"`
@@ -1706,6 +1707,7 @@ func runPayloadOf(r *session.RunRecord) runPayload {
 		Artifacts:       r.Artifacts,
 		HardwareSamples: r.HardwareSamples,
 		Launch:          r.Launch,
+		OutputCaptured:  r.OutputCaptured,
 		ChannelHash:     r.ChannelHash,
 		ChannelMessages: r.ChannelMessages,
 		ChannelGaps:     r.ChannelGaps,
@@ -2095,7 +2097,9 @@ var cmdVerify = &cobra.Command{
 			fmt.Fprintf(out, "Seeds:      %d commitments\n", seedCount)
 		}
 		for i, r := range runs {
-			if r.Launch == "attached" {
+			if r.Launch == "attached" && r.OutputCaptured {
+				fmt.Fprintf(out, "Run %d:      attached (observed from the SDK call; output captured)\n", i+1)
+			} else if r.Launch == "attached" {
 				fmt.Fprintf(out, "Run %d:      attached (observed from the SDK call, not from process start; stdout not captured)\n", i+1)
 			}
 			if d := r.Distributed; d != nil {

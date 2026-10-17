@@ -38,6 +38,12 @@ type Attachment struct {
 	PID     int
 	Channel *os.File
 	Live    io.Writer
+	// Optional: the process's own stdout and stderr, redirected through these pipes by
+	// the SDK, are recorded like a wrapped run's and passed on to Echo and EchoErr.
+	Stdout  *os.File
+	Stderr  *os.File
+	Echo    io.Writer
+	EchoErr io.Writer
 	exe     string
 }
 
@@ -137,6 +143,13 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	} else {
 		chanR = att.Channel
 		rec.Launch = "attached"
+		if att.Stdout != nil {
+			stdoutPipe = att.Stdout
+			rec.OutputCaptured = true
+		}
+		if att.Stderr != nil {
+			stderrPipe = att.Stderr
+		}
 	}
 
 	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
@@ -328,33 +341,43 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 		go streamLive(sampler, att.Live, chanDone)
 	}
 
-	if att == nil {
-		var wg sync.WaitGroup
-
-		wg.Add(1)
+	echoOut, echoErr := io.Writer(os.Stdout), io.Writer(os.Stderr)
+	if att != nil {
+		echoOut, echoErr = att.Echo, att.EchoErr
+	}
+	var outWG sync.WaitGroup
+	if stdoutPipe != nil {
+		outWG.Add(1)
 		go func() {
-			defer wg.Done()
+			defer outWG.Done()
 			scanner := bufio.NewScanner(stdoutPipe)
 			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 			lineNum := 0
 			for scanner.Scan() {
 				lineNum++
 				line := scanner.Text()
-				fmt.Fprintln(os.Stdout, line)
+				if echoOut != nil {
+					fmt.Fprintln(echoOut, line)
+				}
 				fmt.Fprintln(&stdoutBuf, line)
 				handle(line, lineNum, 0)
 			}
 			stdoutLines = lineNum
 		}()
-
-		wg.Add(1)
+	}
+	if stderrPipe != nil {
+		outWG.Add(1)
 		go func() {
-			defer wg.Done()
-			tee := io.TeeReader(stderrPipe, os.Stderr)
-			io.Copy(&stderrBuf, tee) //nolint:errcheck
+			defer outWG.Done()
+			var src io.Reader = stderrPipe
+			if echoErr != nil {
+				src = io.TeeReader(stderrPipe, echoErr)
+			}
+			io.Copy(&stderrBuf, src) //nolint:errcheck
 		}()
-
-		wg.Wait()
+	}
+	if att == nil {
+		outWG.Wait()
 	}
 
 	exitCode := 0
@@ -379,6 +402,21 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	} else {
 		<-chanDone
 		chanR.Close()
+		// The SDK restores its stdout and stderr before bye; a child still holding them
+		// open must not stall the record.
+		done := make(chan struct{})
+		go func() { outWG.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			if att.Stdout != nil {
+				att.Stdout.Close()
+			}
+			if att.Stderr != nil {
+				att.Stderr.Close()
+			}
+			<-done
+		}
 		// The channel closing without bye means the observed process died mid-run.
 		exitCode = -1
 		if sawBye {

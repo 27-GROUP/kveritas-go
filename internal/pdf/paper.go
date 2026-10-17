@@ -468,7 +468,11 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 	}
 	for i, r := range runs {
 		if r.Launch == "attached" {
-			rows = append(rows, []string{fmt.Sprintf("Launch, run %d", i+1), "attached: observed from the SDK call, output not captured"})
+			detail := "attached: observed from the SDK call, output not captured"
+			if r.OutputCaptured {
+				detail = "attached: observed from the SDK call, output captured"
+			}
+			rows = append(rows, []string{fmt.Sprintf("Launch, run %d", i+1), detail})
 		}
 		if len(r.Cells) > 0 {
 			rows = append(rows, []string{fmt.Sprintf("Notebook, run %d", i+1),

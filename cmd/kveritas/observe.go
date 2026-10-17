@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -16,9 +17,13 @@ import (
 )
 
 var (
-	observePID     int
-	observeChannel string
-	observeLive    bool
+	observePID        int
+	observeChannel    string
+	observeLive       bool
+	observeStdout     string
+	observeStderr     string
+	observeEchoStdout string
+	observeEchoStderr string
 )
 
 type observeResult struct {
@@ -53,17 +58,30 @@ var cmdObserve = &cobra.Command{
 
 func observe() (observeResult, error) {
 	res := observeResult{Kind: "result"}
-	fdText, ok := strings.CutPrefix(observeChannel, "fd:")
-	if !ok {
-		return res, fmt.Errorf("--channel must be fd:<n>")
+	channel, err := fdFile(observeChannel, "kveritas-channel")
+	if err != nil || channel == nil {
+		return res, fmt.Errorf("--channel: %v", err)
 	}
-	fd, err := strconv.Atoi(fdText)
-	if err != nil || fd < 3 {
-		return res, fmt.Errorf("invalid channel descriptor %q", observeChannel)
+	att := &runner.Attachment{PID: observePID, Channel: channel}
+	for _, f := range []struct {
+		spec string
+		dst  **os.File
+	}{{observeStdout, &att.Stdout}, {observeStderr, &att.Stderr}} {
+		if *f.dst, err = fdFile(f.spec, "kveritas-output"); err != nil {
+			return res, err
+		}
 	}
-	channel := os.NewFile(uintptr(fd), "kveritas-channel")
-	if channel == nil {
-		return res, fmt.Errorf("channel descriptor %d is not open", fd)
+	for _, f := range []struct {
+		spec string
+		dst  *io.Writer
+	}{{observeEchoStdout, &att.Echo}, {observeEchoStderr, &att.EchoErr}} {
+		w, err := fdFile(f.spec, "kveritas-echo")
+		if err != nil {
+			return res, err
+		}
+		if w != nil {
+			*f.dst = w
+		}
 	}
 
 	kvDir, err := session.Find()
@@ -94,7 +112,6 @@ func observe() (observeResult, error) {
 		defer stop()
 	}
 
-	att := &runner.Attachment{PID: observePID, Channel: channel}
 	if observeLive {
 		att.Live = os.Stdout
 	}
@@ -133,8 +150,29 @@ func observe() (observeResult, error) {
 	return res, nil
 }
 
+// An empty spec means the descriptor was not passed.
+func fdFile(spec, name string) (*os.File, error) {
+	if spec == "" {
+		return nil, nil
+	}
+	text, ok := strings.CutPrefix(spec, "fd:")
+	fd, err := strconv.Atoi(text)
+	if !ok || err != nil || fd < 3 {
+		return nil, fmt.Errorf("invalid descriptor %q, expected fd:<n>", spec)
+	}
+	f := os.NewFile(uintptr(fd), name)
+	if f == nil {
+		return nil, fmt.Errorf("descriptor %d is not open", fd)
+	}
+	return f, nil
+}
+
 func init() {
 	cmdObserve.Flags().IntVar(&observePID, "pid", 0, "process to observe")
+	cmdObserve.Flags().StringVar(&observeStdout, "stdout", "", "read end of the observed process's redirected stdout, fd:<n>")
+	cmdObserve.Flags().StringVar(&observeStderr, "stderr", "", "read end of the observed process's redirected stderr, fd:<n>")
+	cmdObserve.Flags().StringVar(&observeEchoStdout, "echo-stdout", "", "where to pass captured stdout on, fd:<n>")
+	cmdObserve.Flags().StringVar(&observeEchoStderr, "echo-stderr", "", "where to pass captured stderr on, fd:<n>")
 	cmdObserve.Flags().StringVar(&observeChannel, "channel", "", "result channel, fd:<n>")
 	cmdObserve.Flags().BoolVar(&observeLive, "live", false, "stream hardware samples to stdout while observing")
 	_ = cmdObserve.MarkFlagRequired("pid")

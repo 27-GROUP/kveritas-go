@@ -75,6 +75,7 @@ type RunRecord struct {
 	RunDigest  string     `json:"run_digest,omitempty"`
 	// "attached" when the observer joined an already running process (SDK, notebooks).
 	Launch          string         `json:"launch,omitempty"`
+	OutputCaptured  bool           `json:"output_captured,omitempty"`
 	ChannelHash     string         `json:"channel_hash,omitempty"`
 	ChannelMessages int            `json:"channel_messages,omitempty"`
 	ChannelGaps     int            `json:"channel_gaps,omitempty"`
