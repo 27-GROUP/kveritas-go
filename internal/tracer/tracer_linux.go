@@ -259,8 +259,9 @@ func (o *Observer) scanProcs(root int) {
 		return
 	}
 	now := time.Now().UTC()
+	self := os.Getpid()
 	for pid := range parent {
-		if pid == root || !descends(pid, root, parent) {
+		if pid == root || pid == self || descends(pid, self, parent) || !descends(pid, root, parent) {
 			continue
 		}
 		o.mu.Lock()

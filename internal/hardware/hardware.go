@@ -304,12 +304,23 @@ func gpuCounters() gpuState {
 		"--format=csv,noheader,nounits",
 	).Output()
 	if err == nil {
-		fields := strings.Split(strings.TrimSpace(string(out)), ",")
-		if len(fields) >= 4 {
-			g.GPUUtilPct, _ = strconv.ParseFloat(strings.TrimSpace(fields[0]), 64)
-			g.GPUMemUsedMB, _ = strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
-			g.GPUTempC, _ = strconv.ParseFloat(strings.TrimSpace(fields[2]), 64)
-			g.GPUPowerW, _ = strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+		// One line per GPU. Utilization, memory and power add up across devices, the
+		// same way per-process utilization is summed, so the run's share stays consistent.
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			fields := strings.Split(line, ",")
+			if len(fields) < 4 {
+				continue
+			}
+			util, _ := strconv.ParseFloat(strings.TrimSpace(fields[0]), 64)
+			mem, _ := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
+			temp, _ := strconv.ParseFloat(strings.TrimSpace(fields[2]), 64)
+			power, _ := strconv.ParseFloat(strings.TrimSpace(fields[3]), 64)
+			g.GPUUtilPct += util
+			g.GPUMemUsedMB += mem
+			g.GPUPowerW += power
+			if temp > g.GPUTempC {
+				g.GPUTempC = temp
+			}
 		}
 		return g
 	}

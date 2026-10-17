@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -63,6 +67,11 @@ from the official release channel, and replaces the current executable.`,
 			return fmt.Errorf("downloaded file too small (%d bytes); binary may not be available for %s/%s", n, goos, goarch)
 		}
 
+		if err := checkReleaseSum(tmpPath, binaryName); err != nil {
+			os.Remove(tmpPath)
+			return err
+		}
+
 		if err := os.Rename(tmpPath, execPath); err != nil {
 			os.Remove(tmpPath)
 			return fmt.Errorf("cannot replace binary: %w\nTry running with sudo or move %s to %s manually.", err, tmpPath, execPath)
@@ -71,4 +80,35 @@ from the official release channel, and replaces the current executable.`,
 		fmt.Fprintf(os.Stderr, "Updated successfully (%d bytes written to %s)\n", n, execPath)
 		return nil
 	},
+}
+
+func checkReleaseSum(path, name string) error {
+	resp, err := http.Get(releasesBaseURL + "/SHA256SUMS")
+	if err != nil {
+		return fmt.Errorf("fetching checksums: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetching checksums: server returned %d", resp.StatusCode)
+	}
+	want := ""
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) == 2 && strings.TrimPrefix(f[1], "*") == name {
+			want = f[0]
+		}
+	}
+	if want == "" {
+		return fmt.Errorf("no checksum published for %s", name)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	got := sha256.Sum256(data)
+	if hex.EncodeToString(got[:]) != want {
+		return fmt.Errorf("checksum mismatch for %s; update refused", name)
+	}
+	return nil
 }

@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +30,26 @@ import (
 )
 
 func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
+	return execute(sess, command, fileHints, nil)
+}
+
+// Attachment describes an already running process the observer joins instead of
+// launching one: the SDK's own interpreter, a notebook kernel.
+type Attachment struct {
+	PID     int
+	Channel *os.File
+	Live    io.Writer
+	exe     string
+}
+
+// Attach observes pid from now until the SDK sends bye or closes the channel.
+func Attach(sess *session.Session, att *Attachment) (*session.RunRecord, error) {
+	command, exe := processCommand(att.PID)
+	att.exe = exe
+	return execute(sess, command, nil, att)
+}
+
+func execute(sess *session.Session, command []string, fileHints []string, att *Attachment) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
 	}
@@ -89,27 +111,63 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	)
 
 	parser := &metrics.Parser{}
-	cmd := exec.Command(command[0], command[1:]...)
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
+	var (
+		cmd        *exec.Cmd
+		stdoutPipe io.ReadCloser
+		stderrPipe io.ReadCloser
+		chanR      *os.File
+		chanW      *os.File
+		err        error
+	)
+	if att == nil {
+		cmd = exec.Command(command[0], command[1:]...)
+		if stdoutPipe, err = cmd.StdoutPipe(); err != nil {
+			return nil, err
+		}
+		if stderrPipe, err = cmd.StderrPipe(); err != nil {
+			return nil, err
+		}
+		// Results sent by an SDK arrive on an inherited pipe only the run's own process
+		// tree holds. Windows cannot pass extra descriptors; printed lines still work there.
+		if runtime.GOOS != "windows" {
+			if r, w, perr := os.Pipe(); perr == nil {
+				chanR, chanW = r, w
+				cmd.ExtraFiles = []*os.File{w}
+				cmd.Env = append(os.Environ(), ChannelEnv+"=fd:3")
+			}
+		}
+	} else {
+		chanR = att.Channel
+		rec.Launch = "attached"
 	}
 
 	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
 	obs := tracer.New(sess.ProjectDir)
 	obs.Start()
 
-	if err := cmd.Start(); err != nil {
-		obs.Stop()
-		return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
+	pid := 0
+	if att == nil {
+		if err := cmd.Start(); err != nil {
+			obs.Stop()
+			if chanR != nil {
+				chanR.Close()
+				chanW.Close()
+			}
+			return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
+		}
+		if chanW != nil {
+			chanW.Close()
+		}
+		pid = cmd.Process.Pid
+	} else {
+		pid = att.PID
+		if !hardware.ProcessAlive(pid) {
+			obs.Stop()
+			return nil, fmt.Errorf("process %d is not running", pid)
+		}
 	}
-	obs.SetPID(cmd.Process.Pid)
-	sampler.SetPID(cmd.Process.Pid)
+	obs.SetPID(pid)
+	sampler.SetPID(pid)
 
 	// Snapshots at start, each phase, and end make the run a verifiable state timeline.
 	provLevel := provenance.ParseLevel(sess.Disclosure)
@@ -120,103 +178,213 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	// The command can name a private script or dataset, so redacted keeps only the interpreter.
 	rec.Command = redactCommand(command, provLevel)
 
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		scanner := bufio.NewScanner(stdoutPipe)
-		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-		lineNum := 0
-		for scanner.Scan() {
-			lineNum++
-			line := scanner.Text()
-			fmt.Fprintln(os.Stdout, line)
-			fmt.Fprintln(&stdoutBuf, line)
-
-			if phaseName, ok := parser.ParsePhase(line); ok {
-				pe := hardware.CapturePhaseEvent(phaseName, lineNum, cmd.Process.Pid)
-				mu.Lock()
-				allPhases = append(allPhases, pe)
-				mu.Unlock()
-				prov.Snapshot("phase", phaseName)
-				fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (line %d, hardware snapshot captured)\n", phaseName, lineNum)
-				continue
-			}
-
-			if claim, ok := parser.ParseClaim(line, lineNum); ok {
-				mu.Lock()
-				allClaims = append(allClaims, *claim)
-				mu.Unlock()
-				fmt.Fprintln(&metricLines, line)
-				fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (line %d)\n", claim.Metric, claim.Value, lineNum)
-				continue
-			}
-
-			if parser.ParseDeclared(line, declared) {
-				declaredSeen = true
-				fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (line %d)\n", lineNum)
-				continue
-			}
-
-			if seedVal, ok := parser.ParseSeed(line); ok {
-				sc := session.SeedCommitment{
-					Source:    "seed:" + seedVal,
-					Value:     seedVal,
-					Line:      lineNum,
-					Timestamp: time.Now().UTC(),
-				}
-				mu.Lock()
-				allSeeds = append(allSeeds, sc)
-				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (line %d)\n", seedVal, lineNum)
-				continue
-			}
-
-			if decl, ok := parser.ParseArtifact(line); ok {
-				if art := buildArtifact(decl, sess.ProjectDir, salt, provLevel); art != nil {
-					mu.Lock()
-					allArtifacts = append(allArtifacts, *art)
-					mu.Unlock()
-					fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, line %d)\n", decl.Role, art.Visibility, lineNum)
-				} else {
-					// Silence here would let a mistyped path look attested to its author.
-					fmt.Fprintf(os.Stderr, "[kveritas] Warning: artifact %q not attested, cannot read %s (line %d)\n",
-						decl.Role, decl.Path, lineNum)
-				}
-				continue
-			}
-
-			if m, ok := parser.Parse(line, lineNum); ok {
-				mu.Lock()
-				allMetrics = append(allMetrics, *m)
-				mu.Unlock()
-				fmt.Fprintln(&metricLines, line)
-			} else {
-				heuristics := parser.ParseHeuristic(line, lineNum)
-				if len(heuristics) > 0 {
-					mu.Lock()
-					allMetrics = append(allMetrics, heuristics...)
-					mu.Unlock()
-				}
-			}
+	where := func(lineNum, seq int) string {
+		if seq > 0 {
+			return fmt.Sprintf("message %d", seq)
 		}
-		stdoutLines = lineNum
-	}()
+		return fmt.Sprintf("line %d", lineNum)
+	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		tee := io.TeeReader(stderrPipe, os.Stderr)
-		io.Copy(&stderrBuf, tee) //nolint:errcheck
-	}()
+	// Printed lines and channel messages share one path, serialized so phases snapshot in order.
+	var lineMu sync.Mutex
+	handle := func(line string, lineNum, seq int) {
+		lineMu.Lock()
+		defer lineMu.Unlock()
 
-	wg.Wait()
+		if phaseName, ok := parser.ParsePhase(line); ok {
+			pe := hardware.CapturePhaseEvent(phaseName, lineNum, pid)
+			pe.Seq = seq
+			mu.Lock()
+			allPhases = append(allPhases, pe)
+			mu.Unlock()
+			prov.Snapshot("phase", phaseName)
+			fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (%s, hardware snapshot captured)\n", phaseName, where(lineNum, seq))
+			return
+		}
+
+		if claim, ok := parser.ParseClaim(line, lineNum); ok {
+			claim.Seq = seq
+			mu.Lock()
+			allClaims = append(allClaims, *claim)
+			mu.Unlock()
+			fmt.Fprintln(&metricLines, line)
+			fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (%s)\n", claim.Metric, claim.Value, where(lineNum, seq))
+			return
+		}
+
+		if parser.ParseDeclared(line, declared) {
+			declaredSeen = true
+			fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (%s)\n", where(lineNum, seq))
+			return
+		}
+
+		if seedVal, ok := parser.ParseSeed(line); ok {
+			sc := session.SeedCommitment{
+				Source:    "seed:" + seedVal,
+				Value:     seedVal,
+				Line:      lineNum,
+				Timestamp: time.Now().UTC(),
+				Seq:       seq,
+			}
+			mu.Lock()
+			allSeeds = append(allSeeds, sc)
+			mu.Unlock()
+			fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (%s)\n", seedVal, where(lineNum, seq))
+			return
+		}
+
+		if decl, ok := parser.ParseArtifact(line); ok {
+			if art := buildArtifact(decl, sess.ProjectDir, salt, provLevel); art != nil {
+				mu.Lock()
+				allArtifacts = append(allArtifacts, *art)
+				mu.Unlock()
+				fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, %s)\n", decl.Role, art.Visibility, where(lineNum, seq))
+			} else {
+				// Silence here would let a mistyped path look attested to its author.
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: artifact %q not attested, cannot read %s (%s)\n",
+					decl.Role, decl.Path, where(lineNum, seq))
+			}
+			return
+		}
+
+		if m, ok := parser.Parse(line, lineNum); ok {
+			m.Seq = seq
+			mu.Lock()
+			allMetrics = append(allMetrics, *m)
+			mu.Unlock()
+			fmt.Fprintln(&metricLines, line)
+		} else if seq == 0 {
+			heuristics := parser.ParseHeuristic(line, lineNum)
+			if len(heuristics) > 0 {
+				mu.Lock()
+				allMetrics = append(allMetrics, heuristics...)
+				mu.Unlock()
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d rejected: %s\n", seq, line)
+		}
+	}
+
+	var (
+		chanBuf  bytes.Buffer
+		chanMsgs int
+		chanGaps int
+		dist     *session.Distributed
+		cells    []session.NotebookCell
+		chanDone = make(chan struct{})
+		sawBye   bool
+		byeExit  int
+	)
+	if chanR != nil {
+		go func() {
+			defer close(chanDone)
+			sc := bufio.NewScanner(chanR)
+			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+			next := 1
+			for sc.Scan() {
+				raw := sc.Bytes()
+				chanBuf.Write(raw)
+				chanBuf.WriteByte('\n')
+				var msg channelMessage
+				if err := json.Unmarshal(raw, &msg); err != nil {
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: unreadable channel message ignored\n")
+					continue
+				}
+				chanMsgs++
+				if msg.Seq != next {
+					chanGaps++
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d arrived where %d was expected\n", msg.Seq, next)
+				}
+				next = msg.Seq + 1
+				switch msg.Kind {
+				case "hello":
+					dist = msg.distributed()
+				case "bye":
+					if att != nil {
+						sawBye = true
+						if msg.ExitCode != nil {
+							byeExit = *msg.ExitCode
+						}
+						return
+					}
+				case "cell":
+					c, err := msg.cell(sess.ProjectDir)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record notebook cell: %v\n", err)
+					}
+					lineMu.Lock()
+					cells = append(cells, c)
+					lineMu.Unlock()
+				default:
+					if l := msg.line(); l != "" {
+						handle(l, 0, msg.Seq)
+					} else {
+						fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d (%s) ignored\n", msg.Seq, msg.Kind)
+					}
+				}
+			}
+		}()
+	} else {
+		close(chanDone)
+	}
+
+	if att != nil && att.Live != nil {
+		go streamLive(sampler, att.Live, chanDone)
+	}
+
+	if att == nil {
+		var wg sync.WaitGroup
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			scanner := bufio.NewScanner(stdoutPipe)
+			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+			lineNum := 0
+			for scanner.Scan() {
+				lineNum++
+				line := scanner.Text()
+				fmt.Fprintln(os.Stdout, line)
+				fmt.Fprintln(&stdoutBuf, line)
+				handle(line, lineNum, 0)
+			}
+			stdoutLines = lineNum
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tee := io.TeeReader(stderrPipe, os.Stderr)
+			io.Copy(&stderrBuf, tee) //nolint:errcheck
+		}()
+
+		wg.Wait()
+	}
 
 	exitCode := 0
-	if err := cmd.Wait(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok {
-			exitCode = exit.ExitCode()
+	if att == nil {
+		if err := cmd.Wait(); err != nil {
+			if exit, ok := err.(*exec.ExitError); ok {
+				exitCode = exit.ExitCode()
+			}
+		}
+		// A descendant that outlives the run could hold the pipe open forever.
+		if chanR != nil {
+			select {
+			case <-chanDone:
+			case <-time.After(3 * time.Second):
+				chanR.Close()
+				<-chanDone
+			}
+			chanR.Close()
+		}
+	} else {
+		<-chanDone
+		chanR.Close()
+		// The channel closing without bye means the observed process died mid-run.
+		exitCode = -1
+		if sawBye {
+			exitCode = byeExit
 		}
 	}
 
@@ -281,6 +449,13 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	if declaredSeen {
 		rec.Declared = declared
 	}
+	if chanMsgs > 0 {
+		rec.ChannelHash = digestBuf(chanBuf.Bytes())
+		rec.ChannelMessages = chanMsgs
+		rec.ChannelGaps = chanGaps
+		rec.Distributed = dist
+		rec.Cells = cells
+	}
 
 	var postHashes map[string]string
 	var postHashErr error
@@ -294,7 +469,11 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 	}()
 	go func() {
 		defer postWg.Done()
-		envDig, envPackages, _ = envDigest(command)
+		envCmd := command
+		if att != nil && att.exe != "" {
+			envCmd = []string{att.exe}
+		}
+		envDig, envPackages, _ = envDigest(envCmd)
 	}()
 
 	if len(sess.SourceHashes) == 0 {

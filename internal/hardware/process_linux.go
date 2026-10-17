@@ -92,6 +92,9 @@ func descendantPIDs(rootPID int) map[int]bool {
 			parent[pid] = ppid
 		}
 	}
+	// When attached, the observer runs inside the tree it watches; leaving its pid out
+	// keeps it and everything it spawns (nvidia-smi) out of the run's numbers.
+	delete(parent, os.Getpid())
 	tree := map[int]bool{rootPID: true}
 	changed := true
 	for changed {

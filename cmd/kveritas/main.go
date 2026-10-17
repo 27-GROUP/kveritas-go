@@ -86,7 +86,7 @@ func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
-	root.AddCommand(cmdArchiveRecord)
+	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdObserve)
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -285,7 +285,7 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 	ok := 0
 	for _, pf := range proof.Files {
 		if err := provenance.VerifyFile(&pf, roots); err != nil {
-			fmt.Printf("REJECTED  %s  (%s)\n", pf.Path, err)
+			fmt.Fprintf(out, "REJECTED  %s  (%s)\n", pf.Path, err)
 			continue
 		}
 		content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
@@ -306,11 +306,11 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 				where = append(where, w)
 			}
 		}
-		fmt.Printf("VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, run,
+		fmt.Fprintf(out, "VERIFIED  %s  (run %d, %s, %d bytes)\n", pf.Path, run,
 			strings.Join(where, "/"), len(content))
 		ok++
 	}
-	fmt.Printf("%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
+	fmt.Fprintf(out, "%d of %d file(s) verified against the signed report.\n", ok, len(proof.Files))
 	if ok != len(proof.Files) {
 		return fmt.Errorf("some files did not verify")
 	}
@@ -979,36 +979,36 @@ func verifyHarnessReport(report *harness.Report) error {
 	res := harness.Verify(report)
 	g := report.Genesis
 
-	fmt.Println(res.Verdict)
+	fmt.Fprintln(out, res.Verdict)
 	if res.Verdict != "VERIFIED" {
-		fmt.Printf("Reason: %s\n", res.Detail)
+		fmt.Fprintf(out, "Reason: %s\n", res.Detail)
 		if res.FailAtIndex > 0 {
-			fmt.Printf("Localized: entry %d (actor %s)\n", res.FailAtIndex, res.FailAtActor)
+			fmt.Fprintf(out, "Localized: entry %d (actor %s)\n", res.FailAtIndex, res.FailAtActor)
 		}
 		return nil
 	}
 
-	fmt.Printf("Session:     %s\n", g.SessionID)
-	fmt.Printf("Agent:       %s\n", g.AgentIdentity)
-	fmt.Printf("Operator:    %s\n", g.OperatorID)
-	fmt.Printf("Designation: %s (server-signed)\n", g.DesignationHash[:16])
-	fmt.Printf("Started:     %s\n", g.StartAt)
-	fmt.Printf("Sealed:      %s\n", report.Seal.SealedAt)
-	fmt.Printf("Entries:     %d\n", res.EntryCount)
-	fmt.Println("Actor tree:")
+	fmt.Fprintf(out, "Session:     %s\n", g.SessionID)
+	fmt.Fprintf(out, "Agent:       %s\n", g.AgentIdentity)
+	fmt.Fprintf(out, "Operator:    %s\n", g.OperatorID)
+	fmt.Fprintf(out, "Designation: %s (server-signed)\n", g.DesignationHash[:16])
+	fmt.Fprintf(out, "Started:     %s\n", g.StartAt)
+	fmt.Fprintf(out, "Sealed:      %s\n", report.Seal.SealedAt)
+	fmt.Fprintf(out, "Entries:     %d\n", res.EntryCount)
+	fmt.Fprintln(out, "Actor tree:")
 	renderActorTree(harness.ActorTree(report.Entries), 1)
 	return nil
 }
 
 func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	for _, n := range nodes {
-		fmt.Printf("%s%s (%d)\n", strings.Repeat("  ", depth), n.Name, n.Count)
+		fmt.Fprintf(out, "%s%s (%d)\n", strings.Repeat("  ", depth), n.Name, n.Count)
 		if len(n.Actions) > 0 {
 			parts := make([]string, 0, len(n.Actions))
 			for _, a := range n.Actions {
 				parts = append(parts, fmt.Sprintf("%s:%d", a.Label, a.Count))
 			}
-			fmt.Printf("%s%s\n", strings.Repeat("  ", depth+1), strings.Join(parts, "  "))
+			fmt.Fprintf(out, "%s%s\n", strings.Repeat("  ", depth+1), strings.Join(parts, "  "))
 		}
 		renderActorTree(n.Children, depth+1)
 	}
@@ -1030,7 +1030,7 @@ func sanitizeForReport(s *session.Session) *session.Session {
 // Prints a run's snapshot timeline. At the redacted level file names are pseudonyms;
 // withheld files are listed so a reviewer sees what was kept out of any bundle.
 func renderProvenance(idx int, p *session.Provenance) {
-	fmt.Printf("\nRun %d provenance (%s, %d files):\n", idx, p.Disclosure, p.FileCount)
+	fmt.Fprintf(out, "\nRun %d provenance (%s, %d files):\n", idx, p.Disclosure, p.FileCount)
 	for _, c := range p.Commits {
 		label := c.Event.Kind
 		if c.Event.Name != "" {
@@ -1040,34 +1040,34 @@ func renderProvenance(idx int, p *session.Provenance) {
 		if len(root) > 12 {
 			root = root[:12]
 		}
-		fmt.Printf("  [%d] %-16s root %s", c.Index, label, root)
+		fmt.Fprintf(out, "  [%d] %-16s root %s", c.Index, label, root)
 		if len(c.Changed) > 0 {
-			fmt.Printf("  (%d changed)", len(c.Changed))
+			fmt.Fprintf(out, "  (%d changed)", len(c.Changed))
 		}
-		fmt.Println()
+		fmt.Fprintln(out)
 		for _, ch := range c.Changed {
-			fmt.Printf("        %-6s %s\n", ch.Op, ch.Path)
+			fmt.Fprintf(out, "        %-6s %s\n", ch.Op, ch.Path)
 		}
 	}
 	if len(p.Withheld) > 0 {
-		fmt.Printf("  withheld by .kveritasignore (%d):\n", len(p.Withheld))
+		fmt.Fprintf(out, "  withheld by .kveritasignore (%d):\n", len(p.Withheld))
 		for _, w := range p.Withheld {
 			h := w.Hash
 			if len(h) > 12 {
 				h = h[:12]
 			}
-			fmt.Printf("        %s  %s  %s\n", w.Path, w.SizeBucket, h)
+			fmt.Fprintf(out, "        %s  %s  %s\n", w.Path, w.SizeBucket, h)
 		}
 	}
 	if p.Truncated {
-		fmt.Printf("  (provenance truncated at %d snapshots)\n", 512)
+		fmt.Fprintf(out, "  (provenance truncated at %d snapshots)\n", 512)
 	}
 }
 
 // Prints attested models and datasets: public artifacts show name and hash, private ones
 // show only a salted commitment.
 func renderArtifacts(idx int, arts []session.Artifact) {
-	fmt.Printf("\nRun %d attested artifacts:\n", idx)
+	fmt.Fprintf(out, "\nRun %d attested artifacts:\n", idx)
 	for _, a := range arts {
 		name := a.Name
 		if name == "" {
@@ -1077,7 +1077,7 @@ func renderArtifacts(idx int, arts []session.Artifact) {
 		if len(h) > 16 {
 			h = h[:16]
 		}
-		fmt.Printf("  %-8s %-18s %-8s %-6s %s\n", a.Role, name, a.Visibility, a.SizeBucket, h)
+		fmt.Fprintf(out, "  %-8s %-18s %-8s %-6s %s\n", a.Role, name, a.Visibility, a.SizeBucket, h)
 	}
 }
 
@@ -1091,35 +1091,35 @@ func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 		}
 	}
 
-	fmt.Printf("\nRun %d activity: %s\n", idx, strings.Join(command, " "))
+	fmt.Fprintf(out, "\nRun %d activity: %s\n", idx, strings.Join(command, " "))
 	if len(reads) > 0 {
-		fmt.Printf("  read (%d):\n", len(reads))
+		fmt.Fprintf(out, "  read (%d):\n", len(reads))
 		for _, f := range reads {
-			fmt.Printf("    %s\n", f.Path)
+			fmt.Fprintf(out, "    %s\n", f.Path)
 		}
 	}
 	if len(writes) > 0 {
-		fmt.Printf("  wrote (%d):\n", len(writes))
+		fmt.Fprintf(out, "  wrote (%d):\n", len(writes))
 		for _, f := range writes {
 			h := f.Hash
 			if len(h) > 12 {
 				h = h[:12]
 			}
-			fmt.Printf("    %s  %s\n", f.Path, h)
+			fmt.Fprintf(out, "    %s  %s\n", f.Path, h)
 		}
 	}
 	if len(t.Procs) > 0 {
-		fmt.Printf("  subprocesses (%d):\n", len(t.Procs))
+		fmt.Fprintf(out, "  subprocesses (%d):\n", len(t.Procs))
 		for _, p := range t.Procs {
 			cmd := p.Command
 			if cmd == "" {
 				cmd = "(unknown)"
 			}
-			fmt.Printf("    [pid %d] %s\n", p.PID, cmd)
+			fmt.Fprintf(out, "    [pid %d] %s\n", p.PID, cmd)
 		}
 	}
 	if t.Truncated {
-		fmt.Printf("  (trace truncated at %d files)\n", 10000)
+		fmt.Fprintf(out, "  (trace truncated at %d files)\n", 10000)
 	}
 }
 
@@ -1326,6 +1326,7 @@ func init() {
 var (
 	sealOutput  string
 	sealKeyPath string
+	sealJSON    bool
 )
 
 var cmdSeal = &cobra.Command{
@@ -1497,6 +1498,20 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] Session directory cleaned up\n")
 		}
 
+		if sealJSON {
+			doc := sealDoc{
+				Report: outPath, DataHash: seal.DataHash, Runs: len(runs),
+				TotalInvocations: seal.TotalRunCount, Coherence: &hmcaResult,
+			}
+			if len(combinedBundle) > 0 {
+				doc.Bundle = provBundlePath(outPath)
+			}
+			if len(merged.Commits) > 0 {
+				doc.Keystore = provKeyPath(outPath)
+			}
+			return printJSON(doc)
+		}
+
 		fmt.Printf("Report sealed: %s\n", outPath)
 		fmt.Printf("Data hash:     %s\n", seal.DataHash)
 		fmt.Printf("Runs:          %d\n", len(runs))
@@ -1568,23 +1583,24 @@ func reportComputeCert(c session.ComputeCert) {
 	if c.Verdict == "" || c.Verdict == "N/A" {
 		return
 	}
-	fmt.Printf("  Compute [%s]", c.Verdict)
+	fmt.Fprintf(out, "  Compute [%s]", c.Verdict)
 	if c.FDeclaredFLOPs > 0 {
-		fmt.Printf(" declared=%.2e FLOPs  active=%.0fs  energy=%.0fJ  peakmem=%.0fMB",
+		fmt.Fprintf(out, " declared=%.2e FLOPs  active=%.0fs  energy=%.0fJ  peakmem=%.0fMB",
 			c.FDeclaredFLOPs, c.GPUActiveSec, c.EnergyJoules, c.PeakGPUMemMB)
 		if c.ImpliedMFU > 0 {
-			fmt.Printf("  MFU=%.3f", c.ImpliedMFU)
+			fmt.Fprintf(out, "  MFU=%.3f", c.ImpliedMFU)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 	for _, n := range c.Notes {
-		fmt.Printf("    ! %s\n", n)
+		fmt.Fprintf(out, "    ! %s\n", n)
 	}
 }
 
 func init() {
 	cmdSeal.Flags().StringVarP(&sealOutput, "output", "o", "", "output PDF path (default: kveritas-report-<id>.pdf)")
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
+	cmdSeal.Flags().BoolVar(&sealJSON, "json", false, "print the result as JSON")
 }
 
 // Verification hashes the analysis the seal committed to, not what today's analyzer
@@ -1633,6 +1649,12 @@ type runPayload struct {
 	ProvBundleHash  string                    `json:"prov_bundle_hash,omitempty"`
 	Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
 	HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
+	Launch          string                    `json:"launch,omitempty"`
+	ChannelHash     string                    `json:"channel_hash,omitempty"`
+	ChannelMessages int                       `json:"channel_messages,omitempty"`
+	ChannelGaps     int                       `json:"channel_gaps,omitempty"`
+	Distributed     *session.Distributed      `json:"distributed,omitempty"`
+	Cells           []session.NotebookCell    `json:"cells,omitempty"`
 }
 
 func runPayloadOf(r *session.RunRecord) runPayload {
@@ -1665,6 +1687,12 @@ func runPayloadOf(r *session.RunRecord) runPayload {
 		ProvBundleHash:  r.ProvBundleHash,
 		Artifacts:       r.Artifacts,
 		HardwareSamples: r.HardwareSamples,
+		Launch:          r.Launch,
+		ChannelHash:     r.ChannelHash,
+		ChannelMessages: r.ChannelMessages,
+		ChannelGaps:     r.ChannelGaps,
+		Distributed:     r.Distributed,
+		Cells:           r.Cells,
 	}
 }
 
@@ -1802,15 +1830,35 @@ var verifyOffline bool
 var verifyServer string
 var verifyBundle string
 var verifyManuscript string
+var verifyJSON bool
 
 var cmdVerify = &cobra.Command{
 	Use:   "verify <report.pdf>",
 	Short: "Verify a signed K-Veritas report (offline checks plus the full server audit)",
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, args []string) (err error) {
 		reportPath := args[0]
 
+		var jr *verifyDoc
+		if verifyJSON {
+			out = io.Discard
+			jr = &verifyDoc{Kind: "report"}
+			defer func() {
+				if err != nil && jr.Status == "" {
+					jr.set("ERROR", err.Error())
+				}
+				if perr := printJSON(jr); perr != nil && err == nil {
+					err = perr
+				}
+			}()
+		}
+
 		if report, ok := loadHarnessReport(reportPath); ok {
+			if jr != nil {
+				res := harness.Verify(report)
+				jr.Kind, jr.SessionID = "session", report.Genesis.SessionID
+				jr.set(res.Verdict, res.Detail)
+			}
 			return verifyHarnessReport(report)
 		}
 
@@ -1818,7 +1866,16 @@ var cmdVerify = &cobra.Command{
 			if proof.Seal == nil {
 				return fmt.Errorf("proof has no embedded seal; use: kveritas verify-proof <report.pdf> <proof.json>")
 			}
-			return verifyProofAgainstSeal(proof, proof.Seal)
+			perr := verifyProofAgainstSeal(proof, proof.Seal)
+			if jr != nil {
+				jr.Kind = "proof"
+				if perr != nil {
+					jr.set("REJECTED", perr.Error())
+				} else {
+					jr.set("VERIFIED", "")
+				}
+			}
+			return perr
 		}
 
 		meta, err := pdf.ExtractMetadata(reportPath)
@@ -1846,15 +1903,17 @@ var cmdVerify = &cobra.Command{
 			return fmt.Errorf("hashing session data: %w", err)
 		}
 		if computedHash != seal.DataHash {
-			fmt.Printf("TAMPERED\nData hash mismatch.\n  Stored:   %s\n  Computed: %s\n",
+			fmt.Fprintf(out, "TAMPERED\nData hash mismatch.\n  Stored:   %s\n  Computed: %s\n",
 				seal.DataHash, computedHash)
+			jr.set("TAMPERED", "data hash mismatch")
 			return nil
 		}
 
 		// The stored canonical JSON is the exact bytes that were signed; hashing it
 		// must reproduce the data hash, so an edit to the embedded copy is caught.
 		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
-			fmt.Printf("TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
+			fmt.Fprintf(out, "TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
+			jr.set("TAMPERED", "stored canonical JSON does not match the signed data hash")
 			return nil
 		}
 
@@ -1865,13 +1924,15 @@ var cmdVerify = &cobra.Command{
 				continue
 			}
 			if d, derr := runDigest(r); derr != nil || d != r.RunDigest {
-				fmt.Printf("TAMPERED\nRun %d does not match the digest anchored when it finished.\n", i+1)
+				fmt.Fprintf(out, "TAMPERED\nRun %d does not match the digest anchored when it finished.\n", i+1)
+				jr.set("TAMPERED", fmt.Sprintf("run %d does not match its run anchor", i+1))
 				return nil
 			}
 		}
 
 		if final, ferr := pdf.SealIsFinal(reportPath); ferr == nil && !final {
-			fmt.Printf("TAMPERED\nContent was appended after the seal; a PDF reader may render it in place of the signed pages.\n")
+			fmt.Fprintf(out, "TAMPERED\nContent was appended after the seal; a PDF reader may render it in place of the signed pages.\n")
+			jr.set("TAMPERED", "content appended after the seal")
 			return nil
 		}
 
@@ -1879,7 +1940,8 @@ var cmdVerify = &cobra.Command{
 		// count, and the other fields verify prints straight from the seal.
 		if seal.SealBlockHash != "" {
 			if sh, serr := pdf.SealBlockHash(reportPath); serr == nil && sh != seal.SealBlockHash {
-				fmt.Printf("TAMPERED\nThe seal block was modified after signing.\n")
+				fmt.Fprintf(out, "TAMPERED\nThe seal block was modified after signing.\n")
+				jr.set("TAMPERED", "seal block modified")
 				return nil
 			}
 		}
@@ -1888,7 +1950,8 @@ var cmdVerify = &cobra.Command{
 		// not only changes to the embedded data.
 		if seal.VisualPDFHash != "" {
 			if vh, verr := pdf.VisualPDFHash(reportPath); verr == nil && vh != seal.VisualPDFHash {
-				fmt.Printf("TAMPERED\nThe visual PDF pages were modified after signing.\n")
+				fmt.Fprintf(out, "TAMPERED\nThe visual PDF pages were modified after signing.\n")
+				jr.set("TAMPERED", "pages modified")
 				return nil
 			}
 		}
@@ -1896,8 +1959,9 @@ var cmdVerify = &cobra.Command{
 		payload := crypto.Payload(seal.DataHash, seal.Nonce, seal.SignedAt)
 		expectedMsgHash := crypto.HashBytes([]byte(payload))
 		if expectedMsgHash != seal.SignedMessageHash {
-			fmt.Printf("TAMPERED\nSigned message hash mismatch.\n  Stored:   %s\n  Expected: %s\n",
+			fmt.Fprintf(out, "TAMPERED\nSigned message hash mismatch.\n  Stored:   %s\n  Expected: %s\n",
 				seal.SignedMessageHash, expectedMsgHash)
+			jr.set("TAMPERED", "signed message hash mismatch")
 			return nil
 		}
 
@@ -1907,7 +1971,8 @@ var cmdVerify = &cobra.Command{
 			return fmt.Errorf("parsing embedded public key: %w", err)
 		}
 		if err := crypto.VerifyPSS(embeddedKey, payload, seal.Signature); err != nil {
-			fmt.Printf("INVALID\nSignature verification failed: %v\n", err)
+			fmt.Fprintf(out, "INVALID\nSignature verification failed: %v\n", err)
+			jr.set("INVALID", err.Error())
 			return nil
 		}
 
@@ -1925,38 +1990,65 @@ var cmdVerify = &cobra.Command{
 			return fmt.Errorf("checking report origin: %w", err)
 		}
 
-		if serverSigned {
-			fmt.Printf("VERIFIED\n")
-		} else {
-			fmt.Printf("SELF-ATTESTED\n")
-			fmt.Printf("Signature valid, but signed with an author-supplied key, not K-Veritas.\n")
-			fmt.Printf("The report's origin cannot be confirmed; treat the results as unverified.\n")
+		if jr != nil {
+			if serverSigned {
+				jr.set("VERIFIED", "")
+			} else {
+				jr.set("SELF_ATTESTED", "signed with a key other than the K-Veritas server key")
+			}
+			jr.SessionID = sess.ID
+			jr.SealedAt = seal.SealedAt.UTC().Format(time.RFC3339)
+			jr.SignedAt = seal.SignedAt
+			jr.DataHash = seal.DataHash
+			jr.TotalInvocations = seal.TotalRunCount
+			jr.Coherence = signedHMCA
+			for i, r := range runs {
+				rd := runDoc{
+					Index: i + 1, Command: r.Command, StartAt: r.StartAt.UTC().Format(time.RFC3339Nano),
+					DurationSec: r.DurationSec, ExitCode: r.ExitCode, Launch: launchOf(r),
+					Distributed: r.Distributed, ChannelMessages: r.ChannelMessages, ChannelGaps: r.ChannelGaps,
+					Metrics: r.Metrics, Claims: r.Claims, Seeds: r.Seeds,
+				}
+				if r.Declared != nil {
+					c := compute.Analyze(r)
+					rd.Compute = &c
+				}
+				jr.Runs = append(jr.Runs, rd)
+			}
 		}
-		fmt.Printf("Session:    %s\n", sess.ID)
-		fmt.Printf("Sealed at:  %s\n", seal.SealedAt.UTC().Format(time.RFC3339))
-		fmt.Printf("Signed at:  %s\n", seal.SignedAt)
-		fmt.Printf("Machine:    %s\n", sess.MachineID)
-		fmt.Printf("Runs:       %d\n", len(runs))
-		fmt.Printf("Data hash:  %s\n", seal.DataHash)
+
+		if serverSigned {
+			fmt.Fprintf(out, "VERIFIED\n")
+		} else {
+			fmt.Fprintf(out, "SELF-ATTESTED\n")
+			fmt.Fprintf(out, "Signature valid, but signed with an author-supplied key, not K-Veritas.\n")
+			fmt.Fprintf(out, "The report's origin cannot be confirmed; treat the results as unverified.\n")
+		}
+		fmt.Fprintf(out, "Session:    %s\n", sess.ID)
+		fmt.Fprintf(out, "Sealed at:  %s\n", seal.SealedAt.UTC().Format(time.RFC3339))
+		fmt.Fprintf(out, "Signed at:  %s\n", seal.SignedAt)
+		fmt.Fprintf(out, "Machine:    %s\n", sess.MachineID)
+		fmt.Fprintf(out, "Runs:       %d\n", len(runs))
+		fmt.Fprintf(out, "Data hash:  %s\n", seal.DataHash)
 
 		// Coherence is part of the signed data, so report it offline too. Re-analysis
 		// is shown when it disagrees: the detector improves, sealed reports do not.
 		if signedHMCA != nil && signedHMCA.Verdict != "" {
-			fmt.Printf("Coherence:  %s (%.2f)\n", signedHMCA.Verdict, signedHMCA.Score)
+			fmt.Fprintf(out, "Coherence:  %s (%.2f)\n", signedHMCA.Verdict, signedHMCA.Score)
 			for _, f := range signedHMCA.Flags {
-				fmt.Printf("  %s\n", f)
+				fmt.Fprintf(out, "  %s\n", f)
 			}
 		}
 		if verifyHMCA.Verdict == "FAIL" && (signedHMCA == nil || signedHMCA.Verdict != "FAIL") {
-			fmt.Printf("\nRe-analysis returns FAIL (sealed as %s):\n", signedHMCA.Verdict)
+			fmt.Fprintf(out, "\nRe-analysis returns FAIL (sealed as %s):\n", signedHMCA.Verdict)
 			for _, f := range verifyHMCA.Flags {
-				fmt.Printf("  %s\n", f)
+				fmt.Fprintf(out, "  %s\n", f)
 			}
-			fmt.Printf("The signature is valid; the telemetry it commits to does not support this run.\n")
+			fmt.Fprintf(out, "The signature is valid; the telemetry it commits to does not support this run.\n")
 		}
 
 		if seal.TotalRunCount > 0 {
-			fmt.Printf("Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
+			fmt.Fprintf(out, "Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
 		}
 
 		explicitCount := 0
@@ -1973,15 +2065,26 @@ var cmdVerify = &cobra.Command{
 			phaseCount += len(r.Phases)
 			seedCount += len(r.Seeds)
 		}
-		fmt.Printf("Metrics:    %d explicit\n", explicitCount)
+		fmt.Fprintf(out, "Metrics:    %d explicit\n", explicitCount)
 		if claimCount > 0 {
-			fmt.Printf("Claims:     %d inline\n", claimCount)
+			fmt.Fprintf(out, "Claims:     %d inline\n", claimCount)
 		}
 		if phaseCount > 0 {
-			fmt.Printf("Phases:     %d boundaries\n", phaseCount)
+			fmt.Fprintf(out, "Phases:     %d boundaries\n", phaseCount)
 		}
 		if seedCount > 0 {
-			fmt.Printf("Seeds:      %d commitments\n", seedCount)
+			fmt.Fprintf(out, "Seeds:      %d commitments\n", seedCount)
+		}
+		for i, r := range runs {
+			if r.Launch == "attached" {
+				fmt.Fprintf(out, "Run %d:      attached (observed from the SDK call, not from process start; stdout not captured)\n", i+1)
+			}
+			if d := r.Distributed; d != nil {
+				fmt.Fprintf(out, "Run %d:      distributed, world size %d, %d node(s) (%s)\n", i+1, d.WorldSize, d.Nodes, d.Launcher)
+			}
+			if r.ChannelGaps > 0 {
+				fmt.Fprintf(out, "Run %d:      %d gap(s) in the SDK channel\n", i+1, r.ChannelGaps)
+			}
 		}
 
 		for i, r := range runs {
@@ -2001,7 +2104,7 @@ var cmdVerify = &cobra.Command{
 				continue
 			}
 			cert := compute.Analyze(r)
-			fmt.Printf("Run %d compute:\n", i+1)
+			fmt.Fprintf(out, "Run %d compute:\n", i+1)
 			reportComputeCert(cert)
 		}
 
@@ -2014,26 +2117,41 @@ var cmdVerify = &cobra.Command{
 				got := crypto.HashBytes(bundleData)
 				switch {
 				case seal.CheckoutBundleHash == "" && seal.SourceBundleHash == "":
-					fmt.Printf("Source bundle: report has no bundle hash to match\n")
+					fmt.Fprintf(out, "Source bundle: report has no bundle hash to match\n")
 				case got == seal.CheckoutBundleHash || got == seal.SourceBundleHash:
-					fmt.Printf("Source bundle: MATCH (this code is bound to the report)\n")
+					fmt.Fprintf(out, "Source bundle: MATCH (this code is bound to the report)\n")
+					if jr != nil {
+						m := true
+						jr.BundleMatch = &m
+					}
 				default:
+					if jr != nil {
+						m := false
+						jr.BundleMatch = &m
+					}
 					// The caller asked whether this code belongs to this report, so a
 					// mismatch has to fail rather than print VERIFIED and bury it below.
-					fmt.Printf("Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
+					fmt.Fprintf(out, "Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
 					return fmt.Errorf("bundle does not match the signed report")
 				}
 			}
 			return nil
 		}
 
-		fmt.Println()
+		fmt.Fprintln(out)
 		c := client.New(verifyServer)
 		c.HTTPClient.Timeout = 180 * time.Second
 		res, err := c.AuditReport(reportPath, verifyBundle, verifyManuscript)
 		if err != nil {
-			fmt.Printf("Server audit: skipped (%v)\n", err)
+			fmt.Fprintf(out, "Server audit: skipped (%v)\n", err)
+			if jr != nil {
+				jr.AuditError = err.Error()
+			}
 			return nil
+		}
+		if jr != nil {
+			jr.Audit = res
+			jr.BundleMatch = res.BundleVerification.Match
 		}
 		renderServerAudit(res)
 		if res.BundleVerification.Match != nil && !*res.BundleVerification.Match {
@@ -2044,31 +2162,31 @@ var cmdVerify = &cobra.Command{
 }
 
 func renderServerAudit(r *client.ServerAuditResult) {
-	fmt.Println("Server audit (same checks as the web verifier):")
+	fmt.Fprintln(out, "Server audit (same checks as the web verifier):")
 
 	cs := r.CryptoStatus
 	authentic := cs.Authentic == nil && cs.Valid || (cs.Authentic != nil && *cs.Authentic)
 	switch {
 	case !cs.Valid:
-		fmt.Printf("  Cryptographic status: NOT AUTHENTIC (%s)\n", cs.Reason)
+		fmt.Fprintf(out, "  Cryptographic status: NOT AUTHENTIC (%s)\n", cs.Reason)
 	case authentic:
-		fmt.Printf("  Cryptographic status: AUTHENTIC\n")
+		fmt.Fprintf(out, "  Cryptographic status: AUTHENTIC\n")
 	default:
-		fmt.Printf("  Cryptographic status: SELF-ATTESTED (valid signature, origin not confirmed)\n")
+		fmt.Fprintf(out, "  Cryptographic status: SELF-ATTESTED (valid signature, origin not confirmed)\n")
 	}
 	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
-		fmt.Printf("  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
+		fmt.Fprintf(out, "  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
 	}
 	if len(cs.RunAnchors) > 0 {
-		fmt.Printf("  Run anchors:          %s\n", cs.RunAnchorSummary)
+		fmt.Fprintf(out, "  Run anchors:          %s\n", cs.RunAnchorSummary)
 		for _, a := range cs.RunAnchors {
 			switch a.Status {
 			case "anchored":
 				if a.DelaySec != nil && *a.DelaySec >= 60 {
-					fmt.Printf("    run %d: anchored %s after run end (unwitnessed gap)\n", a.Run+1, session.FormatDuration(*a.DelaySec))
+					fmt.Fprintf(out, "    run %d: anchored %s after run end (unwitnessed gap)\n", a.Run+1, session.FormatDuration(*a.DelaySec))
 				}
 			default:
-				fmt.Printf("    run %d: %s\n", a.Run+1, a.Detail)
+				fmt.Fprintf(out, "    run %d: %s\n", a.Run+1, a.Detail)
 			}
 		}
 	}
@@ -2077,17 +2195,17 @@ func renderServerAudit(r *client.ServerAuditResult) {
 		if cs.HMCAScore != nil {
 			coh = fmt.Sprintf(" (coherence %.2f)", *cs.HMCAScore)
 		}
-		fmt.Printf("  Execution coherence:  %s%s\n", *cs.HMCAVerdict, coh)
+		fmt.Fprintf(out, "  Execution coherence:  %s%s\n", *cs.HMCAVerdict, coh)
 	}
 	for _, f := range cs.HMCAFlags {
-		fmt.Printf("    flag: %s\n", f)
+		fmt.Fprintf(out, "    flag: %s\n", f)
 	}
 
 	if r.BundleVerification.Match != nil {
 		if *r.BundleVerification.Match {
-			fmt.Printf("  Source bundle:        MATCH\n")
+			fmt.Fprintf(out, "  Source bundle:        MATCH\n")
 		} else {
-			fmt.Printf("  Source bundle:        MISMATCH\n")
+			fmt.Fprintf(out, "  Source bundle:        MISMATCH\n")
 		}
 	}
 
@@ -2095,22 +2213,22 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	switch ca.Status {
 	case "", "skipped":
 	case "mismatch":
-		fmt.Printf("  Code audit:           wrong bundle -- %s\n", ca.Reason)
+		fmt.Fprintf(out, "  Code audit:           wrong bundle -- %s\n", ca.Reason)
 	default:
 		if len(ca.Anomalies) == 0 {
-			fmt.Printf("  Code audit:           no issues found\n")
+			fmt.Fprintf(out, "  Code audit:           no issues found\n")
 		} else {
-			fmt.Printf("  Code audit:           %d issue(s) found\n", len(ca.Anomalies))
+			fmt.Fprintf(out, "  Code audit:           %d issue(s) found\n", len(ca.Anomalies))
 		}
 		summary := ca.Summary
 		if summary == "" {
 			summary = ca.Reason
 		}
 		if summary != "" {
-			fmt.Printf("      %s\n", summary)
+			fmt.Fprintf(out, "      %s\n", summary)
 		}
 		for _, a := range ca.Anomalies {
-			fmt.Printf("      [%s] %s:%d %s\n", a.Severity, a.File, a.Line, a.Description)
+			fmt.Fprintf(out, "      [%s] %s:%d %s\n", a.Severity, a.File, a.Line, a.Description)
 		}
 	}
 
@@ -2126,7 +2244,7 @@ func renderServerAudit(r *client.ServerAuditResult) {
 			if pc.Consistency != nil {
 				con = fmt.Sprintf("%.0f%%", *pc.Consistency*100)
 			}
-			fmt.Printf("  Paper crosscheck:     coverage %s, consistency %s\n", cov, con)
+			fmt.Fprintf(out, "  Paper crosscheck:     coverage %s, consistency %s\n", cov, con)
 			for _, c := range pc.Claims {
 				if c.Status == "consistent" {
 					continue
@@ -2136,17 +2254,17 @@ func renderServerAudit(r *client.ServerAuditResult) {
 					label = c.Category
 				}
 				if c.Status == "unsupported" {
-					fmt.Printf("      [unsupported] %s: paper says %s, no matching signed value\n", label, c.PaperValue)
+					fmt.Fprintf(out, "      [unsupported] %s: paper says %s, no matching signed value\n", label, c.PaperValue)
 				} else {
-					fmt.Printf("      [disagrees] %s: paper %s vs report %s\n", label, c.PaperValue, c.ReportValue)
+					fmt.Fprintf(out, "      [disagrees] %s: paper %s vs report %s\n", label, c.PaperValue, c.ReportValue)
 				}
 			}
 		} else if len(pc.Mismatches) == 0 {
-			fmt.Printf("  Paper crosscheck:     no mismatches with the report\n")
+			fmt.Fprintf(out, "  Paper crosscheck:     no mismatches with the report\n")
 		} else {
-			fmt.Printf("  Paper crosscheck:     %d mismatch(es)\n", len(pc.Mismatches))
+			fmt.Fprintf(out, "  Paper crosscheck:     %d mismatch(es)\n", len(pc.Mismatches))
 			for _, m := range pc.Mismatches {
-				fmt.Printf("      [%s] %s: %s\n", m.Severity, m.Category, m.Description)
+				fmt.Fprintf(out, "      [%s] %s: %s\n", m.Severity, m.Category, m.Description)
 			}
 		}
 	}
@@ -2158,6 +2276,7 @@ func init() {
 	cmdVerify.Flags().StringVar(&verifyServer, "server", publicVerifyServer, "attestation server for the ledger check")
 	cmdVerify.Flags().StringVar(&verifyBundle, "bundle", "", "source bundle (.kvbundle.zip): checks the code matches and runs the AI code audit")
 	cmdVerify.Flags().StringVar(&verifyManuscript, "paper", "", "manuscript PDF: crosschecks the paper's claims against the sealed telemetry")
+	cmdVerify.Flags().BoolVar(&verifyJSON, "json", false, "print the result as JSON")
 }
 
 type claimsFile struct {
@@ -2315,6 +2434,10 @@ var cmdStatus = &cobra.Command{
 			return err
 		}
 
+		if statusJSON {
+			return printStatusJSON(kvDir, sess)
+		}
+
 		fmt.Printf("Session ID:   %s\n", sess.ID)
 		fmt.Printf("Initialized:  %s\n", sess.InitAt.UTC().Format(time.RFC3339))
 		fmt.Printf("Machine ID:   %s\n", sess.MachineID)
@@ -2360,6 +2483,42 @@ var cmdStatus = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+var statusJSON bool
+
+func init() {
+	cmdStatus.Flags().BoolVar(&statusJSON, "json", false, "print as JSON")
+}
+
+func printStatusJSON(kvDir string, sess *session.Session) error {
+	doc := statusDoc{
+		SessionID: sess.ID, InitAt: sess.InitAt.UTC().Format(time.RFC3339Nano), Server: sess.ServerURL,
+		Disclosure: sess.Disclosure, Type: sess.Type, Sealed: sess.Sealed, Runs: []statusRun{},
+	}
+	if !sess.Sealed {
+		if err := recoverInterrupted(kvDir, sess); err != nil {
+			return err
+		}
+		if sess.ServerURL != "local" {
+			if _, live := anchor.RunLockHolder(kvDir); !live {
+				_, _ = anchor.Flush(client.New(sess.ServerURL), kvDir)
+			}
+		}
+		doc.Invocations = sess.Invocations
+		doc.QueuedAnchors = len(anchor.Pending(kvDir))
+	}
+	for i, id := range sess.Runs {
+		r, err := session.LoadRun(kvDir, id)
+		if err != nil {
+			continue
+		}
+		doc.Runs = append(doc.Runs, statusRun{
+			Index: i + 1, ID: r.ID, Command: r.Command, DurationSec: r.DurationSec, ExitCode: r.ExitCode,
+			Launch: launchOf(r), Metrics: len(r.Metrics), Claims: len(r.Claims), Phases: len(r.Phases), Seeds: len(r.Seeds),
+		})
+	}
+	return printJSON(doc)
 }
 
 var generateClaimsReportPath string

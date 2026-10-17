@@ -1,5 +1,6 @@
 GO      ?= go
-GOFLAGS ?= -trimpath -ldflags="-s -w"
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION)"
 BIN     := bin/kveritas
 SERVER  := bin/kveritas-server
 GOPATH_BIN := $(shell $(GO) env GOPATH)/bin
@@ -36,6 +37,7 @@ cross: deps
 	GOOS=windows GOARCH=amd64   $(GO) build $(GOFLAGS) -o dist/kveritas-windows-amd64.exe ./cmd/kveritas
 	GOOS=linux   GOARCH=amd64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-linux-amd64 ./server
 	GOOS=darwin  GOARCH=arm64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-darwin-arm64 ./server
+	cd dist && sha256sum kveritas-* > SHA256SUMS
 
 clean:
 	rm -rf bin dist

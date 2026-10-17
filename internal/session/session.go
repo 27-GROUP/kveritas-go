@@ -73,6 +73,27 @@ type RunRecord struct {
 	Artifacts  []Artifact `json:"artifacts,omitempty"`
 	Invocation int        `json:"invocation,omitempty"`
 	RunDigest  string     `json:"run_digest,omitempty"`
+	// "attached" when the observer joined an already running process (SDK, notebooks).
+	Launch          string         `json:"launch,omitempty"`
+	ChannelHash     string         `json:"channel_hash,omitempty"`
+	ChannelMessages int            `json:"channel_messages,omitempty"`
+	ChannelGaps     int            `json:"channel_gaps,omitempty"`
+	Distributed     *Distributed   `json:"distributed,omitempty"`
+	Cells           []NotebookCell `json:"cells,omitempty"`
+}
+
+type Distributed struct {
+	WorldSize      int    `json:"world_size,omitempty"`
+	LocalWorldSize int    `json:"local_world_size,omitempty"`
+	Nodes          int    `json:"nodes,omitempty"`
+	Launcher       string `json:"launcher,omitempty"`
+}
+
+type NotebookCell struct {
+	ExecCount int       `json:"exec_count"`
+	Hash      string    `json:"hash"`
+	Seq       int       `json:"seq"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // Public artifacts carry a plain content hash; private ones a salted commitment
@@ -157,6 +178,7 @@ type Metric struct {
 	Step   string  `json:"step,omitempty"`
 	Line   int     `json:"line"`
 	Source string  `json:"source"`
+	Seq    int     `json:"seq,omitempty"`
 }
 
 type HardwareInfo struct {
@@ -195,6 +217,7 @@ type PhaseEvent struct {
 	Line      int              `json:"line"`
 	Timestamp time.Time        `json:"timestamp"`
 	Counters  HardwareCounters `json:"counters"`
+	Seq       int              `json:"seq,omitempty"`
 }
 
 // InlineClaim records a KVERITAS_CLAIM committed inside stdout.
@@ -203,6 +226,7 @@ type InlineClaim struct {
 	Value  float64 `json:"value"`
 	Phase  string  `json:"phase,omitempty"`
 	Line   int     `json:"line"`
+	Seq    int     `json:"seq,omitempty"`
 }
 
 // SeedCommitment records a KVERITAS_INPUT seed declaration.
@@ -211,6 +235,7 @@ type SeedCommitment struct {
 	Value     string    `json:"value"`
 	Line      int       `json:"line"`
 	Timestamp time.Time `json:"timestamp"`
+	Seq       int       `json:"seq,omitempty"`
 }
 
 type HardwareSample struct {

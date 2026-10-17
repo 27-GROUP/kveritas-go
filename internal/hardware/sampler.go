@@ -106,6 +106,15 @@ func Decimate(samples []session.HardwareSample, max int) []session.HardwareSampl
 	return out
 }
 
+func (s *Sampler) Latest() (session.HardwareSample, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.samples) == 0 {
+		return session.HardwareSample{}, false
+	}
+	return s.samples[len(s.samples)-1], true
+}
+
 func (s *Sampler) Stop() []session.HardwareSample {
 	close(s.stop)
 	<-s.done
