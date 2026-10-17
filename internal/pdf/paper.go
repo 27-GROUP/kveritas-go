@@ -387,6 +387,13 @@ func (b *builder) abstract(runs []*session.RunRecord, seal *session.SealRecord) 
 	if hw == "" {
 		hw = runs[0].Hardware.OS + "/" + runs[0].Hardware.Arch
 	}
+	nodes := 1
+	for _, r := range runs {
+		nodes = max(nodes, len(r.Nodes)+1)
+	}
+	if nodes > 1 {
+		hw = fmt.Sprintf("%d nodes (node 0: %s)", nodes, hw)
+	}
 	plural := "s"
 	if len(runs) == 1 {
 		plural = ""
@@ -468,9 +475,9 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 	}
 	for i, r := range runs {
 		if r.Launch == "attached" {
-			detail := "attached: observed from the SDK call, output not captured"
+			detail := "attached: observed from inside the process, output not captured"
 			if r.OutputCaptured {
-				detail = "attached: observed from the SDK call, output captured"
+				detail = "attached: observed from inside the process, output captured"
 			}
 			rows = append(rows, []string{fmt.Sprintf("Launch, run %d", i+1), detail})
 		}
@@ -481,6 +488,21 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 		if d := r.Distributed; d != nil {
 			rows = append(rows, []string{fmt.Sprintf("Distributed, run %d", i+1),
 				fmt.Sprintf("world size %d, %d node(s), %s", d.WorldSize, d.Nodes, d.Launcher)})
+		}
+		if len(r.Nodes) > 0 || r.NodesExpected > 1 {
+			expected := r.NodesExpected
+			if expected < len(r.Nodes)+1 {
+				expected = len(r.Nodes) + 1
+			}
+			rows = append(rows, []string{fmt.Sprintf("Nodes, run %d", i+1),
+				fmt.Sprintf("%d of %d measured; node 0 is the hardware above", len(r.Nodes)+1, expected)})
+			if r.Hardware.MachineID != "" {
+				rows = append(rows, []string{fmt.Sprintf("Node 0 machine, run %d", i+1), code(r.Hardware.MachineID)})
+			}
+			for _, n := range r.Nodes {
+				rows = append(rows, []string{fmt.Sprintf("Node %d, run %d", n.Node, i+1), nodeHardware(n.Hardware)})
+				rows = append(rows, []string{fmt.Sprintf("Node %d machine, run %d", n.Node, i+1), code(n.MachineID)})
+			}
 		}
 	}
 	disclosure := sess.Disclosure
@@ -494,6 +516,14 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 		}
 	}
 	b.table([]string{"Item", "Value"}, []float64{1, 2.6}, rows)
+}
+
+func nodeHardware(hw session.HardwareInfo) string {
+	gpu := "no GPU"
+	if len(hw.GPUNames) > 0 {
+		gpu = fmt.Sprintf("%dx %s", len(hw.GPUNames), hw.GPUNames[0])
+	}
+	return fmt.Sprintf("%s, %d cores, %.1f GB", gpu, hw.CPUCores, hw.MemGB)
 }
 
 func (b *builder) runsSection(runs []*session.RunRecord, seal *session.SealRecord) {
@@ -559,6 +589,15 @@ func (b *builder) resultsSection(runs []*session.RunRecord) {
 	}
 }
 
+func peaks(samples []session.HardwareSample) (cpu, mem, gpu float64) {
+	for _, s := range samples {
+		cpu = max(cpu, s.Counters.CPUTimeSec)
+		mem = max(mem, s.Counters.MemUsedGB)
+		gpu = max(gpu, s.Counters.GPUUtilPct)
+	}
+	return
+}
+
 func coherenceSentence(h *session.HMCAResult) string {
 	switch h.Verdict {
 	case "PASS":
@@ -577,6 +616,18 @@ func (b *builder) evidenceSection(runs []*session.RunRecord, h *session.HMCAResu
 	if h != nil {
 		b.subsection("Coherence")
 		b.para(coherenceSentence(h))
+		if len(h.Nodes) > 0 {
+			rows := make([][]string, 0, len(h.Nodes))
+			for _, n := range h.Nodes {
+				score := "n/a"
+				if n.Verdict != "N/A" {
+					score = fmt.Sprintf("%.2f", n.Score)
+				}
+				rows = append(rows, []string{fmt.Sprintf("%d", n.Run), fmt.Sprintf("%d", n.Node), n.Verdict, score, fmt.Sprintf("%d", n.Samples)})
+			}
+			b.para("Every node is judged on its own telemetry; the session takes the weakest.")
+			b.table([]string{"Run", "Node", "Verdict", "Coherence", "Samples"}, []float64{0.5, 0.5, 1, 1, 1}, rows)
+		}
 		for _, f := range h.Flags {
 			b.para("Flag: " + f)
 		}
@@ -625,10 +676,19 @@ func (b *builder) evidenceSection(runs []*session.RunRecord, h *session.HMCAResu
 				gpu = s.Counters.GPUUtilPct
 			}
 		}
-		rows = append(rows, []string{fmt.Sprintf("%d", i+1), fmt.Sprintf("%d", len(r.HardwareSamples)),
+		label := fmt.Sprintf("%d", i+1)
+		if len(r.Nodes) > 0 {
+			label += ", node 0"
+		}
+		rows = append(rows, []string{label, fmt.Sprintf("%d", len(r.HardwareSamples)),
 			fmt.Sprintf("%.1f s", cpu), fmt.Sprintf("%.2f GB", mem), fmt.Sprintf("%.0f%%", gpu)})
+		for _, n := range r.Nodes {
+			c, m, g := peaks(n.HardwareSamples)
+			rows = append(rows, []string{fmt.Sprintf("%d, node %d", i+1, n.Node), fmt.Sprintf("%d", len(n.HardwareSamples)),
+				fmt.Sprintf("%.1f s", c), fmt.Sprintf("%.2f GB", m), fmt.Sprintf("%.0f%%", g)})
+		}
 	}
-	b.table([]string{"Run", "Samples", "CPU time", "Peak memory", "Peak GPU"}, []float64{0.5, 1, 1, 1, 1}, rows)
+	b.table([]string{"Run", "Samples", "CPU time", "Peak memory", "Peak GPU"}, []float64{0.8, 1, 1, 1, 1}, rows)
 }
 
 func (b *builder) provenanceSection(sess *session.Session, runs []*session.RunRecord) {

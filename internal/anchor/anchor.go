@@ -13,6 +13,7 @@ import (
 
 	"github.com/Mamadou2727/kveritas-go/internal/client"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
+	"github.com/Mamadou2727/kveritas-go/internal/hardware"
 )
 
 const (
@@ -253,11 +254,15 @@ func AcquireRun(kvDir string) (func(), error) {
 	for i := 0; i < 2; i++ {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err == nil {
-			fmt.Fprintf(f, "%d", os.Getpid())
+			fmt.Fprintf(f, "%d %s", os.Getpid(), hardware.MachineID())
 			f.Close()
 			return func() { os.Remove(path) }, nil
 		}
-		if pid, ok := RunLockHolder(kvDir); ok {
+		if pid, machine, ok := lockHolder(kvDir); ok {
+			if machine != "" && machine != hardware.MachineID() {
+				return nil, fmt.Errorf("another run is in progress in this session on another machine (pid %d); "+
+					"on a multi-node run give each node --node-rank, or remove %s if that run is gone", pid, path)
+			}
 			return nil, fmt.Errorf("another run is in progress in this session (pid %d); wait for it to finish", pid)
 		}
 		os.Remove(path)
@@ -266,13 +271,34 @@ func AcquireRun(kvDir string) (func(), error) {
 }
 
 func RunLockHolder(kvDir string) (int, bool) {
+	pid, _, ok := lockHolder(kvDir)
+	return pid, ok
+}
+
+// A session folder shared across machines can hold a lock from another host, whose
+// pid means nothing here; it is presumed alive.
+func lockHolder(kvDir string) (int, string, bool) {
 	data, err := os.ReadFile(filepath.Join(kvDir, runLockFile))
 	if err != nil {
-		return 0, false
+		return 0, "", false
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid == os.Getpid() {
-		return 0, false
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return 0, "", false
 	}
-	return pid, alive(pid)
+	pid, err := strconv.Atoi(fields[0])
+	machine := ""
+	if len(fields) > 1 {
+		machine = fields[1]
+	}
+	if err != nil {
+		return 0, "", false
+	}
+	if machine != "" && machine != hardware.MachineID() {
+		return pid, machine, true
+	}
+	if pid == os.Getpid() {
+		return 0, "", false
+	}
+	return pid, machine, alive(pid)
 }

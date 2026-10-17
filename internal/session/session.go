@@ -81,6 +81,24 @@ type RunRecord struct {
 	ChannelGaps     int            `json:"channel_gaps,omitempty"`
 	Distributed     *Distributed   `json:"distributed,omitempty"`
 	Cells           []NotebookCell `json:"cells,omitempty"`
+	// Multi-node runs: every other node's own measurement, delivered to node 0.
+	Nodes         []NodeRecord `json:"nodes,omitempty"`
+	NodesExpected int          `json:"nodes_expected,omitempty"`
+}
+
+type NodeRecord struct {
+	Node            int              `json:"node"`
+	MachineID       string           `json:"machine_id"`
+	StartAt         time.Time        `json:"start_at"`
+	EndAt           time.Time        `json:"end_at"`
+	DurationSec     float64          `json:"duration_sec"`
+	ExitCode        int              `json:"exit_code"`
+	Hardware        HardwareInfo     `json:"hardware"`
+	StdoutHash      string           `json:"stdout_hash"`
+	StderrHash      string           `json:"stderr_hash"`
+	StdoutLines     int              `json:"stdout_lines"`
+	EnvDigest       string           `json:"env_digest,omitempty"`
+	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
 }
 
 type Distributed struct {
@@ -183,15 +201,17 @@ type Metric struct {
 }
 
 type HardwareInfo struct {
-	Hostname string   `json:"hostname,omitempty"`
-	OS       string   `json:"os"`
-	Arch     string   `json:"arch"`
-	CPUCores int      `json:"cpu_cores"`
-	CPUModel string   `json:"cpu_model,omitempty"`
-	MemGB    float64  `json:"mem_gb"`
-	GPUInfo  string   `json:"gpu_info,omitempty"`
-	GPUCount int      `json:"gpu_count,omitempty"`
-	GPUNames []string `json:"gpu_names,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+	// Set on multi-node runs only, so two nodes cannot be the same machine unnoticed.
+	MachineID string   `json:"machine_id,omitempty"`
+	OS        string   `json:"os"`
+	Arch      string   `json:"arch"`
+	CPUCores  int      `json:"cpu_cores"`
+	CPUModel  string   `json:"cpu_model,omitempty"`
+	MemGB     float64  `json:"mem_gb"`
+	GPUInfo   string   `json:"gpu_info,omitempty"`
+	GPUCount  int      `json:"gpu_count,omitempty"`
+	GPUNames  []string `json:"gpu_names,omitempty"`
 }
 
 // Values are best-effort; zero means the counter was unavailable.
@@ -246,9 +266,18 @@ type HardwareSample struct {
 
 // HMCAResult is the output of the Hardware-Metric Consistency Analyzer.
 type HMCAResult struct {
-	Score   float64  `json:"hmca_score"`
-	Flags   []string `json:"hmca_flags,omitempty"`
-	Verdict string   `json:"hmca_verdict"`
+	Score   float64         `json:"hmca_score"`
+	Flags   []string        `json:"hmca_flags,omitempty"`
+	Verdict string          `json:"hmca_verdict"`
+	Nodes   []NodeCoherence `json:"hmca_nodes,omitempty"`
+}
+
+type NodeCoherence struct {
+	Run     int     `json:"run"`
+	Node    int     `json:"node"`
+	Score   float64 `json:"score"`
+	Verdict string  `json:"verdict"`
+	Samples int     `json:"samples"`
 }
 
 // Declared via KVERITAS_MODEL / KVERITAS_WORKLOAD: the written claim the compute

@@ -31,6 +31,7 @@ const (
 	// Telemetry cannot predate a run's start or outlive its end; the tolerance only
 	// absorbs clock granularity.
 	windowTolerance = time.Second
+	nodeClockSkew   = 5 * time.Minute
 )
 
 type channel struct {
@@ -46,43 +47,87 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 
 	uniform := false
 	replayed := false
-	for i, run := range runs {
+	sameMachine := false
+	var nodes []session.NodeCoherence
+	judge := func(label string, run *session.RunRecord) (float64, string) {
 		if !telemetryInWindow(run) {
 			judged++
 			replayed = true
-			flags = append(flags, fmt.Sprintf("run_%d: telemetry timestamps lie outside the run; the samples describe a different execution", i+1))
-			continue
+			flags = append(flags, fmt.Sprintf("%s: telemetry timestamps lie outside the run; the samples describe a different execution", label))
+			return 0, "FAIL"
 		}
 		if cpuTimeExceedsCores(run) {
 			judged++
 			replayed = true
-			flags = append(flags, fmt.Sprintf("run_%d: processor time exceeds what %d cores could deliver in %.0fs", i+1, run.Hardware.CPUCores, run.DurationSec))
-			continue
+			flags = append(flags, fmt.Sprintf("%s: processor time exceeds what %d cores could deliver in %.0fs", label, run.Hardware.CPUCores, run.DurationSec))
+			return 0, "FAIL"
 		}
 		cross, kurt, status := coherenceOne(run.HardwareSamples)
 		switch status {
 		case "insufficient":
 			// too few samples: abstain, no accusation
+			return 0, "N/A"
 		case "no_activity":
 			judged++
-			flags = append(flags, fmt.Sprintf("run_%d: no computational activity observed", i+1))
-		default:
-			judged++
-			scores = append(scores, cross)
-			if cross < coherentWARN {
-				flags = append(flags, fmt.Sprintf("run_%d: execution channels are not coherent (%.2f); possible fabrication/replay", i+1, cross))
-			} else if cross < coherentPASS {
-				flags = append(flags, fmt.Sprintf("run_%d: weak execution coherence (%.2f)", i+1, cross))
+			flags = append(flags, fmt.Sprintf("%s: no computational activity observed", label))
+			return 0, "FAIL"
+		}
+		judged++
+		scores = append(scores, cross)
+		verdict := "PASS"
+		if cross < coherentWARN {
+			verdict = "FAIL"
+			flags = append(flags, fmt.Sprintf("%s: execution channels are not coherent (%.2f); possible fabrication/replay", label, cross))
+		} else if cross < coherentPASS {
+			verdict = "WARN"
+			flags = append(flags, fmt.Sprintf("%s: weak execution coherence (%.2f)", label, cross))
+		}
+		if cross >= coherentPASS && !math.IsNaN(kurt) && kurt <= uniformKurtosis {
+			uniform = true
+			verdict = "WARN"
+			flags = append(flags, fmt.Sprintf("%s: coherence is uniform rather than bursty (%.2f); consistent with load driven on a timer", label, kurt))
+		}
+		return cross, verdict
+	}
+	for i, run := range runs {
+		score, verdict := judge(fmt.Sprintf("run_%d", i+1), run)
+		if len(run.Nodes) == 0 && run.NodesExpected < 2 {
+			continue
+		}
+		nodes = append(nodes, session.NodeCoherence{Run: i + 1, Node: 0, Score: score, Verdict: verdict, Samples: len(run.HardwareSamples)})
+		machines := map[string]int{}
+		if run.Hardware.MachineID != "" {
+			machines[run.Hardware.MachineID] = 0
+		}
+		for _, n := range run.Nodes {
+			label := fmt.Sprintf("run_%d node %d", i+1, n.Node)
+			nr := &session.RunRecord{StartAt: n.StartAt, EndAt: n.EndAt, DurationSec: n.DurationSec,
+				Hardware: n.Hardware, HardwareSamples: n.HardwareSamples}
+			score, verdict := judge(label, nr)
+			// Node clocks differ from node 0's, so only a gross mismatch is evidence.
+			if n.StartAt.After(run.EndAt.Add(nodeClockSkew)) || n.EndAt.Before(run.StartAt.Add(-nodeClockSkew)) {
+				replayed = true
+				verdict = "FAIL"
+				flags = append(flags, fmt.Sprintf("%s: measured at a different time than the run; it describes another execution", label))
 			}
-			if cross >= coherentPASS && !math.IsNaN(kurt) && kurt <= uniformKurtosis {
-				uniform = true
-				flags = append(flags, fmt.Sprintf("run_%d: coherence is uniform rather than bursty (%.2f); consistent with load driven on a timer", i+1, kurt))
+			if prev, ok := machines[n.MachineID]; ok && n.MachineID != "" {
+				sameMachine = true
+				flags = append(flags, fmt.Sprintf("%s: same machine as node %d; the run did not span distinct machines", label, prev))
+			} else {
+				machines[n.MachineID] = n.Node
 			}
+			nodes = append(nodes, session.NodeCoherence{Run: i + 1, Node: n.Node, Score: score, Verdict: verdict, Samples: len(n.HardwareSamples)})
+		}
+		if measured := len(run.Nodes) + 1; run.NodesExpected > measured {
+			flags = append(flags, fmt.Sprintf("run_%d: %d of %d nodes measured; the others ran without kveritas", i+1, measured, run.NodesExpected))
 		}
 	}
 
 	if judged == 0 {
 		// Nothing measurable: HMCA abstains; authenticity rests on the other checks.
+		if len(nodes) > 0 {
+			return session.HMCAResult{Score: 0, Verdict: "N/A", Flags: flags, Nodes: nodes}
+		}
 		return session.HMCAResult{Score: 0, Verdict: "N/A", Flags: nil}
 	}
 
@@ -107,7 +152,7 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 		}
 		// Coherence this regular is cheap to manufacture, so it is not evidence of
 		// work. Withhold the pass; do not accuse, the shape alone is not proof.
-		if uniform && verdict == "PASS" {
+		if (uniform || sameMachine) && verdict == "PASS" {
 			verdict = "WARN"
 		}
 	}
@@ -116,7 +161,7 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	if replayed {
 		verdict = "FAIL"
 	}
-	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict}
+	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict, Nodes: nodes}
 }
 
 // More processor time than the cores could deliver in the wall-clock window is

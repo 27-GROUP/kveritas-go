@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"sync"
@@ -99,6 +98,10 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	}
 
 	fmt.Fprintf(os.Stderr, "[kveritas] Monitoring: %v\n", command)
+	kvDir := filepath.Join(sess.ProjectDir, session.DirName)
+	expected := expectedNodes(command)
+	endNodes := announceRun(kvDir, rec.ID, rec.StartAt, expected)
+	defer endNodes()
 
 	var (
 		stdoutBuf    bytes.Buffer
@@ -450,13 +453,7 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 
 	// A low cap would make the stored rate depend on duration, silently rescaling
 	// anything later derived from how fast the counters move.
-	sampleCap := 7200
-	if v := os.Getenv("KVERITAS_SAMPLE_CAP"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 1 {
-			sampleCap = n
-		}
-	}
-	hwSamples := hardware.Decimate(sampler.Stop(), sampleCap)
+	hwSamples := hardware.Decimate(sampler.Stop(), sampleCap())
 	if len(hwSamples) > 0 {
 		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
 	}
@@ -470,7 +467,6 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 		fmt.Fprintf(os.Stderr, "[kveritas] Provenance: %d snapshots, %d files, %d withheld (%s)\n",
 			len(rec.Provenance.Commits), rec.Provenance.FileCount,
 			len(rec.Provenance.Withheld), rec.Provenance.Disclosure)
-		kvDir := filepath.Join(sess.ProjectDir, session.DirName)
 		if err := prov.Keystore().Save(filepath.Join(kvDir, "keystore-"+rec.ID+".json")); err != nil {
 			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not write proof keystore: %v\n", err)
 		}
@@ -497,6 +493,11 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
 	rec.DurationFmt = session.FormatDuration(rec.DurationSec)
 	rec.ExitCode = exitCode
+	if nodes := collectNodes(kvDir, rec.ID, expected); len(nodes) > 0 || expected > 1 {
+		rec.Nodes = nodes
+		rec.NodesExpected = expected
+		rec.Hardware.MachineID = hardware.MachineID()
+	}
 	rec.StdoutLines = stdoutLines
 	rec.StdoutHash = digestBuf(stdoutBuf.Bytes())
 	rec.StderrHash = digestBuf(stderrBuf.Bytes())

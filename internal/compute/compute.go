@@ -34,6 +34,19 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 	cert := session.ComputeCert{TimeBoundOK: true, EnergyBoundOK: true, MemoryBoundOK: true}
 
 	active, energy, peakMem, cpuCoreSec := aggregate(rec.HardwareSamples)
+	gpuPeak := generousPeakFLOPs(rec.Hardware)
+	availableFLOPs := gpuPeak*active + cpuPeakFLOPSPerCore*cpuCoreSec
+	// A multi-node run's capacity is every node's; memory adds up under model parallelism.
+	for _, n := range rec.Nodes {
+		a, e, m, c := aggregate(n.HardwareSamples)
+		p := generousPeakFLOPs(n.Hardware)
+		availableFLOPs += p*a + cpuPeakFLOPSPerCore*c
+		gpuPeak += p
+		active += a
+		energy += e
+		peakMem += m
+		cpuCoreSec += c
+	}
 	cert.GPUActiveSec = active
 	cert.EnergyJoules = energy
 	cert.PeakGPUMemMB = peakMem
@@ -50,9 +63,6 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 
 	// Total FLOP capacity: GPU peak over active time plus CPU peak over core-seconds.
 	// Summed to stay generous and cover GPU-only, CPU-only, or mixed runs.
-	gpuPeak := generousPeakFLOPs(rec.Hardware)
-	cpuCapacity := cpuPeakFLOPSPerCore * cpuCoreSec
-	availableFLOPs := gpuPeak*active + cpuCapacity
 	cert.FPeakGenerous = gpuPeak
 	cert.MinPJPerFLOP = minJoulesPerFLOP * 1e12
 

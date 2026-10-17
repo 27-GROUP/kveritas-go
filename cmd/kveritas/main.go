@@ -1141,7 +1141,10 @@ func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 	}
 }
 
-var runFiles []string
+var (
+	runFiles    []string
+	runNodeRank int
+)
 
 var cmdRun = &cobra.Command{
 	Use:   "run [--files f1,f2] -- <command> [args...]",
@@ -1165,9 +1168,22 @@ Seed commitments are recorded before computation:
 
   KVERITAS_INPUT src=seed:42
 
-Files listed with --files are hashed before and after the run.`,
+Files listed with --files are hashed before and after the run.
+
+Multi-node: run the same command on every node, for example
+  srun kveritas run -- torchrun --nnodes=2 ... train.py
+Node 0 records the run; every other node measures itself and hands its record to
+node 0 through the session folder, which must be shared (as on most clusters).
+The node comes from the launcher or Slurm, or --node-rank.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		rank := runNodeRank
+		if rank < 0 {
+			rank = runner.NodeRank(args)
+		}
+		if rank > 0 {
+			return runWorkerNode(args, rank)
+		}
 		kvDir, err := session.Find()
 		if err != nil {
 			return err
@@ -1252,6 +1268,27 @@ Files listed with --files are hashed before and after the run.`,
 			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
 		return nil
 	},
+}
+
+// Every node of a multi-node run runs the same command; only node 0 records the run.
+// The others never touch the session's run lock or anchors, so they cannot race it.
+func runWorkerNode(args []string, rank int) error {
+	kvDir, err := session.Find()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d has no session folder (%v); the run's report will not include this node\n", rank, err)
+		kvDir = ""
+	} else if sess, lerr := session.Load(kvDir); lerr != nil || sess.Sealed {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d cannot join a sealed or unreadable session; running unmeasured\n", rank)
+		kvDir = ""
+	}
+	code, err := runner.RunNode(kvDir, args, rank)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("command exited with code %d on node %d", code, rank)
+	}
+	return nil
 }
 
 func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int) error {
@@ -1339,6 +1376,7 @@ func recoverInterrupted(kvDir string, sess *session.Session) error {
 
 func init() {
 	cmdRun.Flags().StringSliceVar(&runFiles, "files", nil, "source files to hash (comma-separated)")
+	cmdRun.Flags().IntVar(&runNodeRank, "node-rank", -1, "this machine's node in a multi-node run (default: from the launcher or Slurm)")
 }
 
 var (
@@ -1674,6 +1712,8 @@ type runPayload struct {
 	ChannelGaps     int                       `json:"channel_gaps,omitempty"`
 	Distributed     *session.Distributed      `json:"distributed,omitempty"`
 	Cells           []session.NotebookCell    `json:"cells,omitempty"`
+	Nodes           []session.NodeRecord      `json:"nodes,omitempty"`
+	NodesExpected   int                       `json:"nodes_expected,omitempty"`
 }
 
 func runPayloadOf(r *session.RunRecord) runPayload {
@@ -1713,6 +1753,8 @@ func runPayloadOf(r *session.RunRecord) runPayload {
 		ChannelGaps:     r.ChannelGaps,
 		Distributed:     r.Distributed,
 		Cells:           r.Cells,
+		Nodes:           r.Nodes,
+		NodesExpected:   r.NodesExpected,
 	}
 }
 
@@ -2029,6 +2071,10 @@ var cmdVerify = &cobra.Command{
 					Distributed: r.Distributed, ChannelMessages: r.ChannelMessages, ChannelGaps: r.ChannelGaps,
 					NotebookCells: len(r.Cells),
 					Metrics: r.Metrics, Claims: r.Claims, Seeds: r.Seeds,
+					Nodes: nodeDocs(i+1, r, signedHMCA),
+				}
+				if rd.Nodes != nil {
+					rd.NodesExpected = nodesExpected(r)
 				}
 				if r.Declared != nil {
 					c := compute.Analyze(r)
@@ -2107,6 +2153,21 @@ var cmdVerify = &cobra.Command{
 			}
 			if len(r.Cells) > 0 {
 				fmt.Fprintf(out, "Run %d:      notebook, %d cells recorded in execution order\n", i+1, len(r.Cells))
+			}
+			if nodes := nodeDocs(i+1, r, signedHMCA); nodes != nil {
+				fmt.Fprintf(out, "Run %d:      %d of %d nodes measured\n", i+1, len(nodes), nodesExpected(r))
+				for _, n := range nodes {
+					gpus := "no GPU"
+					if len(n.GPUNames) > 0 {
+						gpus = fmt.Sprintf("%dx %s", len(n.GPUNames), n.GPUNames[0])
+					}
+					coh := ""
+					if n.Coherence != "" {
+						coh = fmt.Sprintf(", coherence %s (%.2f)", n.Coherence, n.Score)
+					}
+					fmt.Fprintf(out, "  node %d: %s, %d cores, %.0f GB, %d samples, %s, exit %d%s\n",
+						n.Node, gpus, n.CPUCores, n.MemGB, n.Samples, session.FormatDuration(n.DurationSec), n.ExitCode, coh)
+				}
 			}
 			if r.ChannelGaps > 0 {
 				fmt.Fprintf(out, "Run %d:      %d gap(s) in the result channel\n", i+1, r.ChannelGaps)
