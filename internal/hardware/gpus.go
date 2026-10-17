@@ -3,16 +3,19 @@ package hardware
 import (
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 type GPU struct {
 	Index    int     `json:"index"`
+	Vendor   string  `json:"vendor"`
 	Name     string  `json:"name"`
-	UUID     string  `json:"uuid"`
-	MemoryMB float64 `json:"memory_mb"`
-	Driver   string  `json:"driver"`
+	UUID     string  `json:"uuid,omitempty"`
+	MemoryMB float64 `json:"memory_mb,omitempty"`
+	Driver   string  `json:"driver,omitempty"`
+	Cores    int     `json:"cores,omitempty"`
 }
 
 type Inventory struct {
@@ -41,6 +44,12 @@ func Detect() Inventory {
 		"--query-gpu=index,name,uuid,memory.total,driver_version",
 		"--format=csv,noheader,nounits").Output()
 	if err != nil {
+		if inv.GPUs = amdInventory(); len(inv.GPUs) == 0 && runtime.GOOS == "darwin" {
+			inv.GPUs = appleInventory()
+		}
+		if inv.GPUs == nil {
+			inv.GPUs = []GPU{}
+		}
 		return inv
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -52,6 +61,7 @@ func Detect() Inventory {
 		mem, _ := strconv.ParseFloat(strings.TrimSpace(f[3]), 64)
 		inv.GPUs = append(inv.GPUs, GPU{
 			Index:    idx,
+			Vendor:   "NVIDIA",
 			Name:     strings.TrimSpace(f[1]),
 			UUID:     strings.TrimSpace(f[2]),
 			MemoryMB: mem,

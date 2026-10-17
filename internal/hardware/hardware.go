@@ -115,18 +115,15 @@ func gpuNames() []string {
 		}
 		return names
 	}
-	out, err = exec.Command("rocm-smi", "--showproductname").Output()
-	if err == nil {
-		var names []string
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "=") && !strings.Contains(line, "GPU") {
-				names = append(names, "AMD "+line)
-			}
-		}
-		return names
+	gpus := amdInventory()
+	if len(gpus) == 0 && runtime.GOOS == "darwin" {
+		gpus = appleInventory()
 	}
-	return nil
+	var names []string
+	for _, g := range gpus {
+		names = append(names, strings.TrimSpace(g.Vendor+" "+strings.TrimPrefix(g.Name, g.Vendor+" ")))
+	}
+	return names
 }
 
 func memGB() float64 {
@@ -163,16 +160,16 @@ func gpuInfo() string {
 	if err == nil {
 		return strings.TrimSpace(string(out))
 	}
-	out, err = exec.Command("rocm-smi", "--showproductname").Output()
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "=") && !strings.Contains(line, "GPU") {
-				return "AMD " + line
-			}
+	var parts []string
+	for _, g := range amdInventory() {
+		parts = append(parts, fmt.Sprintf("AMD %s, %.0f MiB", strings.TrimPrefix(g.Name, "AMD "), g.MemoryMB*1e6/(1<<20)))
+	}
+	if len(parts) == 0 && runtime.GOOS == "darwin" {
+		for _, g := range appleInventory() {
+			parts = append(parts, fmt.Sprintf("%s, %d GPU cores, unified memory", g.Name, g.Cores))
 		}
 	}
-	return ""
+	return strings.Join(parts, "\n")
 }
 
 func linuxCPUTime() float64 {
@@ -252,17 +249,17 @@ func linuxDiskIO() (readMB, writeMB float64) {
 	return readMB, writeMB
 }
 
+// macOS has no kern.cp_time; the sum of every process's CPU time stands in for it.
 func darwinCPUTime() float64 {
-	out, err := exec.Command("sysctl", "-n", "kern.cp_time").Output()
+	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,time=,rss=").Output()
 	if err != nil {
 		return 0
 	}
-	var total float64
-	for _, f := range strings.Fields(strings.TrimSpace(string(out))) {
-		v, _ := strconv.ParseFloat(f, 64)
-		total += v
+	total := 0.0
+	for _, r := range parsePS(out) {
+		total += r.cpu
 	}
-	return total / 100.0
+	return total
 }
 
 func darwinMemUsed() float64 {
@@ -325,23 +322,13 @@ func gpuCounters() gpuState {
 		return g
 	}
 
-	out, err = exec.Command("rocm-smi", "--showuse", "--showtemp", "--showmeminfo", "vram", "--csv").Output()
-	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "GPU use") {
-				parts := strings.Split(line, ",")
-				if len(parts) >= 2 {
-					g.GPUUtilPct, _ = strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(parts[1], "%")), 64)
-				}
-			}
-			if strings.Contains(line, "Temperature") {
-				parts := strings.Split(line, ",")
-				if len(parts) >= 2 {
-					g.GPUTempC, _ = strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-				}
-			}
+	if a, ok := amdCounters(); ok {
+		return a
+	}
+	if runtime.GOOS == "darwin" {
+		if a, ok := appleCounters(); ok {
+			return a
 		}
 	}
-
 	return g
 }

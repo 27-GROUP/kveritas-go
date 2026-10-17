@@ -25,9 +25,18 @@ var cmdHardware = &cobra.Command{
 			fmt.Println("GPUs:    none detected")
 			return nil
 		}
-		fmt.Printf("CUDA:    %s\n", inv.CUDAVersion)
+		if inv.CUDAVersion != "" {
+			fmt.Printf("CUDA:    %s\n", inv.CUDAVersion)
+		}
 		for _, g := range inv.GPUs {
-			fmt.Printf("GPU %d:   %s, %.0f MB, driver %s\n", g.Index, g.Name, g.MemoryMB, g.Driver)
+			detail := fmt.Sprintf("%.0f MB", g.MemoryMB)
+			if g.MemoryMB == 0 {
+				detail = fmt.Sprintf("%d cores, unified memory", g.Cores)
+			}
+			if g.Driver != "" {
+				detail += ", driver " + g.Driver
+			}
+			fmt.Printf("GPU %d:   %s, %s\n", g.Index, g.Name, detail)
 		}
 		return nil
 	},

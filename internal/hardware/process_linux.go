@@ -55,6 +55,18 @@ func ProcessGPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}
 	dev := gpuCounters()
+	if _, err := exec.LookPath("nvidia-smi"); err != nil {
+		// ROCm reports memory per process but not utilization, so a run holding GPU
+		// memory is credited with the device's utilization and power.
+		if mem, ok := amdMemForPIDs(pids); ok {
+			c.GPUTempC = dev.GPUTempC
+			c.GPUMemUsedMB = mem
+			if mem > 0 {
+				c.GPUUtilPct, c.GPUPowerW = dev.GPUUtilPct, dev.GPUPowerW
+			}
+		}
+		return c
+	}
 	c.GPUTempC = dev.GPUTempC
 	c.GPUMemUsedMB = gpuMemForPIDs(pids)
 	ourUtil := gpuUtilForPIDs(pids)
