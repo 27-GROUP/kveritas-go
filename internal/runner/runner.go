@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -116,7 +115,8 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 		stdoutPipe io.ReadCloser
 		stderrPipe io.ReadCloser
 		chanR      *os.File
-		chanW      *os.File
+		keepW      *os.File
+		dropFIFO   = func() {}
 		err        error
 	)
 	if att == nil {
@@ -127,14 +127,12 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 		if stderrPipe, err = cmd.StderrPipe(); err != nil {
 			return nil, err
 		}
-		// Results sent by an SDK arrive on an inherited pipe only the run's own process
-		// tree holds. Windows cannot pass extra descriptors; printed lines still work there.
-		if runtime.GOOS != "windows" {
-			if r, w, perr := os.Pipe(); perr == nil {
-				chanR, chanW = r, w
-				cmd.ExtraFiles = []*os.File{w}
-				cmd.Env = append(os.Environ(), ChannelEnv+"=fd:3")
-			}
+		// KVERITAS_RUN tells an SDK it is inside a run even where no channel exists
+		// (Windows); it then prints protocol lines instead.
+		cmd.Env = append(os.Environ(), "KVERITAS_RUN=1")
+		if r, k, path, cleanup, ferr := openFIFO(); ferr == nil {
+			chanR, keepW, dropFIFO = r, k, cleanup
+			cmd.Env = append(cmd.Env, ChannelEnv+"=fifo:"+path)
 		}
 	} else {
 		chanR = att.Channel
@@ -151,12 +149,10 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 			obs.Stop()
 			if chanR != nil {
 				chanR.Close()
-				chanW.Close()
+				keepW.Close()
+				dropFIFO()
 			}
 			return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
-		}
-		if chanW != nil {
-			chanW.Close()
 		}
 		pid = cmd.Process.Pid
 	} else {
@@ -370,6 +366,7 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 		}
 		// A descendant that outlives the run could hold the pipe open forever.
 		if chanR != nil {
+			keepW.Close()
 			select {
 			case <-chanDone:
 			case <-time.After(3 * time.Second):
@@ -377,6 +374,7 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 				<-chanDone
 			}
 			chanR.Close()
+			dropFIFO()
 		}
 	} else {
 		<-chanDone

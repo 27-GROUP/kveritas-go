@@ -259,9 +259,12 @@ func (o *Observer) scanProcs(root int) {
 		return
 	}
 	now := time.Now().UTC()
+	// Only an attached observer sits inside the tree it watches; when it launched the
+	// run, every process descends from it and must not be dropped.
 	self := os.Getpid()
+	selfInside := descends(self, root, parent)
 	for pid := range parent {
-		if pid == root || pid == self || descends(pid, self, parent) || !descends(pid, root, parent) {
+		if pid == root || !descends(pid, root, parent) || (selfInside && (pid == self || descends(pid, self, parent))) {
 			continue
 		}
 		o.mu.Lock()
