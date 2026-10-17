@@ -15,11 +15,14 @@ Cryptographic verification for computational experiments. Binds a result to the 
 
 K-Veritas is the official implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
 
-**Platform.** Core features are cross-platform. The activity map and per-process hardware are Linux only, with a system-wide fallback elsewhere.
+**Platform.** Linux, macOS, Windows. The activity map is Linux only.
 
 ## Install
 
 ```bash
+# uv or pip (binary only)
+uv tool install kveritas --find-links https://github.com/27-GROUP/kveritas-releases/releases/expanded_assets/v0.9.9
+
 # Prebuilt binary (also darwin/windows, amd64/arm64)
 curl -fsSL https://github.com/27-GROUP/kveritas-releases/raw/main/bin/kveritas-linux-amd64 -o kveritas
 chmod +x kveritas && sudo mv kveritas /usr/local/bin/
@@ -31,27 +34,32 @@ make build
 ## Quick start
 
 ```bash
-kveritas init                                  # start a session (redacted by default)
-kveritas run -- python train.py --epochs 90    # run under kveritas (any command)
-kveritas seal --output report.pdf              # signed PDF (+ bundle at --disclosure open)
-kveritas verify report.pdf                     # verify (add --offline to skip the server)
+kveritas run --seal -- python train.py   # run (starts a session if needed), sign, write report.pdf
+kveritas python train.py                 # same as kveritas run -- python train.py
+kveritas seal -o report.pdf              # sign separately, after several runs
+kveritas verify report.pdf               # verify (add --offline to skip the server)
 ```
 
-## Protocol lines
+## Result lines
 
-Print to stdout in any language. Everything captured is signed.
+Write to the file in `$KVERITAS_OUT`, any language. The terminal shows only your program's output. Printing them works too. Everything captured is signed.
+
+```python
+kv = open(os.environ.get("KVERITAS_OUT", os.devnull), "a", buffering=1)
+print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}", file=kv)
+```
 
 | Line | Purpose |
 |---|---|
-| `KVERITAS_METRIC name=<id> value=<float> [step=<label>]` | A metric. |
-| `KVERITAS_PHASE name=<phase>` | Phase boundary (hardware snapshot). |
-| `KVERITAS_CLAIM metric=<id> value=<float>` | A headline claim. |
-| `KVERITAS_INPUT src=seed:<value>` | A random seed. |
-| `KVERITAS_MODEL params=<int> arch=<name> precision=<fp16\|bf16\|fp32>` | Model card. |
-| `KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]` | Workload card. |
-| `KVERITAS_ARTIFACT role=model\|dataset [name=<ref>] path=<file> visibility=public\|private` | Model or dataset. |
+| `KV <name>=<number> ... [step=<label>]` | Metrics. |
+| `KV phase <name>` | Phase boundary (hardware snapshot). |
+| `KV claim <name>=<number> [phase=<name>]` | A headline claim. |
+| `KV seed <value>` | A random seed. |
+| `KV model params=<int> arch=<name> precision=<fp16\|bf16\|fp32>` | Model card. |
+| `KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]` | Workload card. |
+| `KV artifact role=model\|dataset [name=<ref>] path=<file> visibility=public\|private` | Model or dataset. |
 
-Auto-detected too: Keras history, sklearn CV, metric-like locals.
+Strict: a line like `KV cache: 2 GB` is ignored. The earlier `KVERITAS_METRIC`/`PHASE`/`CLAIM`/`INPUT`/`MODEL`/`WORKLOAD`/`ARTIFACT` lines still work. Metric-like output (`loss: 0.24 - val_acc: 0.94`) is picked up as heuristic.
 
 ## Features
 

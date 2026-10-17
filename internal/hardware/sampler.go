@@ -73,7 +73,6 @@ func (s *Sampler) capture() {
 	}
 
 	c := ProcessCPUCounters(int(pid))
-	// Refresh the slower GPU counters periodically; forward-fill in between.
 	if s.tick%gpuRefreshEvery == 0 {
 		s.lastGPU = ProcessGPUCounters(int(pid))
 	}

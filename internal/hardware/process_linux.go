@@ -104,9 +104,6 @@ func descendantPIDs(rootPID int) map[int]bool {
 			parent[pid] = ppid
 		}
 	}
-	// When attached, the observer runs inside the tree it watches; leaving its pid out
-	// keeps it and everything it spawns (nvidia-smi) out of the run's numbers.
-	delete(parent, os.Getpid())
 	tree := map[int]bool{rootPID: true}
 	changed := true
 	for changed {
@@ -141,7 +138,6 @@ func readPPID(pid int) (int, bool) {
 	return ppid, err == nil
 }
 
-// procCPUSeconds returns cumulative user+system CPU seconds for a process.
 func procCPUSeconds(pid int) float64 {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
@@ -163,8 +159,6 @@ func procCPUSeconds(pid int) float64 {
 
 const clockTicks = 100.0
 
-// procMinfltThreads returns a process's cumulative minor page faults and its
-// current thread count, from /proc/<pid>/stat.
 func procMinfltThreads(pid int) (minflt, threads float64) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
@@ -183,8 +177,6 @@ func procMinfltThreads(pid int) (minflt, threads float64) {
 	return minflt, threads
 }
 
-// procCtxSwitches returns a process's cumulative context switches (voluntary +
-// nonvoluntary), from /proc/<pid>/status.
 func procCtxSwitches(pid int) float64 {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
 	if err != nil {
@@ -203,7 +195,6 @@ func procCtxSwitches(pid int) float64 {
 	return total
 }
 
-// procIO returns a process's cumulative read/write bytes as MB, from /proc/<pid>/io.
 func procIO(pid int) (readMB, writeMB float64) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/io")
 	if err != nil {
@@ -225,7 +216,6 @@ func procIO(pid int) (readMB, writeMB float64) {
 	return readMB, writeMB
 }
 
-// linuxCPUFreqMHz returns the mean current CPU frequency across cores (MHz).
 func linuxCPUFreqMHz() float64 {
 	matches, err := filepath.Glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")
 	if err != nil || len(matches) == 0 {
@@ -250,7 +240,6 @@ func linuxCPUFreqMHz() float64 {
 	return sum / float64(n)
 }
 
-// procRSSPages returns a process's resident set size in memory pages.
 func procRSSPages(pid int) float64 {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/statm")
 	if err != nil {
@@ -264,7 +253,6 @@ func procRSSPages(pid int) float64 {
 	return rss
 }
 
-// gpuMemForPIDs sums GPU memory (MB) used by the given processes.
 func gpuMemForPIDs(pids map[int]bool) float64 {
 	out, err := exec.Command("nvidia-smi",
 		"--query-compute-apps=pid,used_gpu_memory",
@@ -289,8 +277,6 @@ func gpuMemForPIDs(pids map[int]bool) float64 {
 	return total
 }
 
-// gpuUtilForPIDs sums the SM (compute) utilization of the given processes via
-// nvidia-smi pmon.
 func gpuUtilForPIDs(pids map[int]bool) float64 {
 	out, err := exec.Command("nvidia-smi", "pmon", "-c", "1").Output()
 	if err != nil {

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -27,35 +26,11 @@ import (
 	"github.com/google/uuid"
 )
 
-func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
-	return execute(sess, command, fileHints, nil)
+type Options struct {
+	ShowResults bool
 }
 
-// Attachment describes an already running process the observer joins instead of
-// launching one: the SDK's own interpreter, a notebook kernel.
-type Attachment struct {
-	PID     int
-	Channel *os.File
-	Live    io.Writer
-	// Optional: the process's own stdout and stderr, redirected through these pipes by
-	// the SDK, are recorded like a wrapped run's and passed on to Echo and EchoErr.
-	Stdout  *os.File
-	Stderr  *os.File
-	Echo    io.Writer
-	EchoErr io.Writer
-	// Releases the observer's own hold on the channel once the SDK has connected.
-	Connected func()
-	exe       string
-}
-
-// Attach observes pid from now until the SDK sends bye or closes the channel.
-func Attach(sess *session.Session, att *Attachment) (*session.RunRecord, error) {
-	command, exe := processCommand(att.PID)
-	att.exe = exe
-	return execute(sess, command, nil, att)
-}
-
-func execute(sess *session.Session, command []string, fileHints []string, att *Attachment) (*session.RunRecord, error) {
+func Run(sess *session.Session, command []string, fileHints []string, opts Options) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
 	}
@@ -108,7 +83,7 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	var (
 		stdoutBuf    bytes.Buffer
 		stderrBuf    bytes.Buffer
-		metricLines  bytes.Buffer // only metric/claim lines for hashing
+		metricLines  bytes.Buffer
 		stdoutLines  int
 		allMetrics   []session.Metric
 		allPhases    []session.PhaseEvent
@@ -121,65 +96,35 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	)
 
 	parser := &metrics.Parser{}
-	var (
-		cmd        *exec.Cmd
-		stdoutPipe io.ReadCloser
-		stderrPipe io.ReadCloser
-		chanR      *os.File
-		keepW      *os.File
-		dropFIFO   = func() {}
-		err        error
-	)
-	if att == nil {
-		cmd = exec.Command(command[0], command[1:]...)
-		if stdoutPipe, err = cmd.StdoutPipe(); err != nil {
-			return nil, err
-		}
-		if stderrPipe, err = cmd.StderrPipe(); err != nil {
-			return nil, err
-		}
-		// KVERITAS_RUN tells an SDK it is inside a run even where no channel exists
-		// (Windows); it then prints protocol lines instead.
-		cmd.Env = append(os.Environ(), "KVERITAS_RUN=1")
-		if r, k, path, cleanup, ferr := openFIFO(); ferr == nil {
-			chanR, keepW, dropFIFO = r, k, cleanup
-			cmd.Env = append(cmd.Env, ChannelEnv+"=fifo:"+path)
-		}
+	cmd := exec.Command(command[0], command[1:]...)
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stdin = os.Stdin
+	cmd.Env = runEnv()
+	out, err := openOut()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: %s unavailable (%v); print result lines instead\n", OutEnv, err)
+		cmd.Env = append(cmd.Env, OutEnv+"="+os.DevNull)
 	} else {
-		chanR = att.Channel
-		rec.Launch = "attached"
-		if att.Stdout != nil {
-			stdoutPipe = att.Stdout
-			rec.OutputCaptured = true
-		}
-		if att.Stderr != nil {
-			stderrPipe = att.Stderr
-		}
+		defer out.cleanup()
+		cmd.Env = append(cmd.Env, OutEnv+"="+out.path)
 	}
 
 	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
 	obs := tracer.New(sess.ProjectDir)
 	obs.Start()
 
-	pid := 0
-	if att == nil {
-		if err := cmd.Start(); err != nil {
-			obs.Stop()
-			if chanR != nil {
-				chanR.Close()
-				keepW.Close()
-				dropFIFO()
-			}
-			return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
-		}
-		pid = cmd.Process.Pid
-	} else {
-		pid = att.PID
-		if !hardware.ProcessAlive(pid) {
-			obs.Stop()
-			return nil, fmt.Errorf("process %d is not running", pid)
-		}
+	if err := cmd.Start(); err != nil {
+		obs.Stop()
+		return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
 	}
+	pid := cmd.Process.Pid
 	obs.SetPID(pid)
 	sampler.SetPID(pid)
 
@@ -194,12 +139,12 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 
 	where := func(lineNum, seq int) string {
 		if seq > 0 {
-			return fmt.Sprintf("message %d", seq)
+			return fmt.Sprintf("%s line %d", OutEnv, seq)
 		}
 		return fmt.Sprintf("line %d", lineNum)
 	}
 
-	// Printed lines and channel messages share one path, serialized so phases snapshot in order.
+	// Printed lines and result-file lines share one path, serialized so phases snapshot in order.
 	var lineMu sync.Mutex
 	handle := func(line string, lineNum, seq int) {
 		lineMu.Lock()
@@ -275,185 +220,97 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 				mu.Unlock()
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d rejected: %s\n", seq, line)
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: result line %d on %s rejected: %s\n", seq, OutEnv, line)
+		}
+	}
+
+	// A malformed KV line on stdout is usually ordinary output (an LLM's "KV cache"),
+	// so it is noted once rather than per line.
+	nearMissShown := false
+	accept := func(line string, lineNum, seq int) {
+		lines, ok, near := metrics.TranslateKV(line)
+		switch {
+		case ok:
+			for _, l := range lines {
+				handle(l, lineNum, seq)
+			}
+		case near && seq > 0:
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: %s line %d is not a valid KV line: %s\n", OutEnv, seq, line)
+		case near:
+			if !nearMissShown {
+				nearMissShown = true
+				fmt.Fprintf(os.Stderr, "[kveritas] Note: output line %d starts with KV but is not a result line; ignored\n", lineNum)
+			}
+			handle(line, lineNum, seq)
+		default:
+			handle(line, lineNum, seq)
+		}
+		if opts.ShowResults && seq > 0 && (ok || strings.HasPrefix(line, "KVERITAS_")) {
+			fmt.Fprintf(os.Stderr, "[kveritas] %s\n", line)
 		}
 	}
 
 	var (
-		chanBuf  bytes.Buffer
-		chanMsgs int
-		chanGaps int
-		dist     *session.Distributed
-		cells    []session.NotebookCell
-		chanDone = make(chan struct{})
-		sawBye   bool
-		byeExit  int
+		outBuf   bytes.Buffer
+		outLines int
+		outDone  = make(chan struct{})
 	)
-	if chanR != nil {
+	if out != nil {
 		go func() {
-			defer close(chanDone)
-			sc := bufio.NewScanner(chanR)
+			defer close(outDone)
+			sc := bufio.NewScanner(out.reader)
 			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-			// Each sending process numbers its own messages; the record uses arrival order.
-			next := map[int]int{}
 			for sc.Scan() {
-				if att != nil && att.Connected != nil {
-					att.Connected()
-					att.Connected = nil
-				}
-				raw := sc.Bytes()
-				chanBuf.Write(raw)
-				chanBuf.WriteByte('\n')
-				var msg channelMessage
-				if err := json.Unmarshal(raw, &msg); err != nil {
-					fmt.Fprintf(os.Stderr, "[kveritas] Warning: unreadable channel message ignored\n")
+				line := strings.TrimSpace(sc.Text())
+				if line == "" {
 					continue
 				}
-				chanMsgs++
-				want := next[msg.Proc]
-				if want == 0 {
-					want = 1
-				}
-				if msg.Seq != want {
-					chanGaps++
-					fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d arrived where %d was expected\n", msg.Seq, want)
-				}
-				next[msg.Proc] = msg.Seq + 1
-				msg.Seq = chanMsgs
-				switch msg.Kind {
-				case "hello":
-					dist = msg.distributed()
-				case "bye":
-					if att != nil {
-						sawBye = true
-						if msg.ExitCode != nil {
-							byeExit = *msg.ExitCode
-						}
-						return
-					}
-				case "cell":
-					c, err := msg.cell(sess.ProjectDir)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record notebook cell: %v\n", err)
-					}
-					lineMu.Lock()
-					cells = append(cells, c)
-					lineMu.Unlock()
-				default:
-					if l := msg.line(); l != "" {
-						handle(l, 0, msg.Seq)
-					} else {
-						fmt.Fprintf(os.Stderr, "[kveritas] Warning: channel message %d (%s) ignored\n", msg.Seq, msg.Kind)
-					}
-				}
+				outBuf.WriteString(line)
+				outBuf.WriteByte('\n')
+				outLines++
+				accept(line, 0, outLines)
 			}
 		}()
 	} else {
-		close(chanDone)
+		close(outDone)
 	}
 
-	if att != nil && att.Live != nil {
-		go streamLive(sampler, att.Live, chanDone)
-	}
-	// An attached process that dies never sends bye; stop reading so the run closes as interrupted.
-	if att != nil {
-		go func() {
-			t := time.NewTicker(time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-chanDone:
-					return
-				case <-t.C:
-					if !hardware.ProcessAlive(pid) {
-						chanR.Close()
-						return
-					}
-				}
-			}
-		}()
-	}
-
-	echoOut, echoErr := io.Writer(os.Stdout), io.Writer(os.Stderr)
-	if att != nil {
-		echoOut, echoErr = att.Echo, att.EchoErr
-	}
 	var outWG sync.WaitGroup
-	if stdoutPipe != nil {
-		outWG.Add(1)
-		go func() {
-			defer outWG.Done()
-			scanner := bufio.NewScanner(stdoutPipe)
-			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-			lineNum := 0
-			for scanner.Scan() {
-				lineNum++
-				line := scanner.Text()
-				if echoOut != nil {
-					fmt.Fprintln(echoOut, line)
-				}
-				fmt.Fprintln(&stdoutBuf, line)
-				handle(line, lineNum, 0)
-			}
-			stdoutLines = lineNum
-		}()
-	}
-	if stderrPipe != nil {
-		outWG.Add(1)
-		go func() {
-			defer outWG.Done()
-			var src io.Reader = stderrPipe
-			if echoErr != nil {
-				src = io.TeeReader(stderrPipe, echoErr)
-			}
-			io.Copy(&stderrBuf, src) //nolint:errcheck
-		}()
-	}
-	if att == nil {
-		outWG.Wait()
-	}
+	outWG.Add(2)
+	go func() {
+		defer outWG.Done()
+		scanner := bufio.NewScanner(stdoutPipe)
+		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+		lineNum := 0
+		for scanner.Scan() {
+			lineNum++
+			line := scanner.Text()
+			fmt.Fprintln(os.Stdout, line)
+			fmt.Fprintln(&stdoutBuf, line)
+			accept(line, lineNum, 0)
+		}
+		stdoutLines = lineNum
+	}()
+	go func() {
+		defer outWG.Done()
+		io.Copy(&stderrBuf, io.TeeReader(stderrPipe, os.Stderr)) //nolint:errcheck
+	}()
+	outWG.Wait()
 
 	exitCode := 0
-	if att == nil {
-		if err := cmd.Wait(); err != nil {
-			if exit, ok := err.(*exec.ExitError); ok {
-				exitCode = exit.ExitCode()
-			}
+	if err := cmd.Wait(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok {
+			exitCode = exit.ExitCode()
 		}
-		// A descendant that outlives the run could hold the pipe open forever.
-		if chanR != nil {
-			keepW.Close()
-			select {
-			case <-chanDone:
-			case <-time.After(3 * time.Second):
-				chanR.Close()
-				<-chanDone
-			}
-			chanR.Close()
-			dropFIFO()
-		}
-	} else {
-		<-chanDone
-		chanR.Close()
-		// The SDK restores its stdout and stderr before bye; a child still holding them
-		// open must not stall the record.
-		done := make(chan struct{})
-		go func() { outWG.Wait(); close(done) }()
+	}
+	if out != nil {
+		// A descendant that outlives the run could hold the result file open forever.
+		out.finish()
 		select {
-		case <-done:
+		case <-outDone:
 		case <-time.After(3 * time.Second):
-			if att.Stdout != nil {
-				att.Stdout.Close()
-			}
-			if att.Stderr != nil {
-				att.Stderr.Close()
-			}
-			<-done
-		}
-		// The channel closing without bye means the observed process died mid-run.
-		exitCode = -1
-		if sawBye {
-			exitCode = byeExit
+			out.close()
+			<-outDone
 		}
 	}
 
@@ -516,12 +373,9 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	if declaredSeen {
 		rec.Declared = declared
 	}
-	if chanMsgs > 0 {
-		rec.ChannelHash = digestBuf(chanBuf.Bytes())
-		rec.ChannelMessages = chanMsgs
-		rec.ChannelGaps = chanGaps
-		rec.Distributed = dist
-		rec.Cells = cells
+	if outLines > 0 {
+		rec.ChannelHash = digestBuf(outBuf.Bytes())
+		rec.ChannelMessages = outLines
 	}
 
 	var postHashes map[string]string
@@ -536,11 +390,7 @@ func execute(sess *session.Session, command []string, fileHints []string, att *A
 	}()
 	go func() {
 		defer postWg.Done()
-		envCmd := command
-		if att != nil && att.exe != "" {
-			envCmd = []string{att.exe}
-		}
-		envDig, envPackages, _ = envDigest(envCmd)
+		envDig, envPackages, _ = envDigest(command)
 	}()
 
 	if len(sess.SourceHashes) == 0 {

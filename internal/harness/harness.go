@@ -79,7 +79,6 @@ type ActorAction struct {
 	Count int    `json:"count"`
 }
 
-// actionOrder fixes the display order of the action buckets.
 var actionOrder = []string{"turns", "reads", "writes", "commands", "spawns", "tools", "claims", "approvals", "other"}
 
 // bucket groups a ledger entry type into a human category. The ".result" half of

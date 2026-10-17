@@ -27,7 +27,6 @@ type bundleMetaCommit struct {
 	Root  string            `json:"root"`
 }
 
-// snapshotRef points at one snapshot inside a combined, multi-run bundle.
 type snapshotRef struct {
 	Run   int               `json:"run"`
 	Index int               `json:"index"`
@@ -35,7 +34,6 @@ type snapshotRef struct {
 	Root  string            `json:"root"`
 }
 
-// combinedMeta is the index of a merged bundle covering every run.
 type combinedMeta struct {
 	SessionID string        `json:"session_id"`
 	Snapshots []snapshotRef `json:"snapshots"`
@@ -89,7 +87,6 @@ func (r *Recorder) WriteBundle(outPath string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// BundleInput is one run's per-run bundle, to be folded into the combined bundle.
 type BundleInput struct {
 	Run  int
 	Path string

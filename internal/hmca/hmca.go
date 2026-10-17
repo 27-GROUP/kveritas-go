@@ -476,7 +476,6 @@ func standardize(v []float64) ([]float64, bool) {
 	return out, true
 }
 
-// correlation builds the k x k Pearson matrix of already-standardized columns.
 func correlation(cols [][]float64) [][]float64 {
 	k := len(cols)
 	m := len(cols[0])

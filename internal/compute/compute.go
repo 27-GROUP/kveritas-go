@@ -11,12 +11,10 @@ import (
 )
 
 const (
-	// GPU utilization percent above which an interval counts as active.
 	utilActiveThreshold = 5.0
 	// Energy floor below any real device efficiency (best measured ~3.1 pJ/FLOP),
 	// set low so the bound never false-accuses a more efficient run.
-	minJoulesPerFLOP = 0.5e-12
-	// Below this declared work the certificate is not applicable.
+	minJoulesPerFLOP  = 0.5e-12
 	computeFloorFLOPs = 1e12
 	fp16BytesPerParam = 2
 	// Generous upper bound on one CPU core's FP32 throughput; peak x core-seconds
@@ -54,7 +52,6 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 	fDeclared := declaredFLOPs(rec.Declared)
 	cert.FDeclaredFLOPs = fDeclared
 
-	// No model card declared: nothing to attest.
 	if rec.Declared == nil {
 		cert.Verdict = "N/A"
 		cert.Notes = append(cert.Notes, "no declared model card; compute certificate not applicable")
@@ -129,7 +126,6 @@ func Analyze(rec *session.RunRecord) session.ComputeCert {
 		}
 
 	default:
-		// Small declared work, nothing impossible: not checkable.
 		cert.Verdict = "N/A"
 		cert.Notes = append(cert.Notes, "declared work below compute floor; certificate not applicable")
 		return cert

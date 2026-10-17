@@ -26,8 +26,7 @@ type Session struct {
 	Runs         []string          `json:"runs"`
 	Sealed       bool              `json:"sealed"`
 	SourceHashes map[string]string `json:"source_hashes,omitempty"`
-	// Disclosure level for provenance: redacted (default), names, or open.
-	Disclosure string `json:"disclosure,omitempty"`
+	Disclosure   string            `json:"disclosure,omitempty"`
 	// Per-session salt for provenance leaf hashes. Kept local, never published.
 	ProvSalt string `json:"prov_salt,omitempty"`
 	// Every invocation, failed and interrupted ones included, advances the anchor chain.
@@ -62,18 +61,16 @@ type RunRecord struct {
 	MetricHash      string           `json:"metric_hash,omitempty"`
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
 	SourceCodeHash  string           `json:"source_code_hash,omitempty"`
-	// Declared from KVERITAS_MODEL / KVERITAS_WORKLOAD stdout lines.
-	Declared *DeclaredModel `json:"declared,omitempty"`
+	Declared        *DeclaredModel   `json:"declared,omitempty"`
 	// Linux only for now.
 	Trace      *RunTrace   `json:"trace,omitempty"`
 	Provenance *Provenance `json:"provenance,omitempty"`
 	// Open disclosure only.
-	ProvBundleHash string `json:"prov_bundle_hash,omitempty"`
-	// Declared from KVERITAS_ARTIFACT stdout lines.
-	Artifacts  []Artifact `json:"artifacts,omitempty"`
-	Invocation int        `json:"invocation,omitempty"`
-	RunDigest  string     `json:"run_digest,omitempty"`
-	// "attached" when the observer joined an already running process (SDK, notebooks).
+	ProvBundleHash string     `json:"prov_bundle_hash,omitempty"`
+	Artifacts      []Artifact `json:"artifacts,omitempty"`
+	Invocation     int        `json:"invocation,omitempty"`
+	RunDigest      string     `json:"run_digest,omitempty"`
+	// Written by earlier versions (attached runs, notebooks, the result channel); kept so their reports verify.
 	Launch          string         `json:"launch,omitempty"`
 	OutputCaptured  bool           `json:"output_captured,omitempty"`
 	ChannelHash     string         `json:"channel_hash,omitempty"`
@@ -137,7 +134,6 @@ type Provenance struct {
 	Truncated  bool           `json:"truncated,omitempty"`
 }
 
-// ProvEvent is what triggered a snapshot: run_start, phase, or run_end.
 type ProvEvent struct {
 	Kind string `json:"kind"`
 	Name string `json:"name,omitempty"`
@@ -184,7 +180,6 @@ type ProcEvent struct {
 	StartAt time.Time `json:"start_at"`
 }
 
-// Truncated is set when distinct files exceeded the cap.
 type RunTrace struct {
 	Files     []FileEvent `json:"files,omitempty"`
 	Procs     []ProcEvent `json:"procs,omitempty"`
@@ -232,7 +227,6 @@ type HardwareCounters struct {
 	CPUFreqMHz  float64 `json:"cpu_freq_mhz,omitempty"`
 }
 
-// PhaseEvent records a KVERITAS_PHASE boundary with hardware state.
 type PhaseEvent struct {
 	Name      string           `json:"name"`
 	Line      int              `json:"line"`
@@ -241,7 +235,6 @@ type PhaseEvent struct {
 	Seq       int              `json:"seq,omitempty"`
 }
 
-// InlineClaim records a KVERITAS_CLAIM committed inside stdout.
 type InlineClaim struct {
 	Metric string  `json:"metric"`
 	Value  float64 `json:"value"`
@@ -250,7 +243,6 @@ type InlineClaim struct {
 	Seq    int     `json:"seq,omitempty"`
 }
 
-// SeedCommitment records a KVERITAS_INPUT seed declaration.
 type SeedCommitment struct {
 	Source    string    `json:"source"`
 	Value     string    `json:"value"`
@@ -264,7 +256,6 @@ type HardwareSample struct {
 	Counters  HardwareCounters `json:"counters"`
 }
 
-// HMCAResult is the output of the Hardware-Metric Consistency Analyzer.
 type HMCAResult struct {
 	Score   float64         `json:"hmca_score"`
 	Flags   []string        `json:"hmca_flags,omitempty"`
@@ -292,7 +283,6 @@ type DeclaredModel struct {
 	SeqLen      int64   `json:"seq_len,omitempty"`
 }
 
-// Recomputed at verify time, so tampering breaks the signature.
 type ComputeCert struct {
 	FDeclaredFLOPs float64  `json:"f_declared_flops,omitempty"`
 	GPUActiveSec   float64  `json:"gpu_active_sec,omitempty"`
@@ -366,7 +356,6 @@ type SealRecord struct {
 	TotalRunCount      int              `json:"total_run_count,omitempty"`
 }
 
-// Find walks up from the working directory to find a .kveritas directory.
 func Find() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {

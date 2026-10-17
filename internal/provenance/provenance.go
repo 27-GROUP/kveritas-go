@@ -22,7 +22,6 @@ import (
 
 const maxCommits = 512
 
-// Level controls how much a snapshot reveals.
 type Level int
 
 const (
@@ -214,7 +213,6 @@ func (r *Recorder) Snapshot(kind, name string) {
 	r.prevLink = commit.Link
 }
 
-// Result returns the assembled provenance, or nil if nothing was recorded.
 func (r *Recorder) Result() *session.Provenance {
 	if len(r.commits) == 0 {
 		return nil

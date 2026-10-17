@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -42,8 +43,10 @@ var root = &cobra.Command{
 code, hardware, and time that produced it.
 
 Workflow:
-  kveritas init              Initialize a session in the current directory.
-  kveritas run -- <cmd>      Run a monitored experiment.
+  kveritas run -- <cmd>      Run a monitored experiment (starts a session if needed).
+  kveritas <cmd>             Same, for any program on PATH: kveritas python train.py
+  kveritas run --seal -- <cmd>
+                             Run, then sign and write report.pdf in one step.
   kveritas seal              Bundle and sign the session; produce a PDF report.
   kveritas verify <pdf>      Verify a signed report (no account required).
   kveritas check --claims c.json --report r.pdf
@@ -53,13 +56,14 @@ Workflow:
   kveritas status            Show current session state.
   kveritas update            Update to the latest version.
 
-Protocol lines your script can emit:
-  KVERITAS_METRIC   name=<id> value=<float> [step=<label>]
-  KVERITAS_PHASE    name=<phase>
-  KVERITAS_CLAIM    metric=<id> value=<float> [phase=<phase>]
-  KVERITAS_INPUT    src=seed:<value>
-  KVERITAS_MODEL    params=<int> arch=<name> precision=<fp16|bf16|fp32>
-  KVERITAS_WORKLOAD dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]`,
+Result lines, written to the file in $KVERITAS_OUT (or printed):
+  KV <name>=<number> [<name>=<number> ...] [step=<label>]
+  KV claim <name>=<number> [phase=<phase>]
+  KV seed <value>
+  KV phase <name>
+  KV model params=<int> arch=<name> precision=<fp16|bf16|fp32>
+  KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]
+The KVERITAS_METRIC/PHASE/CLAIM/INPUT/MODEL/WORKLOAD lines are still accepted.`,
 	SilenceUsage: true,
 }
 
@@ -82,11 +86,33 @@ This action is irreversible -- the session token is lost.`,
 	},
 }
 
+// kveritas python train.py is kveritas run -- python train.py, for any program on
+// PATH that is not a kveritas command.
+func shortRun() {
+	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
+		return
+	}
+	name := os.Args[1]
+	if name == "help" || name == "completion" {
+		return
+	}
+	for _, c := range root.Commands() {
+		if c.Name() == name || c.HasAlias(name) {
+			return
+		}
+	}
+	if _, err := exec.LookPath(name); err != nil {
+		return
+	}
+	os.Args = append([]string{os.Args[0], "run", "--"}, os.Args[1:]...)
+}
+
 func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
-	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdObserve)
+	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware)
+	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -95,7 +121,6 @@ func main() {
 var proveProject string
 var proveOutput string
 
-// Emits a self-contained proof embedding the report's seal.
 var cmdProve = &cobra.Command{
 	Use:   "prove <report.pdf> <file> [file...]",
 	Short: "Prove one or more files were part of a signed snapshot, revealing nothing else",
@@ -149,7 +174,6 @@ var harnessProveOutput string
 var harnessProveTUID string
 var harnessProveOut string
 
-// Reveals one recorded entry and proves its position in the chain, exposing nothing else.
 var cmdHarnessProve = &cobra.Command{
 	Use:   "harness-prove <session.json> <entry-index | --tool-use-id ID>",
 	Short: "Prove a recorded prompt or output was in a signed agent session",
@@ -214,7 +238,6 @@ var cmdHarnessProve = &cobra.Command{
 	},
 }
 
-// Checks chain authenticity and that revealed content re-hashes to its committed entry.
 var cmdVerifyHarnessProof = &cobra.Command{
 	Use:   "verify-harness-proof <proof.json>",
 	Short: "Check a harness prompt/output proof",
@@ -459,7 +482,6 @@ var cmdInit = &cobra.Command{
 			serverURL = "local"
 		}
 
-		// --show-names keeps real file names in the report without bundling content.
 		if initShowNames && initDisclosure == "redacted" {
 			initDisclosure = "names"
 		}
@@ -1142,33 +1164,32 @@ func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 }
 
 var (
-	runFiles    []string
-	runNodeRank int
+	runFiles       []string
+	runNodeRank    int
+	runSeal        string
+	runShowResults bool
 )
 
 var cmdRun = &cobra.Command{
 	Use:   "run [--files f1,f2] -- <command> [args...]",
 	Short: "Run a monitored experiment",
-	Long: `Executes <command> as a monitored subprocess.
+	Long: `Executes <command> as a monitored subprocess. Starts a session in the current
+directory if there is none.
 
-The stdout stream is teed to your terminal and simultaneously hashed.
-Metrics printed to stdout in the KVERITAS_METRIC format are captured:
+Results go to the file named in $KVERITAS_OUT, one line each, from any language.
+The terminal shows your program's own output, unchanged:
 
-  KVERITAS_METRIC name=val_accuracy value=0.9471 step=100
+  KV val_acc=0.9471 loss=0.21 step=100
+  KV phase eval                  (hardware snapshot at the boundary)
+  KV claim accuracy=0.9471 phase=eval
+  KV seed 42
 
-Phase boundaries trigger hardware snapshots:
+  Python: open(os.environ.get("KVERITAS_OUT", os.devnull), "a")
+  R:      Sys.getenv("KVERITAS_OUT", "/dev/null")
+  Shell:  echo "KV acc=0.93" >> "${KVERITAS_OUT:-/dev/null}"
 
-  KVERITAS_PHASE name=eval
-
-Inline claims are committed into the stdout hash:
-
-  KVERITAS_CLAIM metric=accuracy value=0.9471 phase=eval
-
-Seed commitments are recorded before computation:
-
-  KVERITAS_INPUT src=seed:42
-
-Files listed with --files are hashed before and after the run.
+The same lines printed to stdout are captured too. Both streams are hashed into
+the signed record. Files listed with --files are hashed before and after the run.
 
 Multi-node: run the same command on every node, for example
   srun kveritas run -- torchrun --nnodes=2 ... train.py
@@ -1184,9 +1205,16 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		if rank > 0 {
 			return runWorkerNode(args, rank)
 		}
+		warnSrunInside(args)
 		kvDir, err := session.Find()
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "[kveritas] No session here; starting one (%s disclosure)\n", initDisclosure)
+			if err := cmdInit.RunE(cmdInit, nil); err != nil {
+				return err
+			}
+			if kvDir, err = session.Find(); err != nil {
+				return err
+			}
 		}
 		sess, err := session.Load(kvDir)
 		if err != nil {
@@ -1214,7 +1242,6 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 			defer stop()
 		}
 
-		// Heuristically detect the script file from the command if --files is empty.
 		hints := runFiles
 		if len(hints) == 0 {
 			for _, arg := range args {
@@ -1228,7 +1255,7 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		if err := anchor.BeginRun(kvDir, anchor.Inflight{Invocation: inv, Index: len(sess.Runs), Command: args, StartedAt: time.Now().UTC()}); err != nil {
 			return err
 		}
-		rec, err := runner.Run(sess, args, hints)
+		rec, err := runner.Run(sess, args, hints, runner.Options{ShowResults: runShowResults})
 		if err != nil {
 			anchor.EndRun(kvDir)
 			return err
@@ -1250,8 +1277,7 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		}
 
 		if rec.ExitCode != 0 {
-			fmt.Fprintf(os.Stderr, "[kveritas] Run failed with exit code %d -- discarding this run\n", rec.ExitCode)
-			fmt.Fprintf(os.Stderr, "[kveritas] Fix the issue (dependencies, environment, etc.) and try again\n")
+			fmt.Fprintf(os.Stderr, "[kveritas] Run failed (exit %d). It is not kept in the report, but the server still counts it in the run history.\n", rec.ExitCode)
 			return fmt.Errorf("command exited with code %d; only successful runs are recorded", rec.ExitCode)
 		}
 
@@ -1266,8 +1292,23 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 
 		fmt.Printf("Run %s recorded (%d metrics, %d claims, %d phases, %d seeds)\n",
 			rec.ID, len(rec.Metrics), len(rec.Claims), len(rec.Phases), len(rec.Seeds))
-		return nil
+		if runSeal == "" {
+			return nil
+		}
+		release()
+		sealOutput = runSeal
+		return cmdSeal.RunE(cmdSeal, nil)
 	},
+}
+
+// srun inside kveritas starts the other nodes' processes where no kveritas runs, so
+// only this node would be measured.
+func warnSrunInside(args []string) {
+	n, _ := strconv.Atoi(os.Getenv("SLURM_JOB_NUM_NODES"))
+	if n > 1 && len(args) > 0 && filepath.Base(args[0]) == "srun" {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: srun is inside kveritas, so only this node is measured. "+
+			"Put it outside: srun kveritas run -- %s\n", strings.Join(args[1:], " "))
+	}
 }
 
 // Every node of a multi-node run runs the same command; only node 0 records the run.
@@ -1377,6 +1418,9 @@ func recoverInterrupted(kvDir string, sess *session.Session) error {
 func init() {
 	cmdRun.Flags().StringSliceVar(&runFiles, "files", nil, "source files to hash (comma-separated)")
 	cmdRun.Flags().IntVar(&runNodeRank, "node-rank", -1, "this machine's node in a multi-node run (default: from the launcher or Slurm)")
+	cmdRun.Flags().StringVar(&runSeal, "seal", "", "after the run, sign and write the report (default path report.pdf)")
+	cmdRun.Flags().Lookup("seal").NoOptDefVal = "report.pdf"
+	cmdRun.Flags().BoolVar(&runShowResults, "show-results", false, "echo each result line from $KVERITAS_OUT as it arrives")
 }
 
 var (
@@ -1445,6 +1489,7 @@ var cmdSeal = &cobra.Command{
 				for _, f := range modified {
 					fmt.Fprintf(os.Stderr, "  MODIFIED: %s\n", f)
 				}
+				fmt.Fprintf(os.Stderr, "[kveritas] Re-run with the current code (kveritas run ...), or restore these files, then seal again.\n")
 				return fmt.Errorf("source code was modified after experiments were run; results cannot be trusted")
 			}
 			if len(missing) > 0 {

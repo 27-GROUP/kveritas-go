@@ -55,7 +55,6 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 		return err
 	}
 
-	// Hash the visual PDF content so tampering the visual pages is detectable
 	pdfHash := sha256.Sum256(pdfBytes)
 	seal.VisualPDFHash = hex.EncodeToString(pdfHash[:])
 
@@ -205,7 +204,6 @@ func (b *builder) gap(h float64) {
 	b.curY += h
 }
 
-// render produces the raw PDF bytes (through %%EOF).
 func (b *builder) render() ([]byte, error) {
 	var buf bytes.Buffer
 	type objPos struct{ num, offset int }

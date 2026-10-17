@@ -14,50 +14,40 @@ import (
 )
 
 var (
-	// explicitRe matches the primary KVERITAS_METRIC format.
 	explicitRe = regexp.MustCompile(
 		`^KVERITAS_METRIC\s+name=([a-zA-Z][a-zA-Z0-9_]*)\s+value=([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s+step=(\S+))?`,
 	)
 
-	// phaseRe matches KVERITAS_PHASE name=<phase>
 	phaseRe = regexp.MustCompile(
 		`^KVERITAS_PHASE\s+name=(\S+)`,
 	)
 
-	// claimRe matches KVERITAS_CLAIM metric=<name> value=<float> [phase=<phase>]
 	claimRe = regexp.MustCompile(
 		`^KVERITAS_CLAIM\s+metric=([a-zA-Z][a-zA-Z0-9_]*)\s+value=([+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)(?:\s+phase=(\S+))?`,
 	)
 
-	// inputRe matches KVERITAS_INPUT src=seed:<value>
 	inputRe = regexp.MustCompile(
 		`^KVERITAS_INPUT\s+src=seed:(\S+)`,
 	)
 
-	// modelRe and workloadRe match the declared model card directives.
 	modelRe    = regexp.MustCompile(`^KVERITAS_MODEL\b`)
 	workloadRe = regexp.MustCompile(`^KVERITAS_WORKLOAD\b`)
 
-	// kvTokenRe extracts key=value tokens from a declared-card line.
 	kvTokenRe = regexp.MustCompile(`([a-zA-Z_]+)=(\S+)`)
 
-	// kerasRe matches Keras/PyTorch Lightning style: "loss: 0.24 - val_acc: 0.94"
 	kerasRe = regexp.MustCompile(
 		`([a-zA-Z][a-zA-Z0-9_]*):\s*([+-]?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?)`,
 	)
 
-	// colonKVRe matches a single "metric_name: 0.947" at line start.
 	colonKVRe = regexp.MustCompile(
 		`^\s*([a-zA-Z][a-zA-Z0-9_/\-]{1,30}):\s*([+-]?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?)\s*$`,
 	)
 
-	// jsonMetricRe matches {"metric": "name", "value": 0.947}
 	jsonMetricRe = regexp.MustCompile(
 		`"metric"\s*:\s*"([^"]+)"\s*,\s*"value"\s*:\s*([+-]?[0-9]+(?:\.[0-9]+)?)`,
 	)
 )
 
-// metricKeywords are names that strongly imply a value is a performance metric.
 var metricKeywords = map[string]bool{
 	"loss": true, "acc": true, "accuracy": true, "error": true,
 	"f1": true, "f1_score": true, "precision": true, "recall": true,
@@ -68,7 +58,6 @@ var metricKeywords = map[string]bool{
 	"test_acc": true, "test_accuracy": true, "map": true,
 }
 
-// blocklist excludes names that are configuration or progress values, not metrics.
 var blocklist = map[string]bool{
 	"epoch": true, "step": true, "batch": true, "iter": true,
 	"lr": true, "learning_rate": true, "batch_size": true,
@@ -86,7 +75,6 @@ type Parser struct {
 	seedCount      int
 }
 
-// Parse returns a metric and true only when the KVERITAS_METRIC prefix matches.
 func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
 	m := explicitRe.FindStringSubmatch(line)
 	if m == nil {
@@ -109,7 +97,6 @@ func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
 	return metric, true
 }
 
-// ParsePhase returns the KVERITAS_PHASE name and true if the line matches.
 func (p *Parser) ParsePhase(line string) (string, bool) {
 	m := phaseRe.FindStringSubmatch(line)
 	if m == nil {
@@ -119,7 +106,6 @@ func (p *Parser) ParsePhase(line string) (string, bool) {
 	return m[1], true
 }
 
-// ParseClaim returns a KVERITAS_CLAIM as an InlineClaim and true if it matches.
 func (p *Parser) ParseClaim(line string, lineNum int) (*session.InlineClaim, bool) {
 	m := claimRe.FindStringSubmatch(line)
 	if m == nil {
@@ -141,8 +127,6 @@ func (p *Parser) ParseClaim(line string, lineNum int) (*session.InlineClaim, boo
 	return claim, true
 }
 
-// ArtifactDecl is a KVERITAS_ARTIFACT declaration: a model or dataset the run
-// wants attested, and whether its identity is public or private.
 type ArtifactDecl struct {
 	Role       string
 	Name       string
@@ -150,7 +134,6 @@ type ArtifactDecl struct {
 	Visibility string
 }
 
-// ParseArtifact checks a line for KVERITAS_ARTIFACT and pulls its key=value fields.
 func (p *Parser) ParseArtifact(line string) (*ArtifactDecl, bool) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 || fields[0] != "KVERITAS_ARTIFACT" {
@@ -179,7 +162,6 @@ func (p *Parser) ParseArtifact(line string) (*ArtifactDecl, bool) {
 	return d, true
 }
 
-// ParseSeed returns the KVERITAS_INPUT seed value and true if the line matches.
 func (p *Parser) ParseSeed(line string) (string, bool) {
 	m := inputRe.FindStringSubmatch(line)
 	if m == nil {
@@ -189,9 +171,6 @@ func (p *Parser) ParseSeed(line string) (string, bool) {
 	return m[1], true
 }
 
-// ParseDeclared checks a line for the KVERITAS_MODEL or KVERITAS_WORKLOAD
-// directive and merges any declared fields into d. Returns true if the line was
-// a declared-card directive. Both directives contribute to the same model card.
 func (p *Parser) ParseDeclared(line string, d *session.DeclaredModel) bool {
 	if !modelRe.MatchString(line) && !workloadRe.MatchString(line) {
 		return false
@@ -235,7 +214,6 @@ func parseCountToken(v string) int64 {
 // ParseHeuristic runs best-effort detection on a line.
 // These results supplement but do not replace explicit metrics.
 func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
-	// JSON metric object takes priority.
 	if m := jsonMetricRe.FindStringSubmatch(line); m != nil {
 		name := m[1]
 		if !blocklist[strings.ToLower(name)] {
@@ -278,13 +256,13 @@ func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
 
 func (p *Parser) WarnIfEmpty() {
 	if p.explicitCount == 0 {
-		fmt.Fprintln(os.Stderr, "[kveritas] Warning: No explicit metrics captured in this run.")
-		fmt.Fprintln(os.Stderr, "[kveritas] Add one line per metric to your script (any language):")
-		fmt.Fprintln(os.Stderr, `[kveritas]   Python:  print(f"KVERITAS_METRIC name=val_accuracy value={acc:.4f} step={epoch}")`)
-		// WriteString, not a Print verb: keeps the literal %.4f/%d from being read as format directives.
-		os.Stderr.WriteString(`[kveritas]   R:       cat(sprintf("KVERITAS_METRIC name=val_accuracy value=%.4f step=%d\n", acc, epoch))` + "\n")
-		fmt.Fprintln(os.Stderr, `[kveritas]   Julia:   println("KVERITAS_METRIC name=val_accuracy value=$(acc) step=$(epoch)")`)
-		fmt.Fprintln(os.Stderr, `[kveritas]   Shell:   echo "KVERITAS_METRIC name=val_accuracy value=0.9471 step=100"`)
+		fmt.Fprintln(os.Stderr, "[kveritas] Warning: no results captured in this run.")
+		fmt.Fprintln(os.Stderr, "[kveritas] Write one line per result to the file in $KVERITAS_OUT (or print it), from any language:")
+		// WriteString, not a Print verb: keeps the literal format directives in the examples.
+		os.Stderr.WriteString(`[kveritas]   Python: print(f"KV val_acc={acc:.4f} step={epoch}", file=open(os.environ.get("KVERITAS_OUT", os.devnull), "a"))` + "\n")
+		os.Stderr.WriteString(`[kveritas]   R:      cat(sprintf("KV val_acc=%.4f step=%d\n", acc, epoch), file = Sys.getenv("KVERITAS_OUT", "/dev/null"), append = TRUE)` + "\n")
+		os.Stderr.WriteString(`[kveritas]   Julia:  open(f -> println(f, "KV val_acc=$(acc) step=$(epoch)"), get(ENV, "KVERITAS_OUT", devnull), "a")` + "\n")
+		os.Stderr.WriteString(`[kveritas]   Shell:  echo "KV val_acc=0.9471 step=100" >> "${KVERITAS_OUT:-/dev/null}"` + "\n")
 		if p.heuristicCount > 0 {
 			fmt.Fprintf(os.Stderr, "[kveritas] Heuristic metrics captured: %d (may be incomplete)\n", p.heuristicCount)
 		}

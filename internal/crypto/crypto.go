@@ -62,7 +62,6 @@ func Payload(dataHash, nonce, signedAt string) string {
 	return fmt.Sprintf("%s:%s:%s", dataHash, nonce, signedAt)
 }
 
-// RandomNonce returns 32 lowercase hex characters (16 random bytes).
 func RandomNonce() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -107,7 +106,6 @@ func LoadPublicKey(pemData []byte) (*rsa.PublicKey, error) {
 	return rsaKey, nil
 }
 
-// LoadPrivateKey parses a PEM-encoded RSA private key (PKCS8 or PKCS1).
 func LoadPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
@@ -150,7 +148,6 @@ func VerifyPSS(pubKey *rsa.PublicKey, payload, sigBase64 string) error {
 	return rsa.VerifyPSS(pubKey, crypto.SHA256, h[:], sigBytes, opts)
 }
 
-// sortedMarshal produces JSON with recursively sorted object keys.
 func sortedMarshal(v interface{}) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {

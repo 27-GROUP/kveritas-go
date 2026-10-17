@@ -5,7 +5,7 @@ BIN     := bin/kveritas
 SERVER  := bin/kveritas-server
 GOPATH_BIN := $(shell $(GO) env GOPATH)/bin
 
-.PHONY: all build server deps test clean cross fmt vet
+.PHONY: all build server deps test clean cross wheels fmt vet
 
 all: build server
 
@@ -38,6 +38,9 @@ cross: deps
 	GOOS=linux   GOARCH=amd64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-linux-amd64 ./server
 	GOOS=darwin  GOARCH=arm64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-darwin-arm64 ./server
 	cd dist && sha256sum kveritas-* > SHA256SUMS
+
+wheels: cross
+	python3 scripts/wheels.py $(VERSION) dist
 
 clean:
 	rm -rf bin dist

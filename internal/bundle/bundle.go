@@ -79,7 +79,6 @@ func CollectSourceFiles(rootDir string) ([]string, error) {
 	return files, err
 }
 
-// Files are hashed concurrently for speed.
 func HashSourceFiles(rootDir string, files []string) (map[string]string, error) {
 	if len(files) == 0 {
 		return map[string]string{}, nil

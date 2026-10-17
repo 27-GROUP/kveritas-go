@@ -375,8 +375,8 @@ func RunNode(kvDir string, command []string, rank int) (int, error) {
 	stderrH := &countingHash{h: sha256.New()}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Stdin = os.Stdin
-	// The SDK inside must not start a second agent for this node.
-	cmd.Env = append(os.Environ(), "KVERITAS_NODE_AGENT=1")
+	// Results are reported by rank 0 on node 0; here they go nowhere.
+	cmd.Env = append(runEnv(), OutEnv+"="+os.DevNull)
 	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutH)
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrH)
 	// A helper process that outlives the command must not hold the record back.
@@ -398,41 +398,6 @@ func RunNode(kvDir string, command []string, rank int) (int, error) {
 	}
 	a.finish(exitCode, command, stdoutH, stderrH)
 	return exitCode, nil
-}
-
-// ObserveNode measures an already running process tree on a node other than node 0,
-// until it exits or done delivers the exit code. Its output is not captured.
-func ObserveNode(kvDir string, pid, rank int, done <-chan int) (bool, error) {
-	if !hardware.ProcessAlive(pid) {
-		return false, fmt.Errorf("process %d is not running", pid)
-	}
-	command, exe := processCommand(pid)
-	a := startNodeAgent(kvDir, rank)
-	a.sampler.SetPID(pid)
-	fmt.Fprintf(os.Stderr, "[kveritas] Node %d: measuring %v for the run on node 0\n", rank, command)
-	exitCode := -1
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-wait:
-	for {
-		select {
-		case code, ok := <-done:
-			if ok {
-				exitCode = code
-			}
-			break wait
-		case <-t.C:
-			if !hardware.ProcessAlive(pid) {
-				break wait
-			}
-		}
-	}
-	empty := &countingHash{h: sha256.New()}
-	envCmd := command
-	if exe != "" {
-		envCmd = []string{exe}
-	}
-	return a.finish(exitCode, envCmd, empty, empty), nil
 }
 
 func sampleCap() int {
