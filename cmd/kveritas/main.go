@@ -500,7 +500,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
-	cmdInit.Flags().BoolVar(&initNoHooks, "no-hooks", false, "harness mode: do not install Claude Code hooks (an SDK records actions instead)")
+	cmdInit.Flags().BoolVar(&initNoHooks, "no-hooks", false, "harness mode: do not install Claude Code hooks (actions are recorded another way)")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
 	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
 	cmdHarnessProve.Flags().StringVar(&harnessProveInput, "input", "", "file with the prompt/tool-input content to reveal and prove")
@@ -2098,9 +2098,9 @@ var cmdVerify = &cobra.Command{
 		}
 		for i, r := range runs {
 			if r.Launch == "attached" && r.OutputCaptured {
-				fmt.Fprintf(out, "Run %d:      attached (observed from the SDK call; output captured)\n", i+1)
+				fmt.Fprintf(out, "Run %d:      attached (observed from inside the process; output captured)\n", i+1)
 			} else if r.Launch == "attached" {
-				fmt.Fprintf(out, "Run %d:      attached (observed from the SDK call, not from process start; stdout not captured)\n", i+1)
+				fmt.Fprintf(out, "Run %d:      attached (observed from inside the process, not from process start; stdout not captured)\n", i+1)
 			}
 			if d := r.Distributed; d != nil {
 				fmt.Fprintf(out, "Run %d:      distributed, world size %d, %d node(s) (%s)\n", i+1, d.WorldSize, d.Nodes, d.Launcher)
@@ -2109,7 +2109,7 @@ var cmdVerify = &cobra.Command{
 				fmt.Fprintf(out, "Run %d:      notebook, %d cells recorded in execution order\n", i+1, len(r.Cells))
 			}
 			if r.ChannelGaps > 0 {
-				fmt.Fprintf(out, "Run %d:      %d gap(s) in the SDK channel\n", i+1, r.ChannelGaps)
+				fmt.Fprintf(out, "Run %d:      %d gap(s) in the result channel\n", i+1, r.ChannelGaps)
 			}
 		}
 

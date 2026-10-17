@@ -42,7 +42,7 @@ type observeResult struct {
 // notebook kernel) and reads results from a pipe the SDK passes in.
 var cmdObserve = &cobra.Command{
 	Use:    "observe --pid <pid> --channel fd:<n>",
-	Short:  "Observe an already running process (used by the SDKs)",
+	Short:  "Observe an already running process",
 	Hidden: true,
 	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
