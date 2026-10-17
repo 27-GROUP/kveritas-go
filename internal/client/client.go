@@ -290,6 +290,8 @@ type ServerAuditResult struct {
 		Summary   string    `json:"summary"`
 		Reason    string    `json:"reason"`
 		Anomalies []Anomaly `json:"anomalies"`
+		Reviewed  []string  `json:"files_reviewed"`
+		Skipped   []string  `json:"files_skipped"`
 	} `json:"code_audit"`
 	PaperCrosscheck struct {
 		Status      string       `json:"status"`

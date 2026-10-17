@@ -2317,6 +2317,12 @@ func renderServerAudit(r *client.ServerAuditResult) {
 		for _, a := range ca.Anomalies {
 			fmt.Fprintf(out, "      [%s] %s:%d %s\n", a.Severity, a.File, a.Line, a.Description)
 		}
+		if len(ca.Reviewed) > 0 {
+			fmt.Fprintf(out, "      reviewed %d file(s): %s\n", len(ca.Reviewed), strings.Join(ca.Reviewed, ", "))
+		}
+		if len(ca.Skipped) > 0 {
+			fmt.Fprintf(out, "      not reviewed (size limit): %d file(s)\n", len(ca.Skipped))
+		}
 	}
 
 	pc := r.PaperCrosscheck
