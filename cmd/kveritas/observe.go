@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mamadou2727/kveritas-go/internal/anchor"
 	"github.com/Mamadou2727/kveritas-go/internal/client"
+	"github.com/Mamadou2727/kveritas-go/internal/hardware"
 	"github.com/Mamadou2727/kveritas-go/internal/runner"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ var (
 	observeStderr     string
 	observeEchoStdout string
 	observeEchoStderr string
+	observeNode       int
 )
 
 type observeResult struct {
@@ -36,6 +38,7 @@ type observeResult struct {
 	Phases   int    `json:"phases"`
 	Seeds    int    `json:"seeds"`
 	Error    string `json:"error,omitempty"`
+	Node     int    `json:"node,omitempty"`
 }
 
 // Used by the SDK: the observer joins a running process (its own interpreter, a
@@ -58,6 +61,12 @@ var cmdObserve = &cobra.Command{
 
 func observe() (observeResult, error) {
 	res := observeResult{Kind: "result"}
+	if observeNode > 0 {
+		return observeOtherNode(res)
+	}
+	if observeChannel == "" {
+		return res, fmt.Errorf("--channel is required")
+	}
 	var channel *os.File
 	var err error
 	if path, ok := strings.CutPrefix(observeChannel, "fifo:"); ok {
@@ -160,6 +169,34 @@ func observe() (observeResult, error) {
 	return res, nil
 }
 
+// On a node other than node 0 there is no result channel: the process is measured
+// and the record handed to node 0. The SDK writes the exit code to stdin when its run
+// ends; stdin closing or the process exiting ends the measurement too.
+func observeOtherNode(res observeResult) (observeResult, error) {
+	res.Node = observeNode
+	// Node 0 may still be creating the session when the other nodes start.
+	kvDir, err := session.Find()
+	for i := 0; err != nil && i < 60 && hardware.ProcessAlive(observePID); i++ {
+		time.Sleep(time.Second)
+		kvDir, err = session.Find()
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d has no session folder (%v); the run's report will not include this node\n", observeNode, err)
+		kvDir = ""
+	}
+	done := make(chan int, 1)
+	go func() {
+		var code int
+		if _, err := fmt.Fscan(os.Stdin, &code); err == nil {
+			done <- code
+		}
+		close(done)
+	}()
+	delivered, err := runner.ObserveNode(kvDir, observePID, observeNode, done)
+	res.Recorded = delivered
+	return res, err
+}
+
 // An empty spec means the descriptor was not passed (0).
 func fdNumber(spec string) (int, error) {
 	if spec == "" {
@@ -194,5 +231,5 @@ func init() {
 	cmdObserve.Flags().StringVar(&observeChannel, "channel", "", "result channel, fd:<n> or fifo:<path>")
 	cmdObserve.Flags().BoolVar(&observeLive, "live", false, "stream hardware samples to stdout while observing")
 	_ = cmdObserve.MarkFlagRequired("pid")
-	_ = cmdObserve.MarkFlagRequired("channel")
+	cmdObserve.Flags().IntVar(&observeNode, "node", 0, "measure this process as node N of a multi-node run, for node 0")
 }

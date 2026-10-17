@@ -258,80 +258,134 @@ func (c *countingHash) Write(p []byte) (int, error) {
 
 func (c *countingHash) sum() string { return hex.EncodeToString(c.h.Sum(nil)) }
 
+type nodeAgent struct {
+	rank     int
+	machine  string
+	dir      string
+	path     string
+	hw       session.HardwareInfo
+	start    time.Time
+	sampler  *hardware.Sampler
+	st       nodeStatus
+	mu       sync.Mutex
+	stopBeat chan struct{}
+}
+
 // Measures this node the way node 0 measures its own run and hands the record to
-// node 0 through the shared session folder. An empty kvDir still runs the command.
-func RunNode(kvDir string, command []string, rank int) (int, error) {
-	if len(command) == 0 {
-		return 0, fmt.Errorf("no command specified")
-	}
-	machine := hardware.MachineID()
-	dir := ""
+// node 0 through the shared session folder. An empty kvDir measures nothing.
+func startNodeAgent(kvDir string, rank int) *nodeAgent {
+	a := &nodeAgent{rank: rank, machine: hardware.MachineID(), stopBeat: make(chan struct{})}
 	if kvDir != "" {
-		dir = filepath.Join(kvDir, nodesDir)
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		a.dir = filepath.Join(kvDir, nodesDir)
+		if err := os.MkdirAll(a.dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d cannot reach the session (%v); running unmeasured\n", rank, err)
-			dir = ""
+			a.dir = ""
 		}
 	}
-	path := ""
-	if dir != "" {
-		path = filepath.Join(dir, fmt.Sprintf("node-%d-%s.json", rank, machine))
+	if a.dir != "" {
+		a.path = filepath.Join(a.dir, fmt.Sprintf("node-%d-%s.json", rank, a.machine))
 	}
-
-	hw := hardware.Snapshot()
-	hw.MachineID = machine
-	start := time.Now().UTC()
-	st := nodeStatus{State: "running", Node: rank, MachineID: machine}
-	var stMu sync.Mutex
-	write := func() {
-		if path == "" {
-			return
-		}
-		stMu.Lock()
-		defer stMu.Unlock()
-		if id := currentRun(dir, start); id != "" {
-			st.RunID = id
-		}
-		st.Beat++
-		if err := writeJSONAtomic(path, st); err != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d status not written: %v\n", rank, err)
-		}
-	}
-	write()
-	fmt.Fprintf(os.Stderr, "[kveritas] Node %d: measuring %v for the run on node 0\n", rank, command)
-
-	sampler := hardware.NewSampler(100 * time.Millisecond)
-	sampler.Start()
-	stdoutH := &countingHash{h: sha256.New()}
-	stderrH := &countingHash{h: sha256.New()}
-	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutH)
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrH)
-	// A helper process that outlives the command must not hold the record back.
-	cmd.WaitDelay = 3 * time.Second
-	if err := cmd.Start(); err != nil {
-		sampler.Stop()
-		if path != "" {
-			os.Remove(path)
-		}
-		return 0, fmt.Errorf("failed to start %q: %w", command[0], err)
-	}
-	sampler.SetPID(cmd.Process.Pid)
-
-	stopBeat := make(chan struct{})
+	a.hw = hardware.Snapshot()
+	a.hw.MachineID = a.machine
+	a.start = time.Now().UTC()
+	a.st = nodeStatus{State: "running", Node: rank, MachineID: a.machine}
+	a.write()
+	a.sampler = hardware.NewSampler(100 * time.Millisecond)
+	a.sampler.Start()
 	go func() {
 		t := time.NewTicker(nodeBeat)
 		defer t.Stop()
 		for {
 			select {
-			case <-stopBeat:
+			case <-a.stopBeat:
 				return
 			case <-t.C:
-				write()
+				a.write()
 			}
 		}
 	}()
+	return a
+}
+
+func (a *nodeAgent) write() {
+	if a.path == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if id := currentRun(a.dir, a.start); id != "" {
+		a.st.RunID = id
+	}
+	a.st.Beat++
+	if err := writeJSONAtomic(a.path, a.st); err != nil {
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d status not written: %v\n", a.rank, err)
+	}
+}
+
+func (a *nodeAgent) abandon() {
+	close(a.stopBeat)
+	a.sampler.Stop()
+	if a.path != "" {
+		os.Remove(a.path)
+	}
+}
+
+// Returns whether the record reached a run on node 0.
+func (a *nodeAgent) finish(exitCode int, envCmd []string, stdoutH, stderrH *countingHash) bool {
+	end := time.Now().UTC()
+	close(a.stopBeat)
+	samples := hardware.Decimate(a.sampler.Stop(), sampleCap())
+	envDig, _, _ := envDigest(envCmd)
+	rec := &session.NodeRecord{
+		Node:            a.rank,
+		MachineID:       a.machine,
+		StartAt:         a.start,
+		EndAt:           end,
+		DurationSec:     end.Sub(a.start).Seconds(),
+		ExitCode:        exitCode,
+		Hardware:        a.hw,
+		StdoutHash:      stdoutH.sum(),
+		StderrHash:      stderrH.sum(),
+		StdoutLines:     stdoutH.lines,
+		EnvDigest:       envDig,
+		HardwareSamples: samples,
+	}
+	a.mu.Lock()
+	a.st.State, a.st.Record = "done", rec
+	a.mu.Unlock()
+	a.write()
+	switch {
+	case a.path == "":
+		return false
+	case a.st.RunID == "":
+		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d found no run on node 0; its measurement was not joined to a run\n", a.rank)
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "[kveritas] Node %d: %d samples delivered to node 0 (exit %d)\n", a.rank, len(samples), exitCode)
+	return true
+}
+
+func RunNode(kvDir string, command []string, rank int) (int, error) {
+	if len(command) == 0 {
+		return 0, fmt.Errorf("no command specified")
+	}
+	a := startNodeAgent(kvDir, rank)
+	fmt.Fprintf(os.Stderr, "[kveritas] Node %d: measuring %v for the run on node 0\n", rank, command)
+	stdoutH := &countingHash{h: sha256.New()}
+	stderrH := &countingHash{h: sha256.New()}
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Stdin = os.Stdin
+	// The SDK inside must not start a second agent for this node.
+	cmd.Env = append(os.Environ(), "KVERITAS_NODE_AGENT=1")
+	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutH)
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrH)
+	// A helper process that outlives the command must not hold the record back.
+	cmd.WaitDelay = 3 * time.Second
+	if err := cmd.Start(); err != nil {
+		a.abandon()
+		return 0, fmt.Errorf("failed to start %q: %w", command[0], err)
+	}
+	a.sampler.SetPID(cmd.Process.Pid)
 
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
@@ -342,37 +396,43 @@ func RunNode(kvDir string, command []string, rank int) (int, error) {
 			exitCode = -1
 		}
 	}
-	end := time.Now().UTC()
-	close(stopBeat)
-	samples := hardware.Decimate(sampler.Stop(), sampleCap())
-	envDig, _, _ := envDigest(command)
-
-	rec := &session.NodeRecord{
-		Node:            rank,
-		MachineID:       machine,
-		StartAt:         start,
-		EndAt:           end,
-		DurationSec:     end.Sub(start).Seconds(),
-		ExitCode:        exitCode,
-		Hardware:        hw,
-		StdoutHash:      stdoutH.sum(),
-		StderrHash:      stderrH.sum(),
-		StdoutLines:     stdoutH.lines,
-		EnvDigest:       envDig,
-		HardwareSamples: samples,
-	}
-	stMu.Lock()
-	st.State, st.Record = "done", rec
-	stMu.Unlock()
-	write()
-	switch {
-	case path == "":
-	case st.RunID == "":
-		fmt.Fprintf(os.Stderr, "[kveritas] Warning: node %d found no run on node 0; its measurement was not joined to a run\n", rank)
-	default:
-		fmt.Fprintf(os.Stderr, "[kveritas] Node %d: %d samples delivered to node 0 (exit %d)\n", rank, len(samples), exitCode)
-	}
+	a.finish(exitCode, command, stdoutH, stderrH)
 	return exitCode, nil
+}
+
+// ObserveNode measures an already running process tree on a node other than node 0,
+// until it exits or done delivers the exit code. Its output is not captured.
+func ObserveNode(kvDir string, pid, rank int, done <-chan int) (bool, error) {
+	if !hardware.ProcessAlive(pid) {
+		return false, fmt.Errorf("process %d is not running", pid)
+	}
+	command, exe := processCommand(pid)
+	a := startNodeAgent(kvDir, rank)
+	a.sampler.SetPID(pid)
+	fmt.Fprintf(os.Stderr, "[kveritas] Node %d: measuring %v for the run on node 0\n", rank, command)
+	exitCode := -1
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+wait:
+	for {
+		select {
+		case code, ok := <-done:
+			if ok {
+				exitCode = code
+			}
+			break wait
+		case <-t.C:
+			if !hardware.ProcessAlive(pid) {
+				break wait
+			}
+		}
+	}
+	empty := &countingHash{h: sha256.New()}
+	envCmd := command
+	if exe != "" {
+		envCmd = []string{exe}
+	}
+	return a.finish(exitCode, envCmd, empty, empty), nil
 }
 
 func sampleCap() int {
