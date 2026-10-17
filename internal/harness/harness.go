@@ -234,12 +234,13 @@ type Proof struct {
 }
 
 type ProofResult struct {
-	Valid       bool
-	Detail      string
-	Entry       Entry
-	InputMatch  bool
-	OutputMatch bool
-	SessionID   string
+	Valid        bool
+	Detail       string
+	Entry        Entry
+	InputMatch   bool
+	OutputMatch  bool
+	SessionID    string
+	SelfAttested bool
 }
 
 func findEntry(entries []Entry, index int) *Entry {
@@ -255,7 +256,7 @@ func findEntry(entries []Entry, index int) *Entry {
 // against the entry's committed hash so only genuinely-recorded content can be
 // proven. The session must already verify.
 func BuildProof(r *Report, index int, input, output []byte) (*Proof, error) {
-	if res := Verify(r); res.Verdict != "VERIFIED" {
+	if res := Verify(r); res.Verdict != "VERIFIED" && res.Verdict != "SELF-ATTESTED" {
 		return nil, fmt.Errorf("session does not verify (%s): %s", res.Verdict, res.Detail)
 	}
 	e := findEntry(r.Entries, index)
@@ -287,14 +288,15 @@ func VerifyProof(p *Proof) ProofResult {
 	if p.Kind != "kveritas-harness-proof" {
 		return ProofResult{Detail: "not a harness proof"}
 	}
-	if res := Verify(&p.Report); res.Verdict != "VERIFIED" {
+	res := Verify(&p.Report)
+	if res.Verdict != "VERIFIED" && res.Verdict != "SELF-ATTESTED" {
 		return ProofResult{Detail: fmt.Sprintf("session chain %s: %s", res.Verdict, res.Detail)}
 	}
 	e := findEntry(p.Report.Entries, p.Index)
 	if e == nil {
 		return ProofResult{Detail: "named entry is not in the chain"}
 	}
-	out := ProofResult{Entry: *e, SessionID: p.Report.Genesis.SessionID}
+	out := ProofResult{Entry: *e, SessionID: p.Report.Genesis.SessionID, SelfAttested: res.Verdict == "SELF-ATTESTED"}
 	if p.Input != "" {
 		b, err := base64.StdEncoding.DecodeString(p.Input)
 		if err != nil || crypto.HashBytes(b) != e.InputHash {
@@ -521,6 +523,15 @@ func Verify(r *Report) Result {
 		return res
 	}
 
+	// Valid signatures prove the chain is intact, not who signed it: a session signed
+	// with any key but the K-Veritas server key is self-attested, as reports are.
+	for _, pem := range []string{r.Genesis.Server.PublicKeyPEM, r.Seal.Server.PublicKeyPEM} {
+		if ok, err := crypto.OriginConfirmed(pem, nil); err != nil || !ok {
+			res.Verdict = "SELF-ATTESTED"
+			res.Detail = "chain and signatures are valid, but signed with a key other than the K-Veritas server key"
+			return res
+		}
+	}
 	res.Verdict = "VERIFIED"
 	return res
 }

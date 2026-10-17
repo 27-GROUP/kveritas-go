@@ -233,7 +233,11 @@ var cmdVerifyHarnessProof = &cobra.Command{
 			fmt.Printf("REJECTED: %s\n", res.Detail)
 			return fmt.Errorf("proof did not verify")
 		}
-		fmt.Printf("VERIFIED\n")
+		if res.SelfAttested {
+			fmt.Printf("SELF-ATTESTED (session signed with a key other than the K-Veritas server key)\n")
+		} else {
+			fmt.Printf("VERIFIED\n")
+		}
 		fmt.Printf("Session:   %s\n", res.SessionID)
 		fmt.Printf("Entry:     #%d  %s  (%s)\n", res.Entry.Index, res.Entry.Type, res.Entry.Actor)
 		if res.InputMatch {
@@ -405,6 +409,7 @@ var (
 	initOperator   string
 	initDisclosure string
 	initShowNames  bool
+	initNoHooks    bool
 )
 
 const defaultDesignation = `{"designate":["tool_call","file_effect","model_turn","spawn","self_claim","approval"]}`
@@ -495,6 +500,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
+	cmdInit.Flags().BoolVar(&initNoHooks, "no-hooks", false, "harness mode: do not install Claude Code hooks (an SDK records actions instead)")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
 	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
 	cmdHarnessProve.Flags().StringVar(&harnessProveInput, "input", "", "file with the prompt/tool-input content to reveal and prove")
@@ -586,10 +592,12 @@ func harnessInit(kvDir, wd, machineID, sessionID string) error {
 		return err
 	}
 
-	hooksInstalled := true
-	if err := installClaudeHooks(wd); err != nil {
-		hooksInstalled = false
-		fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not install Claude Code hooks: %v\n", err)
+	hooksInstalled := !initNoHooks
+	if hooksInstalled {
+		if err := installClaudeHooks(wd); err != nil {
+			hooksInstalled = false
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not install Claude Code hooks: %v\n", err)
+		}
 	}
 
 	fmt.Printf("Harness session initialized: %s\n", sessionID)
@@ -685,6 +693,7 @@ var (
 	recordOutput     string
 	recordOutputFile string
 	recordHook       string
+	recordJSON       bool
 )
 
 var cmdRecord = &cobra.Command{
@@ -729,6 +738,9 @@ var cmdRecord = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if recordJSON {
+			return printJSON(map[string]interface{}{"index": committed.Index, "actor": committed.Actor, "type": committed.Type, "link": committed.Link})
+		}
 		fmt.Printf("Recorded entry %d: actor=%s type=%s\n", committed.Index, committed.Actor, committed.Type)
 		return nil
 	},
@@ -750,6 +762,7 @@ func init() {
 	cmdRecord.Flags().StringVar(&recordOutput, "output", "", "inline output content to hash")
 	cmdRecord.Flags().StringVar(&recordOutputFile, "output-file", "", "file whose content is the output")
 	cmdRecord.Flags().StringVar(&recordHook, "hook", "", "Claude Code hook mode: pre, post, or prompt (reads the hook payload from stdin)")
+	cmdRecord.Flags().BoolVar(&recordJSON, "json", false, "print the recorded entry as JSON")
 }
 
 type hookInput struct {
@@ -940,6 +953,9 @@ func harnessSeal(kvDir string, sess *session.Session) error {
 	for _, e := range entries {
 		actors[e.Actor]++
 	}
+	if sealJSON {
+		return printJSON(map[string]interface{}{"session": outPath, "entries": len(entries), "chain_head": chainHead, "actors": actors})
+	}
 	fmt.Printf("Session sealed: %s\n", outPath)
 	fmt.Printf("Entries:     %d\n", len(entries))
 	fmt.Printf("Chain head:  %s\n", chainHead)
@@ -980,7 +996,9 @@ func verifyHarnessReport(report *harness.Report) error {
 	g := report.Genesis
 
 	fmt.Fprintln(out, res.Verdict)
-	if res.Verdict != "VERIFIED" {
+	if res.Verdict == "SELF-ATTESTED" {
+		fmt.Fprintf(out, "Chain and signatures valid, but signed with an author-supplied key, not K-Veritas.\n")
+	} else if res.Verdict != "VERIFIED" {
 		fmt.Fprintf(out, "Reason: %s\n", res.Detail)
 		if res.FailAtIndex > 0 {
 			fmt.Fprintf(out, "Localized: entry %d (actor %s)\n", res.FailAtIndex, res.FailAtActor)
