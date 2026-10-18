@@ -772,6 +772,9 @@ func (b *builder) verificationSection(seal *session.SealRecord) {
 	if seal.CheckoutBundleHash != "" {
 		rows = append(rows, []string{"Code bundle hash", code(seal.CheckoutBundleHash)})
 	}
+	if cp := seal.LedgerCheckpoint; cp != nil {
+		rows = append(rows, []string{"Ledger checkpoint", fmt.Sprintf("entry #%d, %s", cp.Seq, cp.At)})
+	}
 	b.table([]string{"Field", "Value"}, []float64{1, 3.2}, rows)
 
 	anchored, late := 0, 0

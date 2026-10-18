@@ -52,12 +52,22 @@ type SealAnchor struct {
 	RunDigest  string `json:"run_digest"`
 }
 
+type CheckpointCheck struct {
+	Seq        int64  `json:"seq"`
+	At         string `json:"at"`
+	Signed     bool   `json:"signed"`
+	Consistent bool   `json:"consistent"`
+	HeadSeq    int64  `json:"head_seq"`
+	Reason     string `json:"reason"`
+}
+
 type SealResponse struct {
-	Nonce             string `json:"nonce"`
-	SignedAt          string `json:"signed_at"`
-	Signature         string `json:"signature"`
-	SignedMessageHash string `json:"signed_message_hash"`
-	PublicKeyPEM      string `json:"public_key_pem"`
+	Nonce             string                    `json:"nonce"`
+	SignedAt          string                    `json:"signed_at"`
+	Signature         string                    `json:"signature"`
+	SignedMessageHash string                    `json:"signed_message_hash"`
+	PublicKeyPEM      string                    `json:"public_key_pem"`
+	Checkpoint        *session.LedgerCheckpoint `json:"checkpoint"`
 }
 
 type RunAnchor struct {
@@ -283,6 +293,10 @@ type ServerAuditResult struct {
 		HMCAFlags        []string      `json:"hmca_flags"`
 		RunAnchors       []AnchorCheck `json:"run_anchors"`
 		RunAnchorSummary string        `json:"run_anchor_summary"`
+		LedgerCheckpoint struct {
+			Report    *CheckpointCheck `json:"report"`
+			Published *CheckpointCheck `json:"published"`
+		} `json:"ledger_checkpoint"`
 	} `json:"crypto_status"`
 	CodeAudit struct {
 		Status    string    `json:"status"`

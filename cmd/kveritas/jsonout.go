@@ -23,8 +23,15 @@ type verifyDoc struct {
 	Coherence        *session.HMCAResult       `json:"coherence,omitempty"`
 	Runs             []runDoc                  `json:"runs,omitempty"`
 	BundleMatch      *bool                     `json:"bundle_match,omitempty"`
+	LedgerCheckpoint *checkpointDoc            `json:"ledger_checkpoint,omitempty"`
 	Audit            *client.ServerAuditResult `json:"server_audit,omitempty"`
 	AuditError       string                    `json:"server_audit_error,omitempty"`
+}
+
+type checkpointDoc struct {
+	Seq    int64  `json:"seq"`
+	At     string `json:"at"`
+	Signed bool   `json:"signed"`
 }
 
 type runDoc struct {

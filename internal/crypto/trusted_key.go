@@ -1,6 +1,9 @@
 package crypto
 
-import "crypto/rsa"
+import (
+	"crypto/rsa"
+	"fmt"
+)
 
 // trustedServerKeyPEM is the K-Veritas production signing key, pinned into the
 // binary. A report is authentic only if its embedded key matches; any other key
@@ -47,4 +50,17 @@ func OriginConfirmed(embeddedPEM string, anchorPEM []byte) (bool, error) {
 		return false, err
 	}
 	return SamePublicKey(embedded, anchor), nil
+}
+
+func CheckpointPayload(seq int64, entryHash, at string) string {
+	return fmt.Sprintf("kveritas-ledger-checkpoint:%d:%s:%s", seq, entryHash, at)
+}
+
+// A checkpoint counts only when the pinned server key signed it.
+func CheckpointSigned(seq int64, entryHash, at, signature string) bool {
+	key, err := TrustedServerKey()
+	if err != nil {
+		return false
+	}
+	return VerifyPSS(key, CheckpointPayload(seq, entryHash, at), signature) == nil
 }

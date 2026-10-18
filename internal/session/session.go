@@ -354,6 +354,16 @@ type SealRecord struct {
 	CheckoutBundleHash string           `json:"checkout_bundle_hash,omitempty"`
 	RunHistory         []LedgerRunEntry `json:"run_history,omitempty"`
 	TotalRunCount      int              `json:"total_run_count,omitempty"`
+	// The server's signed statement of the ledger's length at seal time, so a ledger
+	// later cut short below this report is detectable by anyone holding it.
+	LedgerCheckpoint *LedgerCheckpoint `json:"ledger_checkpoint,omitempty"`
+}
+
+type LedgerCheckpoint struct {
+	Seq       int64  `json:"seq"`
+	EntryHash string `json:"entry_hash"`
+	At        string `json:"at"`
+	Signature string `json:"signature"`
 }
 
 func Find() (string, error) {

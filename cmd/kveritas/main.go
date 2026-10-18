@@ -1886,6 +1886,7 @@ func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash strin
 		SignedMessageHash: resp.SignedMessageHash,
 		PublicKeyPEM:      resp.PublicKeyPEM,
 		ServerURL:         sess.ServerURL,
+		LedgerCheckpoint:  resp.Checkpoint,
 	}, nil
 }
 
@@ -2142,6 +2143,17 @@ var cmdVerify = &cobra.Command{
 		fmt.Fprintf(out, "Machine:    %s\n", sess.MachineID)
 		fmt.Fprintf(out, "Runs:       %d\n", len(runs))
 		fmt.Fprintf(out, "Data hash:  %s\n", seal.DataHash)
+		if cp := seal.LedgerCheckpoint; cp != nil {
+			signed := crypto.CheckpointSigned(cp.Seq, cp.EntryHash, cp.At, cp.Signature)
+			if signed {
+				fmt.Fprintf(out, "Ledger:     checkpoint at entry #%d (%s), signed by K-Veritas\n", cp.Seq, cp.At)
+			} else {
+				fmt.Fprintf(out, "Ledger:     checkpoint signature INVALID (entry #%d)\n", cp.Seq)
+			}
+			if jr != nil {
+				jr.LedgerCheckpoint = &checkpointDoc{Seq: cp.Seq, At: cp.At, Signed: signed}
+			}
+		}
 
 		// Coherence is part of the signed data, so report it offline too. Re-analysis
 		// is shown when it disagrees: the detector improves, sealed reports do not.
@@ -2308,6 +2320,20 @@ func renderServerAudit(r *client.ServerAuditResult) {
 	}
 	if cs.Ledger != nil && cs.Ledger.SignedAt != "" {
 		fmt.Fprintf(out, "  Ledger:               server signed this hash on %s\n", cs.Ledger.SignedAt)
+	}
+	for _, c := range []struct {
+		label string
+		check *client.CheckpointCheck
+	}{{"this report's", cs.LedgerCheckpoint.Report}, {"the published", cs.LedgerCheckpoint.Published}} {
+		switch cp := c.check; {
+		case cp == nil:
+		case !cp.Signed:
+			fmt.Fprintf(out, "  Ledger checkpoint:    %s checkpoint is not signed by K-Veritas\n", c.label)
+		case cp.Consistent:
+			fmt.Fprintf(out, "  Ledger checkpoint:    still holds entry #%d from %s checkpoint (now %d entries)\n", cp.Seq, c.label, cp.HeadSeq)
+		default:
+			fmt.Fprintf(out, "  Ledger checkpoint:    TRUNCATED, %s\n", cp.Reason)
+		}
 	}
 	if len(cs.RunAnchors) > 0 {
 		fmt.Fprintf(out, "  Run anchors:          %s\n", cs.RunAnchorSummary)
