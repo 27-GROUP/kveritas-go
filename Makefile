@@ -1,8 +1,8 @@
 GO      ?= go
-# No release tags: a build is named by its UTC date and time, newest highest, and
-# told apart by its commit.
-VERSION ?= $(shell date -u +%Y.%m.%d.%H%M | awk -F. '{printf "%d.%d.%d.%d", $$1, $$2, $$3, $$4}')
-COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+# No release tags: a build is named by its UTC date and time and told apart by its
+# commit. := reads the clock once, so binaries, BUILD and wheels share one version.
+VERSION := $(or $(VERSION),$(shell date -u +%Y.%m.%d.%H%M | awk -F. '{printf "%d.%d.%d.%d", $$1, $$2, $$3, $$4}'))
+COMMIT  := $(or $(COMMIT),$(shell git rev-parse --short HEAD 2>/dev/null))
 GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 BIN     := bin/kveritas
 SERVER  := bin/kveritas-server
