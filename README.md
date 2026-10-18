@@ -7,15 +7,15 @@
 
 # K-Veritas Go
 
-Cryptographic verification for computational experiments. Binds a result to the code, hardware, and time that produced it, in a signed PDF anyone can verify. Any language, no runtime deps, single static binary.
+Cryptographic verification for computational experiments. Binds a result to the code, hardware and time that produced it, in a signed PDF anyone can verify. Any language. One static binary.
 
-**What it proves.** These numbers came from this code, at this time, unchanged since. Not that the experiment is correct: that stays with the reviewer.
+**Proves:** these numbers came from this code, at this time, unchanged. Not that the experiment is correct.
 
-**Faking it.** Several independent checks, and everything run is sealed, an attempt to cheat included. A careful look at the artifact exposes it, and it cannot be denied.
+**Faking it:** every run is sealed, failed ones too. An attempt shows, and cannot be denied.
 
-K-Veritas is the official implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
+Official implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
 
-**Platform.** Linux, macOS, Windows. The activity map is Linux only.
+Linux, macOS, Windows. Activity map: Linux only.
 
 ## Install
 
@@ -34,15 +34,15 @@ make build
 ## Quick start
 
 ```bash
-kveritas run --seal -- python train.py   # run (starts a session if needed), sign, write report.pdf
-kveritas python train.py                 # same as kveritas run -- python train.py
-kveritas seal -o report.pdf              # sign separately, after several runs
-kveritas verify report.pdf               # verify (add --offline to skip the server)
+kveritas run --seal -- python train.py   # run, sign, write report.pdf
+kveritas python train.py                 # short for kveritas run -- python train.py
+kveritas seal -o report.pdf              # sign after several runs
+kveritas verify report.pdf               # --offline skips the server
 ```
 
 ## Result lines
 
-Write to the file in `$KVERITAS_OUT`, any language. The terminal shows only your program's output. Printing them works too. Everything captured is signed.
+Write to the file in `$KVERITAS_OUT`, any language. Kept out of your terminal. Printing works too.
 
 ```python
 kv = open(os.environ.get("KVERITAS_OUT", os.devnull), "a", buffering=1)
@@ -59,33 +59,34 @@ print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}", file=kv)
 | `KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]` | Workload card. |
 | `KV artifact role=model\|dataset [name=<ref>] path=<file> visibility=public\|private` | Model or dataset. |
 
-Strict: a line like `KV cache: 2 GB` is ignored. The earlier `KVERITAS_METRIC`/`PHASE`/`CLAIM`/`INPUT`/`MODEL`/`WORKLOAD`/`ARTIFACT` lines still work. Metric-like output (`loss: 0.24 - val_acc: 0.94`) is picked up as heuristic.
+Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work. Metric-like output (`loss: 0.24 - val_acc: 0.94`) is picked up as heuristic.
 
 ## Features
 
-- **HMCA (execution coherence).** Metric-blind. Samples per-process telemetry at ~10 Hz, scores whether the channels move as one process. Verdict: PASS / WARN / FAIL / N/A.
-- **Compute-cost.** From a model card, checks declared FLOPs against time, wall-clock, energy, and memory bounds. Verdict: PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A.
-- **Provenance + disclosure.** Signed Merkle timeline of snapshots. Disclosure per session (redacted / names / open); integrity always committed. `.kveritasignore` withholds files as hash-only leaves.
-- **Selective-disclosure proofs.** Prove one file, or one agent prompt/output, was in a signed snapshot without revealing the rest.
-- **Checkout bundle.** `--disclosure open` writes a source bundle bound to the report; files re-hashed on checkout.
-- **Benchmark artifacts.** Attest a score without exposing the model or data (public content hash, or private salted commitment).
-- **Run anchors.** Each run is anchored at the server when it ends, failed and interrupted ones too. A changed run cannot be sealed.
-- **Paper-style report.** Abstract from the signed data, numbered sections, full detail in the appendix. No machine name.
-- **Agent sessions.** `init --harness` records a hash-chained log of agent actions; verify localizes tampering to the exact entry.
-- **Authenticity.** Signed by the K-Veritas key: `VERIFIED`. Any other key (e.g. `--local`): `SELF-ATTESTED`. The ledger is a hash chain.
+- **Coherence (HMCA).** Metric-blind. Per-process telemetry at ~10 Hz; do the channels move as one process. PASS / WARN / FAIL / N/A.
+- **Multi-node.** Same command on every node (`srun kveritas run -- ...`). Every node measured, judged on its own.
+- **Compute.** Declared FLOPs vs time, energy, memory. PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A.
+- **Provenance.** Signed Merkle timeline. Disclosure: redacted / names / open. `.kveritasignore` keeps files hash-only.
+- **Proofs.** Reveal one file, or one agent prompt/output, nothing else.
+- **Checkout bundle.** `--disclosure open` binds the source to the report.
+- **Artifacts.** Attest a model or dataset by public hash or private commitment.
+- **Run anchors.** Every run anchored at the server when it ends, failed ones too.
+- **Ledger.** Public hash chain plus signed checkpoints, published at [KVERITAS-SCIENCE/ledger](https://github.com/KVERITAS-SCIENCE/ledger). A ledger cut short is caught.
+- **Origin.** K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
+- **Agent sessions.** `init --harness`: hash-chained log of agent actions.
 
 ## Commands
 
-| Command | What it does |
+| Command | |
 |---|---|
-| `init [--local] [--harness] [--disclosure redacted\|names\|open] [--show-names]` | Start a session. |
-| `run -- <cmd>` | Run a command under kveritas. |
-| `seal [-o path] [--local-key pem]` | Sign the session into a PDF. |
-| `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf] [--public-key pem]` | Local checks plus server audit. |
-| `prove <report.pdf> <file...>` / `verify-proof <proof.json>` | File proof. |
-| `harness-prove <session.json> <index\|--tool-use-id ID>` / `verify-harness-proof <proof.json>` | Prompt/output proof. |
-| `checkout <bundle.zip> <[run:]snapshot> <dir> [--report r.pdf]` | Reconstruct a snapshot. |
-| `check --claims c.json --report r.pdf` / `generate-claims --report r.pdf` | Check or derive paper claims. |
+| `run [--seal [path]] [--show-results] [--node-rank N] -- <cmd>` | Run. Starts a session if needed. |
+| `init [--local] [--harness] [--disclosure redacted\|names\|open]` | Start a session with options. |
+| `seal [-o path]` | Sign into a PDF. |
+| `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |
+| `prove` / `verify-proof` | File proof. |
+| `harness-prove` / `verify-harness-proof` | Agent prompt/output proof. |
+| `checkout <bundle.zip> <[run:]snapshot> <dir>` | Rebuild a snapshot. |
+| `check --claims c.json --report r.pdf` | Check paper claims. |
 | `status` / `update` / `clean` | State, self-update, remove session. |
 
 ## Cryptographic protocol
