@@ -1,0 +1,59 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - name: end to end
+        run: |
+          KV="$RUNNER_TEMP/kveritas$(go env GOEXE)"
+          go build -o "$KV" ./cmd/kveritas
+          mkdir -p "$RUNNER_TEMP/e2e/keys" && cd "$RUNNER_TEMP/e2e"
+          openssl genrsa -out keys/private.pem 2048
+          cat > job.py <<'PY'
+          import os, time
+          kv = open(os.environ.get("KVERITAS_OUT", os.devnull), "a", buffering=1)
+          print("KV seed 7", file=kv)
+          t = time.time()
+          step = 0
+          while time.time() - t < 3:
+              sum(i * i for i in range(100000))
+              step += 1
+              print(f"KV acc={min(0.99, step / 100):.4f} step={step}", file=kv)
+          print("KV claim acc=0.99", file=kv)
+          print("KV cache size=2GB")
+          PY
+          "$KV" init --local
+          "$KV" run --seal -- python job.py
+          "$KV" verify --offline --json report.pdf > verify.json
+          python - <<'PY'
+          import json
+          d = json.load(open("verify.json"))
+          run = d["runs"][0]
+          assert d["status"] == "SELF_ATTESTED", d["status"]
+          assert len(run["metrics"]) > 5, len(run["metrics"])
+          assert len(run["claims"]) == 1 and len(run["seeds"]) == 1
+          print("verified:", d["status"], len(run["metrics"]), "metrics")
+          PY
