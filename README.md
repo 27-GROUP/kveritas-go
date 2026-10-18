@@ -21,7 +21,7 @@ K-Veritas is the official implementation of [Computer Science Conferences Should
 
 ```bash
 # uv or pip (binary only)
-uv tool install kveritas --find-links https://github.com/27-GROUP/kveritas-releases/releases/expanded_assets/v0.9.9
+uv tool install kveritas --find-links https://github.com/27-GROUP/kveritas-releases/releases/expanded_assets/v0.9.10
 
 # Prebuilt binary (also darwin/windows, amd64/arm64)
 curl -fsSL https://github.com/27-GROUP/kveritas-releases/raw/main/bin/kveritas-linux-amd64 -o kveritas
