@@ -71,7 +71,6 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work. Metric-l
 - **Checkout bundle.** `--disclosure open` binds the source to the report.
 - **Artifacts.** Attest a model or dataset by public hash or private commitment.
 - **Run anchors.** Every run anchored at the server when it ends, failed ones too.
-- **Ledger.** Public hash chain plus signed checkpoints, published at [KVERITAS-SCIENCE/ledger](https://github.com/KVERITAS-SCIENCE/ledger). A ledger cut short is caught.
 - **Origin.** K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
 - **Agent sessions.** `init --harness`: hash-chained log of agent actions.
 
