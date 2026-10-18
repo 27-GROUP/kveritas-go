@@ -21,6 +21,7 @@ def record_line(name: str, data: bytes) -> str:
 
 
 def build(version: str, dist: str) -> None:
+    names = []
     for binary, tag in PLATFORMS.items():
         exe = "kveritas.exe" if binary.endswith(".exe") else "kveritas"
         info = f"kveritas-{version}.dist-info"
@@ -42,7 +43,13 @@ def build(version: str, dist: str) -> None:
                 zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
                 zi.external_attr = (0o100755 if "/scripts/" in name else 0o100644) << 16
                 z.writestr(zi, data, zipfile.ZIP_DEFLATED)
+        names.append(os.path.basename(out))
         print(out)
+    # The links page pip and uv read with --find-links, served from the releases repo.
+    with open(os.path.join(dist, "index.html"), "w") as f:
+        f.write("<!doctype html>\n<html><body>\n")
+        f.writelines(f'<a href="{n}">{n}</a>\n' for n in names)
+        f.write("</body></html>\n")
 
 
 if __name__ == "__main__":

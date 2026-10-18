@@ -21,7 +21,7 @@ Linux, macOS, Windows. Activity map: Linux only.
 
 ```bash
 # uv or pip (binary only)
-uv tool install kveritas --find-links https://kveritas.org/wheels
+uv tool install kveritas --find-links https://27-group.github.io/kveritas-releases/wheels/
 
 # Prebuilt binary (also darwin/windows, amd64/arm64)
 curl -fsSL https://github.com/27-GROUP/kveritas-releases/raw/main/bin/kveritas-linux-amd64 -o kveritas

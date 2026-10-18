@@ -42,7 +42,7 @@ jobs:
         run: |
           mkdir -p releases/wheels
           rm -f releases/wheels/*.whl
-          cp dist/*.whl releases/wheels/
+          cp dist/*.whl dist/index.html releases/wheels/
           cp dist/SHA256SUMS dist/BUILD releases/bin/
           for f in dist/kveritas-*; do case "$f" in *.whl) ;; *) cp "$f" releases/bin/ ;; esac; done
           cd releases
