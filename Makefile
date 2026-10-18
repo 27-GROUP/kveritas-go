@@ -1,6 +1,8 @@
 GO      ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION)"
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+BUILT   ?= $(shell date -u +%Y-%m-%d)
+GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.built=$(BUILT)"
 BIN     := bin/kveritas
 SERVER  := bin/kveritas-server
 GOPATH_BIN := $(shell $(GO) env GOPATH)/bin

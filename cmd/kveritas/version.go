@@ -8,12 +8,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+// Set at build time. The commit tells two builds of the same version apart.
+var (
+	version = "dev"
+	commit  = ""
+	built   = ""
+)
 
 var versionJSON bool
 
 type versionInfo struct {
 	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Built   string `json:"built,omitempty"`
 	Go      string `json:"go"`
 	OS      string `json:"os"`
 	Arch    string `json:"arch"`
@@ -24,11 +31,15 @@ var cmdVersion = &cobra.Command{
 	Short: "Show the kveritas version",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		info := versionInfo{Version: version, Go: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
+		info := versionInfo{Version: version, Commit: commit, Built: built, Go: runtime.Version(), OS: runtime.GOOS, Arch: runtime.GOARCH}
 		if versionJSON {
 			return printJSON(info)
 		}
-		fmt.Printf("kveritas %s (%s/%s, %s)\n", info.Version, info.OS, info.Arch, info.Go)
+		build := ""
+		if info.Commit != "" {
+			build = fmt.Sprintf(", commit %s, built %s", info.Commit, info.Built)
+		}
+		fmt.Printf("kveritas %s (%s/%s, %s%s)\n", info.Version, info.OS, info.Arch, info.Go, build)
 		return nil
 	},
 }
