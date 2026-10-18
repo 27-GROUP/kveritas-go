@@ -8,6 +8,8 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/') && secrets.RELEASES_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,14 +31,14 @@ jobs:
           python -m venv /tmp/wheel && /tmp/wheel/bin/pip install --no-index --find-links . kveritas
           /tmp/wheel/bin/kveritas version | grep -F "kveritas $VERSION "
           test "$(ls *.whl | wc -l)" = 5
-      # Only a pushed tag publishes; a manual run stops after the checks above.
-      - if: startsWith(github.ref, 'refs/tags/')
+      # Only a pushed tag publishes, and only with the token; otherwise this stops after the checks.
+      - if: env.PUBLISH == 'true'
         uses: actions/checkout@v4
         with:
           repository: 27-GROUP/kveritas-releases
           token: ${{ secrets.RELEASES_TOKEN }}
           path: releases
-      - if: startsWith(github.ref, 'refs/tags/')
+      - if: env.PUBLISH == 'true'
         name: publish
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
