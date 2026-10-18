@@ -17,9 +17,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+      # Go 1.22 test binaries built on the runner lack LC_UUID and newer macOS refuses
+      # them; the shipped darwin binaries are cross-built and unaffected.
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: stable
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
