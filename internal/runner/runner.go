@@ -26,11 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type Options struct {
-	ShowResults bool
-}
-
-func Run(sess *session.Session, command []string, fileHints []string, opts Options) (*session.RunRecord, error) {
+func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no command specified")
 	}
@@ -107,14 +103,6 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Env = runEnv()
-	out, err := openOut()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[kveritas] Warning: %s unavailable (%v); print result lines instead\n", OutEnv, err)
-		cmd.Env = append(cmd.Env, OutEnv+"="+os.DevNull)
-	} else {
-		defer out.cleanup()
-		cmd.Env = append(cmd.Env, OutEnv+"="+out.path)
-	}
 
 	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
 	obs := tracer.New(sess.ProjectDir)
@@ -137,43 +125,37 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 	// The command can name a private script or dataset, so redacted keeps only the interpreter.
 	rec.Command = redactCommand(command, provLevel)
 
-	where := func(lineNum, seq int) string {
-		if seq > 0 {
-			return fmt.Sprintf("%s line %d", OutEnv, seq)
-		}
+	where := func(lineNum int) string {
 		return fmt.Sprintf("line %d", lineNum)
 	}
 
-	// Printed lines and result-file lines share one path, serialized so phases snapshot in order.
 	var lineMu sync.Mutex
-	handle := func(line string, lineNum, seq int) {
+	handle := func(line string, lineNum int) {
 		lineMu.Lock()
 		defer lineMu.Unlock()
 
 		if phaseName, ok := parser.ParsePhase(line); ok {
 			pe := hardware.CapturePhaseEvent(phaseName, lineNum, pid)
-			pe.Seq = seq
 			mu.Lock()
 			allPhases = append(allPhases, pe)
 			mu.Unlock()
 			prov.Snapshot("phase", phaseName)
-			fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (%s, hardware snapshot captured)\n", phaseName, where(lineNum, seq))
+			fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (%s, hardware snapshot captured)\n", phaseName, where(lineNum))
 			return
 		}
 
 		if claim, ok := parser.ParseClaim(line, lineNum); ok {
-			claim.Seq = seq
 			mu.Lock()
 			allClaims = append(allClaims, *claim)
 			mu.Unlock()
 			fmt.Fprintln(&metricLines, line)
-			fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (%s)\n", claim.Metric, claim.Value, where(lineNum, seq))
+			fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (%s)\n", claim.Metric, claim.Value, where(lineNum))
 			return
 		}
 
 		if parser.ParseDeclared(line, declared) {
 			declaredSeen = true
-			fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (%s)\n", where(lineNum, seq))
+			fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (%s)\n", where(lineNum))
 			return
 		}
 
@@ -183,12 +165,11 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 				Value:     seedVal,
 				Line:      lineNum,
 				Timestamp: time.Now().UTC(),
-				Seq:       seq,
 			}
 			mu.Lock()
 			allSeeds = append(allSeeds, sc)
 			mu.Unlock()
-			fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (%s)\n", seedVal, where(lineNum, seq))
+			fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (%s)\n", seedVal, where(lineNum))
 			return
 		}
 
@@ -197,82 +178,43 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 				mu.Lock()
 				allArtifacts = append(allArtifacts, *art)
 				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, %s)\n", decl.Role, art.Visibility, where(lineNum, seq))
+				fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, %s)\n", decl.Role, art.Visibility, where(lineNum))
 			} else {
 				// Silence here would let a mistyped path look attested to its author.
 				fmt.Fprintf(os.Stderr, "[kveritas] Warning: artifact %q not attested, cannot read %s (%s)\n",
-					decl.Role, decl.Path, where(lineNum, seq))
+					decl.Role, decl.Path, where(lineNum))
 			}
 			return
 		}
 
 		if m, ok := parser.Parse(line, lineNum); ok {
-			m.Seq = seq
 			mu.Lock()
 			allMetrics = append(allMetrics, *m)
 			mu.Unlock()
 			fmt.Fprintln(&metricLines, line)
-		} else if seq == 0 {
-			heuristics := parser.ParseHeuristic(line, lineNum)
-			if len(heuristics) > 0 {
-				mu.Lock()
-				allMetrics = append(allMetrics, heuristics...)
-				mu.Unlock()
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: result line %d on %s rejected: %s\n", seq, OutEnv, line)
+		} else if heuristics := parser.ParseHeuristic(line, lineNum); len(heuristics) > 0 {
+			mu.Lock()
+			allMetrics = append(allMetrics, heuristics...)
+			mu.Unlock()
 		}
 	}
 
-	// A malformed KV line on stdout is usually ordinary output (an LLM's "KV cache"),
-	// so it is noted once rather than per line.
+	// A malformed KV line is usually ordinary output (an LLM's "KV cache"), so it is
+	// noted once rather than per line.
 	nearMissShown := false
-	accept := func(line string, lineNum, seq int) {
+	accept := func(line string, lineNum int) {
 		lines, ok, near := metrics.TranslateKV(line)
-		switch {
-		case ok:
+		if ok {
 			for _, l := range lines {
-				handle(l, lineNum, seq)
+				handle(l, lineNum)
 			}
-		case near && seq > 0:
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: %s line %d is not a valid KV line: %s\n", OutEnv, seq, line)
-		case near:
-			if !nearMissShown {
-				nearMissShown = true
-				fmt.Fprintf(os.Stderr, "[kveritas] Note: output line %d starts with KV but is not a result line; ignored\n", lineNum)
-			}
-			handle(line, lineNum, seq)
-		default:
-			handle(line, lineNum, seq)
+			return
 		}
-		if opts.ShowResults && seq > 0 && (ok || strings.HasPrefix(line, "KVERITAS_")) {
-			fmt.Fprintf(os.Stderr, "[kveritas] %s\n", line)
+		if near && !nearMissShown {
+			nearMissShown = true
+			fmt.Fprintf(os.Stderr, "[kveritas] Note: output line %d starts with KV but is not a result line; ignored\n", lineNum)
 		}
-	}
-
-	var (
-		outBuf   bytes.Buffer
-		outLines int
-		outDone  = make(chan struct{})
-	)
-	if out != nil {
-		go func() {
-			defer close(outDone)
-			sc := bufio.NewScanner(out.reader)
-			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-			for sc.Scan() {
-				line := strings.TrimSpace(sc.Text())
-				if line == "" {
-					continue
-				}
-				outBuf.WriteString(line)
-				outBuf.WriteByte('\n')
-				outLines++
-				accept(line, 0, outLines)
-			}
-		}()
-	} else {
-		close(outDone)
+		handle(line, lineNum)
 	}
 
 	var outWG sync.WaitGroup
@@ -287,7 +229,7 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 			line := scanner.Text()
 			fmt.Fprintln(os.Stdout, line)
 			fmt.Fprintln(&stdoutBuf, line)
-			accept(line, lineNum, 0)
+			accept(line, lineNum)
 		}
 		stdoutLines = lineNum
 	}()
@@ -303,17 +245,6 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 			exitCode = exit.ExitCode()
 		}
 	}
-	if out != nil {
-		// A descendant that outlives the run could hold the result file open forever.
-		out.finish()
-		select {
-		case <-outDone:
-		case <-time.After(3 * time.Second):
-			out.close()
-			<-outDone
-		}
-	}
-
 	// A low cap would make the stored rate depend on duration, silently rescaling
 	// anything later derived from how fast the counters move.
 	hwSamples := hardware.Decimate(sampler.Stop(), sampleCap())
@@ -372,10 +303,6 @@ func Run(sess *session.Session, command []string, fileHints []string, opts Optio
 	rec.HardwareSamples = hwSamples
 	if declaredSeen {
 		rec.Declared = declared
-	}
-	if outLines > 0 {
-		rec.ChannelHash = digestBuf(outBuf.Bytes())
-		rec.ChannelMessages = outLines
 	}
 
 	var postHashes map[string]string

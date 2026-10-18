@@ -56,7 +56,7 @@ Workflow:
   kveritas status            Show current session state.
   kveritas update            Update to the latest version.
 
-Result lines, written to the file in $KVERITAS_OUT (or printed):
+Result lines your program prints:
   KV <name>=<number> [<name>=<number> ...] [step=<label>]
   KV claim <name>=<number> [phase=<phase>]
   KV seed <value>
@@ -1167,7 +1167,6 @@ var (
 	runFiles       []string
 	runNodeRank    int
 	runSeal        string
-	runShowResults bool
 )
 
 var cmdRun = &cobra.Command{
@@ -1176,20 +1175,15 @@ var cmdRun = &cobra.Command{
 	Long: `Executes <command> as a monitored subprocess. Starts a session in the current
 directory if there is none.
 
-Results go to the file named in $KVERITAS_OUT, one line each, from any language.
-The terminal shows your program's own output, unchanged:
+Print one line per result, from any language:
 
   KV val_acc=0.9471 loss=0.21 step=100
   KV phase eval                  (hardware snapshot at the boundary)
   KV claim accuracy=0.9471 phase=eval
   KV seed 42
 
-  Python: open(os.environ.get("KVERITAS_OUT", os.devnull), "a")
-  R:      Sys.getenv("KVERITAS_OUT", "/dev/null")
-  Shell:  echo "KV acc=0.93" >> "${KVERITAS_OUT:-/dev/null}"
-
-The same lines printed to stdout are captured too. Both streams are hashed into
-the signed record. Files listed with --files are hashed before and after the run.
+The whole output is hashed into the signed record. Files listed with --files are
+hashed before and after the run.
 
 Multi-node: run the same command on every node, for example
   srun kveritas run -- torchrun --nnodes=2 ... train.py
@@ -1255,7 +1249,7 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		if err := anchor.BeginRun(kvDir, anchor.Inflight{Invocation: inv, Index: len(sess.Runs), Command: args, StartedAt: time.Now().UTC()}); err != nil {
 			return err
 		}
-		rec, err := runner.Run(sess, args, hints, runner.Options{ShowResults: runShowResults})
+		rec, err := runner.Run(sess, args, hints)
 		if err != nil {
 			anchor.EndRun(kvDir)
 			return err
@@ -1420,7 +1414,6 @@ func init() {
 	cmdRun.Flags().IntVar(&runNodeRank, "node-rank", -1, "this machine's node in a multi-node run (default: from the launcher or Slurm)")
 	cmdRun.Flags().StringVar(&runSeal, "seal", "", "after the run, sign and write the report (default path report.pdf)")
 	cmdRun.Flags().Lookup("seal").NoOptDefVal = "report.pdf"
-	cmdRun.Flags().BoolVar(&runShowResults, "show-results", false, "echo each result line from $KVERITAS_OUT as it arrives")
 }
 
 var (

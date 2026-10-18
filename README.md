@@ -42,11 +42,10 @@ kveritas verify report.pdf               # --offline skips the server
 
 ## Result lines
 
-Write to the file in `$KVERITAS_OUT`, any language. Kept out of your terminal. Printing works too.
+Print them, any language. Everything captured is signed.
 
 ```python
-kv = open(os.environ.get("KVERITAS_OUT", os.devnull), "a", buffering=1)
-print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}", file=kv)
+print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}")
 ```
 
 | Line | Purpose |
@@ -78,7 +77,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work. Metric-l
 
 | Command | |
 |---|---|
-| `run [--seal [path]] [--show-results] [--node-rank N] -- <cmd>` | Run. Starts a session if needed. |
+| `run [--seal [path]] [--node-rank N] -- <cmd>` | Run. Starts a session if needed. |
 | `init [--local] [--harness] [--disclosure redacted\|names\|open]` | Start a session with options. |
 | `seal [-o path]` | Sign into a PDF. |
 | `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |

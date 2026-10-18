@@ -375,8 +375,7 @@ func RunNode(kvDir string, command []string, rank int) (int, error) {
 	stderrH := &countingHash{h: sha256.New()}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Stdin = os.Stdin
-	// Results are reported by rank 0 on node 0; here they go nowhere.
-	cmd.Env = append(runEnv(), OutEnv+"="+os.DevNull)
+	cmd.Env = runEnv()
 	cmd.Stdout = io.MultiWriter(os.Stdout, stdoutH)
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrH)
 	// A helper process that outlives the command must not hold the record back.

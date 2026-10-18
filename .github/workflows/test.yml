@@ -36,16 +36,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/e2e/keys" && cd "$RUNNER_TEMP/e2e"
           openssl genrsa -out keys/private.pem 2048
           cat > job.py <<'PY'
-          import os, time
-          kv = open(os.environ.get("KVERITAS_OUT", os.devnull), "a", buffering=1)
-          print("KV seed 7", file=kv)
+          import time
+          print("KV seed 7")
           t = time.time()
           step = 0
           while time.time() - t < 3:
               sum(i * i for i in range(100000))
               step += 1
-              print(f"KV acc={min(0.99, step / 100):.4f} step={step}", file=kv)
-          print("KV claim acc=0.99", file=kv)
+              print(f"KV acc={min(0.99, step / 100):.4f} step={step}")
+          print("KV claim acc=0.99")
           print("KV cache size=2GB")
           PY
           "$KV" init --local

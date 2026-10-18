@@ -257,12 +257,12 @@ func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
 func (p *Parser) WarnIfEmpty() {
 	if p.explicitCount == 0 {
 		fmt.Fprintln(os.Stderr, "[kveritas] Warning: no results captured in this run.")
-		fmt.Fprintln(os.Stderr, "[kveritas] Write one line per result to the file in $KVERITAS_OUT (or print it), from any language:")
+		fmt.Fprintln(os.Stderr, "[kveritas] Print one line per result, from any language:")
 		// WriteString, not a Print verb: keeps the literal format directives in the examples.
-		os.Stderr.WriteString(`[kveritas]   Python: print(f"KV val_acc={acc:.4f} step={epoch}", file=open(os.environ.get("KVERITAS_OUT", os.devnull), "a"))` + "\n")
-		os.Stderr.WriteString(`[kveritas]   R:      cat(sprintf("KV val_acc=%.4f step=%d\n", acc, epoch), file = Sys.getenv("KVERITAS_OUT", "/dev/null"), append = TRUE)` + "\n")
-		os.Stderr.WriteString(`[kveritas]   Julia:  open(f -> println(f, "KV val_acc=$(acc) step=$(epoch)"), get(ENV, "KVERITAS_OUT", devnull), "a")` + "\n")
-		os.Stderr.WriteString(`[kveritas]   Shell:  echo "KV val_acc=0.9471 step=100" >> "${KVERITAS_OUT:-/dev/null}"` + "\n")
+		os.Stderr.WriteString(`[kveritas]   Python: print(f"KV val_acc={acc:.4f} step={epoch}")` + "\n")
+		os.Stderr.WriteString(`[kveritas]   R:      cat(sprintf("KV val_acc=%.4f step=%d\n", acc, epoch))` + "\n")
+		os.Stderr.WriteString(`[kveritas]   Julia:  println("KV val_acc=$(acc) step=$(epoch)")` + "\n")
+		os.Stderr.WriteString(`[kveritas]   Shell:  echo "KV val_acc=0.9471 step=100"` + "\n")
 		if p.heuristicCount > 0 {
 			fmt.Fprintf(os.Stderr, "[kveritas] Heuristic metrics captured: %d (may be incomplete)\n", p.heuristicCount)
 		}
