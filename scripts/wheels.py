@@ -46,4 +46,4 @@ def build(version: str, dist: str) -> None:
 
 
 if __name__ == "__main__":
-    build(sys.argv[1].lstrip("v").split("-")[0], sys.argv[2])
+    build(sys.argv[1], sys.argv[2])

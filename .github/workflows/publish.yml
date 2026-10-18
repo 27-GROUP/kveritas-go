@@ -1,0 +1,53 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+    paths: ["cmd/**", "internal/**", "server/**", "go.mod", "go.sum", "Makefile", "scripts/**"]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ secrets.RELEASES_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: go vet ./... && go test ./...
+      - run: make wheels
+      - name: check the build
+        run: |
+          cd dist
+          read VERSION COMMIT < BUILD
+          sha256sum -c SHA256SUMS
+          ./kveritas-linux-amd64 version | grep -F "kveritas $VERSION " | grep -F "commit $COMMIT)"
+          python -m venv /tmp/wheel && /tmp/wheel/bin/pip install --no-index --find-links . kveritas
+          /tmp/wheel/bin/kveritas version | grep -F "commit $COMMIT)"
+          test "$(ls *.whl | wc -l)" = 5
+      # Without the token this stops after the checks above.
+      - if: env.PUBLISH == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: 27-GROUP/kveritas-releases
+          token: ${{ secrets.RELEASES_TOKEN }}
+          path: releases
+      - if: env.PUBLISH == 'true'
+        name: publish to kveritas-releases
+        run: |
+          mkdir -p releases/wheels
+          rm -f releases/wheels/*.whl
+          cp dist/*.whl releases/wheels/
+          cp dist/SHA256SUMS dist/BUILD releases/bin/
+          for f in dist/kveritas-*; do case "$f" in *.whl) ;; *) cp "$f" releases/bin/ ;; esac; done
+          cd releases
+          git config user.name "Mamadou2727"
+          git config user.email "mamadouk393@gmail.com"
+          git add -A bin wheels
+          git commit -m "update"
+          git push

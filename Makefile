@@ -1,8 +1,9 @@
 GO      ?= go
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# No release tags: a build is named by its UTC date and time, newest highest, and
+# told apart by its commit.
+VERSION ?= $(shell date -u +%Y.%m.%d.%H%M | awk -F. '{printf "%d.%d.%d.%d", $$1, $$2, $$3, $$4}')
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null)
-BUILT   ?= $(shell date -u +%Y-%m-%d)
-GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.built=$(BUILT)"
+GOFLAGS ?= -trimpath -ldflags="-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)"
 BIN     := bin/kveritas
 SERVER  := bin/kveritas-server
 GOPATH_BIN := $(shell $(GO) env GOPATH)/bin
@@ -39,7 +40,7 @@ cross: deps
 	GOOS=windows GOARCH=amd64   $(GO) build $(GOFLAGS) -o dist/kveritas-windows-amd64.exe ./cmd/kveritas
 	GOOS=linux   GOARCH=amd64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-linux-amd64 ./server
 	GOOS=darwin  GOARCH=arm64   $(GO) build $(GOFLAGS) -o dist/kveritas-server-darwin-arm64 ./server
-	cd dist && sha256sum kveritas-* > SHA256SUMS
+	cd dist && sha256sum kveritas-* > SHA256SUMS && printf '%s %s\n' $(VERSION) $(COMMIT) > BUILD
 
 wheels: cross
 	python3 scripts/wheels.py $(VERSION) dist
