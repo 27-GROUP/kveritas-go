@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -34,45 +35,13 @@ var (
 	workloadRe = regexp.MustCompile(`^KVERITAS_WORKLOAD\b`)
 
 	kvTokenRe = regexp.MustCompile(`([a-zA-Z_]+)=(\S+)`)
-
-	kerasRe = regexp.MustCompile(
-		`([a-zA-Z][a-zA-Z0-9_]*):\s*([+-]?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?)`,
-	)
-
-	colonKVRe = regexp.MustCompile(
-		`^\s*([a-zA-Z][a-zA-Z0-9_/\-]{1,30}):\s*([+-]?[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?)\s*$`,
-	)
-
-	jsonMetricRe = regexp.MustCompile(
-		`"metric"\s*:\s*"([^"]+)"\s*,\s*"value"\s*:\s*([+-]?[0-9]+(?:\.[0-9]+)?)`,
-	)
 )
 
-var metricKeywords = map[string]bool{
-	"loss": true, "acc": true, "accuracy": true, "error": true,
-	"f1": true, "f1_score": true, "precision": true, "recall": true,
-	"auc": true, "mse": true, "mae": true, "rmse": true,
-	"bleu": true, "rouge": true, "perplexity": true, "score": true,
-	"r2": true, "val_loss": true, "val_acc": true, "val_accuracy": true,
-	"train_loss": true, "train_acc": true, "test_loss": true,
-	"test_acc": true, "test_accuracy": true, "map": true,
-}
-
-var blocklist = map[string]bool{
-	"epoch": true, "step": true, "batch": true, "iter": true,
-	"lr": true, "learning_rate": true, "batch_size": true,
-	"seed": true, "rank": true, "gpu_mem": true, "memory": true,
-	"version": true, "time": true, "duration": true, "elapsed": true,
-	"size": true, "count": true, "num": true, "n": true, "id": true,
-	"pid": true, "port": true, "gpu": true, "cpu": true,
-}
-
 type Parser struct {
-	explicitCount  int
-	heuristicCount int
-	phaseCount     int
-	claimCount     int
-	seedCount      int
+	explicitCount int
+	phaseCount    int
+	claimCount    int
+	seedCount     int
 }
 
 func (p *Parser) Parse(line string, lineNum int) (*session.Metric, bool) {
@@ -211,78 +180,35 @@ func parseCountToken(v string) int64 {
 	return 0
 }
 
-// ParseHeuristic runs best-effort detection on a line.
-// These results supplement but do not replace explicit metrics.
-func (p *Parser) ParseHeuristic(line string, lineNum int) []session.Metric {
-	if m := jsonMetricRe.FindStringSubmatch(line); m != nil {
-		name := m[1]
-		if !blocklist[strings.ToLower(name)] {
-			if v, err := strconv.ParseFloat(m[2], 64); err == nil {
-				p.heuristicCount++
-				return []session.Metric{{Name: name, Value: v, Line: lineNum, Source: "heuristic"}}
-			}
-		}
-		return nil
-	}
+// Declared reports whether the run printed any result itself.
+func (p *Parser) Declared() bool { return p.explicitCount+p.claimCount > 0 }
 
-	// Keras/Lightning multi-metric line: "loss: 0.24 - val_acc: 0.94"
-	if strings.Contains(line, " - ") && strings.Contains(line, ":") {
-		var out []session.Metric
-		for _, m := range kerasRe.FindAllStringSubmatch(line, -1) {
-			name := m[1]
-			if blocklist[strings.ToLower(name)] {
-				continue
-			}
-			if v, err := strconv.ParseFloat(m[2], 64); err == nil {
-				out = append(out, session.Metric{Name: name, Value: v, Line: lineNum, Source: "heuristic"})
-				p.heuristicCount++
-			}
-		}
-		return out
-	}
-
-	// Single "metric_name: 0.947", only when the name is a known metric keyword.
-	if m := colonKVRe.FindStringSubmatch(line); m != nil {
-		name := m[1]
-		if !blocklist[strings.ToLower(name)] && metricKeywords[strings.ToLower(name)] {
-			if v, err := strconv.ParseFloat(m[2], 64); err == nil {
-				p.heuristicCount++
-				return []session.Metric{{Name: name, Value: v, Line: lineNum, Source: "heuristic"}}
-			}
-		}
-	}
-	return nil
-}
-
-func (p *Parser) WarnIfEmpty() {
-	if p.explicitCount == 0 {
-		fmt.Fprintln(os.Stderr, "[kveritas] Warning: no results captured in this run.")
-		fmt.Fprintln(os.Stderr, "[kveritas] Print one line per result, from any language:")
-		// WriteString, not a Print verb: keeps the literal format directives in the examples.
-		os.Stderr.WriteString(`[kveritas]   Python: print(f"KV val_acc={acc:.4f} step={epoch}")` + "\n")
-		os.Stderr.WriteString(`[kveritas]   R:      cat(sprintf("KV val_acc=%.4f step=%d\n", acc, epoch))` + "\n")
-		os.Stderr.WriteString(`[kveritas]   Julia:  println("KV val_acc=$(acc) step=$(epoch)")` + "\n")
-		os.Stderr.WriteString(`[kveritas]   Shell:  echo "KV val_acc=0.9471 step=100"` + "\n")
-		if p.heuristicCount > 0 {
-			fmt.Fprintf(os.Stderr, "[kveritas] Heuristic metrics captured: %d (may be incomplete)\n", p.heuristicCount)
-		}
-	} else {
-		if p.heuristicCount > 0 {
-			fmt.Fprintf(os.Stderr, "[kveritas] Metrics captured: %d explicit, %d heuristic\n",
-				p.explicitCount, p.heuristicCount)
-		} else {
-			fmt.Fprintf(os.Stderr, "[kveritas] Metrics captured: %d explicit\n", p.explicitCount)
-		}
+func (p *Parser) Summary(w io.Writer, auto int) {
+	switch {
+	case auto > 0:
+		fmt.Fprintf(w, "[kveritas] Results: %d declared, %d automatic\n", p.explicitCount, auto)
+	case p.explicitCount > 0:
+		fmt.Fprintf(w, "[kveritas] Results: %d declared\n", p.explicitCount)
 	}
 	if p.phaseCount > 0 {
-		fmt.Fprintf(os.Stderr, "[kveritas] Phase boundaries: %d\n", p.phaseCount)
+		fmt.Fprintf(w, "[kveritas] Phase boundaries: %d\n", p.phaseCount)
 	}
 	if p.claimCount > 0 {
-		fmt.Fprintf(os.Stderr, "[kveritas] Inline claims: %d\n", p.claimCount)
+		fmt.Fprintf(w, "[kveritas] Inline claims: %d\n", p.claimCount)
 	}
 	if p.seedCount > 0 {
-		fmt.Fprintf(os.Stderr, "[kveritas] Seed commitments: %d\n", p.seedCount)
+		fmt.Fprintf(w, "[kveritas] Seed commitments: %d\n", p.seedCount)
 	}
+}
+
+// DeclareHint shows how to print results, in a few languages.
+func DeclareHint() {
+	fmt.Fprintln(os.Stderr, "[kveritas] Print one line per result, from any language:")
+	// WriteString, not a Print verb: keeps the literal format directives in the examples.
+	os.Stderr.WriteString(`[kveritas]   Python: print(f"KV val_acc={acc:.4f} step={epoch}")` + "\n")
+	os.Stderr.WriteString(`[kveritas]   R:      cat(sprintf("KV val_acc=%.4f step=%d\n", acc, epoch))` + "\n")
+	os.Stderr.WriteString(`[kveritas]   Julia:  println("KV val_acc=$(acc) step=$(epoch)")` + "\n")
+	os.Stderr.WriteString(`[kveritas]   Shell:  echo "KV runtime_s=1.84"` + "\n")
 }
 
 func (p *Parser) ExplicitCount() int { return p.explicitCount }

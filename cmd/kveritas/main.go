@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/base64"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -111,7 +111,7 @@ func main() {
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
-	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware)
+	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdAutolog, cmdShell)
 	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -433,6 +433,7 @@ var (
 	initDisclosure string
 	initShowNames  bool
 	initNoHooks    bool
+	initAutolog    bool
 )
 
 const defaultDesignation = `{"designate":["tool_call","file_effect","model_turn","spawn","self_claim","approval"]}`
@@ -502,6 +503,9 @@ var cmdInit = &cobra.Command{
 			Disclosure: initDisclosure,
 			ProvSalt:   salt,
 		}
+		if initAutolog {
+			sess.Results = "autolog"
+		}
 
 		if err := sess.Save(kvDir); err != nil {
 			return err
@@ -522,6 +526,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
+	cmdInit.Flags().BoolVar(&initAutolog, "autolog", false, "detect results from output and metric files when a run declares none")
 	cmdInit.Flags().BoolVar(&initNoHooks, "no-hooks", false, "harness mode: do not install Claude Code hooks (actions are recorded another way)")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
 	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
@@ -1164,9 +1169,9 @@ func renderRunTrace(idx int, command []string, t *session.RunTrace) {
 }
 
 var (
-	runFiles       []string
-	runNodeRank    int
-	runSeal        string
+	runFiles    []string
+	runNodeRank int
+	runSeal     string
 )
 
 var cmdRun = &cobra.Command{
@@ -1198,6 +1203,9 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		}
 		if rank > 0 {
 			return runWorkerNode(args, rank)
+		}
+		if os.Getenv("KVERITAS_SHELL") != "" {
+			return fmt.Errorf("this shell already records every command; type it without kveritas run")
 		}
 		warnSrunInside(args)
 		kvDir, err := session.Find()
@@ -1249,39 +1257,21 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 		if err := anchor.BeginRun(kvDir, anchor.Inflight{Invocation: inv, Index: len(sess.Runs), Command: args, StartedAt: time.Now().UTC()}); err != nil {
 			return err
 		}
-		rec, err := runner.Run(sess, args, hints)
+		res, err := runner.Run(sess, args, hints, resultsOptions(sess))
 		if err != nil {
 			anchor.EndRun(kvDir)
 			return err
 		}
-
-		// Every invocation is anchored, failures included, so the server's history and
-		// the chain have no holes.
-		if err := anchorInvocation(kvDir, sess, rec, inv); err != nil {
+		rec := res.Record
+		if rec.ExitCode == 0 && !res.Declared && sess.Results == "" && chooseResults(kvDir, sess) == "autolog" {
+			rec.Metrics = append(rec.Metrics, res.Auto...)
+		}
+		if err := recordInvocation(kvDir, sess, rec, inv, c); err != nil {
 			return err
 		}
-		if online {
-			if left, ferr := anchor.FlushWithin(c, kvDir, 30*time.Second); left > 0 {
-				if anchor.Rejected(ferr) {
-					fmt.Fprintf(os.Stderr, "[kveritas] Warning: the server rejected this run's anchor: %v\n", ferr)
-				} else {
-					fmt.Fprintf(os.Stderr, "[kveritas] Server unreachable; run anchor queued and will be retried (the report shows the delay)\n")
-				}
-			}
-		}
-
 		if rec.ExitCode != 0 {
 			fmt.Fprintf(os.Stderr, "[kveritas] Run failed (exit %d). It is not kept in the report, but the server still counts it in the run history.\n", rec.ExitCode)
 			return fmt.Errorf("command exited with code %d; only successful runs are recorded", rec.ExitCode)
-		}
-
-		if err := sess.SaveRun(kvDir, rec); err != nil {
-			return err
-		}
-
-		sess.Runs = append(sess.Runs, rec.ID)
-		if err := sess.Save(kvDir); err != nil {
-			return err
 		}
 
 		fmt.Printf("Run %s recorded (%d metrics, %d claims, %d phases, %d seeds)\n",
@@ -1324,6 +1314,31 @@ func runWorkerNode(args []string, rank int) error {
 		return fmt.Errorf("command exited with code %d on node %d", code, rank)
 	}
 	return nil
+}
+
+// Every invocation is anchored, failures included, so the server's history and the
+// chain have no holes. Only successful runs are kept for the report.
+func recordInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int, c *client.Client) error {
+	if err := anchorInvocation(kvDir, sess, rec, inv); err != nil {
+		return err
+	}
+	if c != nil {
+		if left, ferr := anchor.FlushWithin(c, kvDir, 30*time.Second); left > 0 {
+			if anchor.Rejected(ferr) {
+				fmt.Fprintf(os.Stderr, "[kveritas] Warning: the server rejected this run's anchor: %v\n", ferr)
+			} else {
+				fmt.Fprintf(os.Stderr, "[kveritas] Server unreachable; run anchor queued and will be retried (the report shows the delay)\n")
+			}
+		}
+	}
+	if rec.ExitCode != 0 {
+		return nil
+	}
+	if err := sess.SaveRun(kvDir, rec); err != nil {
+		return err
+	}
+	sess.Runs = append(sess.Runs, rec.ID)
+	return sess.Save(kvDir)
 }
 
 func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int) error {
@@ -1417,9 +1432,10 @@ func init() {
 }
 
 var (
-	sealOutput  string
-	sealKeyPath string
-	sealJSON    bool
+	sealOutput     string
+	sealKeyPath    string
+	sealJSON       bool
+	sealClaimNames []string
 )
 
 var cmdSeal = &cobra.Command{
@@ -1439,6 +1455,9 @@ var cmdSeal = &cobra.Command{
 		}
 		if sess.Type == "harness" {
 			return harnessSeal(kvDir, sess)
+		}
+		if os.Getenv("KVERITAS_SHELL") != "" {
+			return fmt.Errorf("exit the shell to seal; it offers to seal when it closes")
 		}
 		release, err := anchor.AcquireRun(kvDir)
 		if err != nil {
@@ -1523,7 +1542,11 @@ var cmdSeal = &cobra.Command{
 			checkoutBundleHash = h
 		}
 
-		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, checkoutBundleHash, &hmcaResult, nil)
+		claims, err := sealClaims(runs, sealClaimNames)
+		if err != nil {
+			return err
+		}
+		dataHash, canonicalBytes, err := canonicalSessionHash(sess, runs, bundleHash, checkoutBundleHash, &hmcaResult, nil, claims)
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -1695,10 +1718,47 @@ func init() {
 	cmdSeal.Flags().StringVarP(&sealOutput, "output", "o", "", "output PDF path (default: kveritas-report-<id>.pdf)")
 	cmdSeal.Flags().StringVar(&sealKeyPath, "local-key", "", "path to local RSA private key PEM (for offline signing)")
 	cmdSeal.Flags().BoolVar(&sealJSON, "json", false, "print the result as JSON")
+	cmdSeal.Flags().StringSliceVar(&sealClaimNames, "claim", nil, "name results as claims, taking each one's latest recorded value")
 }
 
 // Verification hashes the analysis the seal committed to, not what today's analyzer
 // would produce: otherwise improving either analyzer marks every old report tampered.
+func signedClaims(canonicalJSON string) []session.SealClaim {
+	var doc struct {
+		Claims []session.SealClaim `json:"seal_claims"`
+	}
+	if json.Unmarshal([]byte(canonicalJSON), &doc) != nil {
+		return nil
+	}
+	return doc.Claims
+}
+
+// A claim made at seal takes the value the latest run recorded for that name, so it
+// can only point at a number the signed runs already contain.
+func sealClaims(runs []*session.RunRecord, names []string) ([]session.SealClaim, error) {
+	var out []session.SealClaim
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		found := false
+		for i := len(runs) - 1; i >= 0 && !found; i-- {
+			for j := len(runs[i].Metrics) - 1; j >= 0; j-- {
+				if m := runs[i].Metrics[j]; m.Name == name {
+					out = append(out, session.SealClaim{Run: i + 1, Metric: name, Value: m.Value, Source: m.Source})
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("no run recorded a result named %q", name)
+		}
+	}
+	return out, nil
+}
+
 func signedAnalysis(canonicalJSON string) (*session.HMCAResult, []session.ComputeCert, bool) {
 	if canonicalJSON == "" {
 		return nil, nil, false
@@ -1731,55 +1791,55 @@ type runPayload struct {
 	Hardware    session.HardwareInfo `json:"hardware"`
 	EnvDigest   string               `json:"env_digest"`
 	// Below: omitempty for backward compat with old verifiers.
-	Phases         []session.PhaseEvent     `json:"phases,omitempty"`
-	Claims         []session.InlineClaim    `json:"claims,omitempty"`
-	Seeds          []session.SeedCommitment `json:"seeds,omitempty"`
-	MetricHash     string                   `json:"metric_hash,omitempty"`
-	DurationFmt    string                   `json:"duration_fmt,omitempty"`
-	SourceCodeHash string                   `json:"source_code_hash,omitempty"`
-	Declared       *session.DeclaredModel   `json:"declared,omitempty"`
-	Trace          *session.RunTrace        `json:"trace,omitempty"`
-	Provenance      *session.Provenance       `json:"provenance,omitempty"`
-	ProvBundleHash  string                    `json:"prov_bundle_hash,omitempty"`
-	Artifacts       []session.Artifact        `json:"artifacts,omitempty"`
-	HardwareSamples []session.HardwareSample  `json:"hardware_samples,omitempty"`
-	Launch          string                    `json:"launch,omitempty"`
-	OutputCaptured  bool                      `json:"output_captured,omitempty"`
-	ChannelHash     string                    `json:"channel_hash,omitempty"`
-	ChannelMessages int                       `json:"channel_messages,omitempty"`
-	ChannelGaps     int                       `json:"channel_gaps,omitempty"`
-	Distributed     *session.Distributed      `json:"distributed,omitempty"`
-	Cells           []session.NotebookCell    `json:"cells,omitempty"`
-	Nodes           []session.NodeRecord      `json:"nodes,omitempty"`
-	NodesExpected   int                       `json:"nodes_expected,omitempty"`
+	Phases          []session.PhaseEvent     `json:"phases,omitempty"`
+	Claims          []session.InlineClaim    `json:"claims,omitempty"`
+	Seeds           []session.SeedCommitment `json:"seeds,omitempty"`
+	MetricHash      string                   `json:"metric_hash,omitempty"`
+	DurationFmt     string                   `json:"duration_fmt,omitempty"`
+	SourceCodeHash  string                   `json:"source_code_hash,omitempty"`
+	Declared        *session.DeclaredModel   `json:"declared,omitempty"`
+	Trace           *session.RunTrace        `json:"trace,omitempty"`
+	Provenance      *session.Provenance      `json:"provenance,omitempty"`
+	ProvBundleHash  string                   `json:"prov_bundle_hash,omitempty"`
+	Artifacts       []session.Artifact       `json:"artifacts,omitempty"`
+	HardwareSamples []session.HardwareSample `json:"hardware_samples,omitempty"`
+	Launch          string                   `json:"launch,omitempty"`
+	OutputCaptured  bool                     `json:"output_captured,omitempty"`
+	ChannelHash     string                   `json:"channel_hash,omitempty"`
+	ChannelMessages int                      `json:"channel_messages,omitempty"`
+	ChannelGaps     int                      `json:"channel_gaps,omitempty"`
+	Distributed     *session.Distributed     `json:"distributed,omitempty"`
+	Cells           []session.NotebookCell   `json:"cells,omitempty"`
+	Nodes           []session.NodeRecord     `json:"nodes,omitempty"`
+	NodesExpected   int                      `json:"nodes_expected,omitempty"`
 }
 
 func runPayloadOf(r *session.RunRecord) runPayload {
 	return runPayload{
-		ID:             r.ID,
-		Index:          r.Index,
-		Command:        r.Command,
-		StartAt:        r.StartAt.UTC().Format(time.RFC3339Nano),
-		EndAt:          r.EndAt.UTC().Format(time.RFC3339Nano),
-		DurationSec:    r.DurationSec,
-		ExitCode:       r.ExitCode,
-		PreHashes:      r.PreHashes,
-		PostHashes:     r.PostHashes,
-		Modified:       r.Modified,
-		StdoutHash:     r.StdoutHash,
-		StderrHash:     r.StderrHash,
-		StdoutLines:    r.StdoutLines,
-		Metrics:        r.Metrics,
-		Hardware:       r.Hardware,
-		EnvDigest:      r.EnvDigest,
-		Phases:         r.Phases,
-		Claims:         r.Claims,
-		Seeds:          r.Seeds,
-		MetricHash:     r.MetricHash,
-		DurationFmt:    r.DurationFmt,
-		SourceCodeHash: r.SourceCodeHash,
-		Declared:       r.Declared,
-		Trace:          r.Trace,
+		ID:              r.ID,
+		Index:           r.Index,
+		Command:         r.Command,
+		StartAt:         r.StartAt.UTC().Format(time.RFC3339Nano),
+		EndAt:           r.EndAt.UTC().Format(time.RFC3339Nano),
+		DurationSec:     r.DurationSec,
+		ExitCode:        r.ExitCode,
+		PreHashes:       r.PreHashes,
+		PostHashes:      r.PostHashes,
+		Modified:        r.Modified,
+		StdoutHash:      r.StdoutHash,
+		StderrHash:      r.StderrHash,
+		StdoutLines:     r.StdoutLines,
+		Metrics:         r.Metrics,
+		Hardware:        r.Hardware,
+		EnvDigest:       r.EnvDigest,
+		Phases:          r.Phases,
+		Claims:          r.Claims,
+		Seeds:           r.Seeds,
+		MetricHash:      r.MetricHash,
+		DurationFmt:     r.DurationFmt,
+		SourceCodeHash:  r.SourceCodeHash,
+		Declared:        r.Declared,
+		Trace:           r.Trace,
 		Provenance:      r.Provenance,
 		ProvBundleHash:  r.ProvBundleHash,
 		Artifacts:       r.Artifacts,
@@ -1802,7 +1862,7 @@ func runDigest(r *session.RunRecord) (string, error) {
 	return crypto.CanonicalHash(runPayloadOf(r))
 }
 
-func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult, certsOverride []session.ComputeCert) (string, []byte, error) {
+func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bundleHash, checkoutBundleHash string, hmcaResult *session.HMCAResult, certsOverride []session.ComputeCert, claims []session.SealClaim) (string, []byte, error) {
 	runPayloads := make([]runPayload, 0, len(runs))
 	for _, r := range runs {
 		runPayloads = append(runPayloads, runPayloadOf(r))
@@ -1843,6 +1903,9 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	}
 	if anchors := sealAnchors(runs); len(anchors) > 0 {
 		signingData["run_anchors"] = anchors
+	}
+	if len(claims) > 0 {
+		signingData["seal_claims"] = claims
 	}
 
 	return crypto.CanonicalHashWithBytes(signingData)
@@ -1999,7 +2062,7 @@ var cmdVerify = &cobra.Command{
 		if haveSigned {
 			hashHMCA, hashCerts = signedHMCA, signedCerts
 		}
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, hashHMCA, hashCerts)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, hashHMCA, hashCerts, signedClaims(seal.CanonicalJSON))
 		if err != nil {
 			return fmt.Errorf("hashing session data: %w", err)
 		}
@@ -2109,7 +2172,7 @@ var cmdVerify = &cobra.Command{
 					DurationSec: r.DurationSec, ExitCode: r.ExitCode, Launch: launchOf(r),
 					Distributed: r.Distributed, ChannelMessages: r.ChannelMessages, ChannelGaps: r.ChannelGaps,
 					NotebookCells: len(r.Cells),
-					Metrics: r.Metrics, Claims: r.Claims, Seeds: r.Seeds,
+					Metrics:       r.Metrics, Claims: r.Claims, Seeds: r.Seeds,
 					Nodes: nodeDocs(i+1, r, signedHMCA),
 				}
 				if rd.Nodes != nil {
@@ -2168,13 +2231,18 @@ var cmdVerify = &cobra.Command{
 			fmt.Fprintf(out, "Total invocations: %d (including failed/discarded)\n", seal.TotalRunCount)
 		}
 
-		explicitCount := 0
+		explicitCount, autoCount, measuredCount := 0, 0, 0
 		claimCount := 0
 		phaseCount := 0
 		seedCount := 0
 		for _, r := range runs {
 			for _, m := range r.Metrics {
-				if m.Source == "explicit" {
+				switch {
+				case m.Source == "measured":
+					measuredCount++
+				case strings.HasPrefix(m.Source, "auto:") || m.Source == "heuristic":
+					autoCount++
+				default:
 					explicitCount++
 				}
 			}
@@ -2182,9 +2250,12 @@ var cmdVerify = &cobra.Command{
 			phaseCount += len(r.Phases)
 			seedCount += len(r.Seeds)
 		}
-		fmt.Fprintf(out, "Metrics:    %d explicit\n", explicitCount)
+		fmt.Fprintf(out, "Results:    %d declared, %d automatic, %d measured\n", explicitCount, autoCount, measuredCount)
 		if claimCount > 0 {
 			fmt.Fprintf(out, "Claims:     %d inline\n", claimCount)
+		}
+		for _, c := range signedClaims(seal.CanonicalJSON) {
+			fmt.Fprintf(out, "Claim:      %s = %.6g (run %d, claimed at seal, %s)\n", c.Metric, c.Value, c.Run, c.Source)
 		}
 		if phaseCount > 0 {
 			fmt.Fprintf(out, "Phases:     %d boundaries\n", phaseCount)
@@ -2193,6 +2264,9 @@ var cmdVerify = &cobra.Command{
 			fmt.Fprintf(out, "Seeds:      %d commitments\n", seedCount)
 		}
 		for i, r := range runs {
+			if r.Launch == "shell" {
+				fmt.Fprintf(out, "Run %d:      typed in a kveritas shell (measured from the shell, terminal output captured)\n", i+1)
+			}
 			if r.Launch == "attached" && r.OutputCaptured {
 				fmt.Fprintf(out, "Run %d:      attached (observed from inside the process; output captured)\n", i+1)
 			} else if r.Launch == "attached" {
@@ -2478,7 +2552,7 @@ var cmdCheck = &cobra.Command{
 		if sh, sc, ok := signedAnalysis(seal.CanonicalJSON); ok {
 			checkHashHMCA, checkCerts = sh, sc
 		}
-		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, checkHashHMCA, checkCerts)
+		computedHash, _, err := canonicalSessionHash(sess, runs, seal.SourceBundleHash, seal.CheckoutBundleHash, checkHashHMCA, checkCerts, signedClaims(seal.CanonicalJSON))
 		if err != nil {
 			return err
 		}

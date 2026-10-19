@@ -156,6 +156,10 @@ func declaredFLOPs(d *session.DeclaredModel) float64 {
 	return 6.0 * float64(d.Params) * tokens
 }
 
+func Usage(samples []session.HardwareSample) (gpuActiveSec, energyJ, peakGPUMemMB, cpuCoreSec float64) {
+	return aggregate(samples)
+}
+
 // aggregate reduces the samples to GPU-active seconds, integrated GPU energy,
 // peak GPU memory, and CPU core-seconds (the increase of the cumulative counter).
 func aggregate(samples []session.HardwareSample) (activeSec, energyJ, peakMemMB, cpuCoreSec float64) {

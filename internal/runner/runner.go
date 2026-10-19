@@ -2,7 +2,6 @@ package runner
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -14,230 +13,55 @@ import (
 	"strings"
 
 	"sync"
-	"time"
 
-	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
-	"github.com/Mamadou2727/kveritas-go/internal/hardware"
 	"github.com/Mamadou2727/kveritas-go/internal/metrics"
 	"github.com/Mamadou2727/kveritas-go/internal/provenance"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
-	"github.com/Mamadou2727/kveritas-go/internal/tracer"
-	"github.com/google/uuid"
 )
 
-func Run(sess *session.Session, command []string, fileHints []string) (*session.RunRecord, error) {
-	if len(command) == 0 {
-		return nil, fmt.Errorf("no command specified")
+func Run(sess *session.Session, command []string, fileHints []string, opts Options) (*Result, error) {
+	opts.Nodes = true
+	r, err := NewRecorder(sess, command, fileHints, opts)
+	if err != nil {
+		return nil, err
 	}
-
-	var preHashes map[string]string
-	var preHashErr error
-	var hwInfo session.HardwareInfo
-	var setupWg sync.WaitGroup
-
-	setupWg.Add(2)
-	go func() {
-		defer setupWg.Done()
-		preHashes, preHashErr = hashFiles(fileHints)
-	}()
-	go func() {
-		defer setupWg.Done()
-		hwInfo = hardware.Snapshot()
-	}()
-	setupWg.Wait()
-
-	if preHashErr != nil {
-		return nil, fmt.Errorf("pre-run file hashing: %w", preHashErr)
-	}
-
-	// Short interval gives enough resolution to integrate GPU energy for the compute cert.
-	sampler := hardware.NewSampler(100 * time.Millisecond)
-	sampler.Start()
-
-	rec := &session.RunRecord{
-		ID:        uuid.New().String()[:8],
-		SessionID: sess.ID,
-		Index:     len(sess.Runs),
-		Command:   command,
-		StartAt:   time.Now().UTC(),
-		PreHashes: preHashes,
-		Hardware:  hwInfo,
-		Modified:  []string{},
-		Metrics:   []session.Metric{},
-		Phases:    []session.PhaseEvent{},
-		Claims:    []session.InlineClaim{},
-		Seeds:     []session.SeedCommitment{},
-	}
-
-	fmt.Fprintf(os.Stderr, "[kveritas] Monitoring: %v\n", command)
-	kvDir := filepath.Join(sess.ProjectDir, session.DirName)
-	expected := expectedNodes(command)
-	endNodes := announceRun(kvDir, rec.ID, rec.StartAt, expected)
-	defer endNodes()
-
-	var (
-		stdoutBuf    bytes.Buffer
-		stderrBuf    bytes.Buffer
-		metricLines  bytes.Buffer
-		stdoutLines  int
-		allMetrics   []session.Metric
-		allPhases    []session.PhaseEvent
-		allClaims    []session.InlineClaim
-		allSeeds     []session.SeedCommitment
-		allArtifacts []session.Artifact
-		declared     = &session.DeclaredModel{}
-		declaredSeen bool
-		mu           sync.Mutex
-	)
-
-	parser := &metrics.Parser{}
 	cmd := exec.Command(command[0], command[1:]...)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
+		r.Abandon()
 		return nil, err
 	}
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
+		r.Abandon()
 		return nil, err
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Env = runEnv()
-
-	// Watch the tree before the child starts so early file opens (interpreter, imports) are caught.
-	obs := tracer.New(sess.ProjectDir)
-	obs.Start()
-
 	if err := cmd.Start(); err != nil {
-		obs.Stop()
+		r.Abandon()
 		return nil, fmt.Errorf("failed to start %q: %w", command[0], err)
 	}
-	pid := cmd.Process.Pid
-	obs.SetPID(pid)
-	sampler.SetPID(pid)
+	r.Attach(cmd.Process.Pid)
 
-	// Snapshots at start, each phase, and end make the run a verifiable state timeline.
-	provLevel := provenance.ParseLevel(sess.Disclosure)
-	salt := decodeSalt(sess.ProvSalt)
-	prov := provenance.New(sess.ProjectDir, sess.Disclosure, sess.ID, salt)
-	prov.Snapshot("run_start", "")
-
-	// The command can name a private script or dataset, so redacted keeps only the interpreter.
-	rec.Command = redactCommand(command, provLevel)
-
-	where := func(lineNum int) string {
-		return fmt.Sprintf("line %d", lineNum)
-	}
-
-	var lineMu sync.Mutex
-	handle := func(line string, lineNum int) {
-		lineMu.Lock()
-		defer lineMu.Unlock()
-
-		if phaseName, ok := parser.ParsePhase(line); ok {
-			pe := hardware.CapturePhaseEvent(phaseName, lineNum, pid)
-			mu.Lock()
-			allPhases = append(allPhases, pe)
-			mu.Unlock()
-			prov.Snapshot("phase", phaseName)
-			fmt.Fprintf(os.Stderr, "[kveritas] Phase: %s (%s, hardware snapshot captured)\n", phaseName, where(lineNum))
-			return
-		}
-
-		if claim, ok := parser.ParseClaim(line, lineNum); ok {
-			mu.Lock()
-			allClaims = append(allClaims, *claim)
-			mu.Unlock()
-			fmt.Fprintln(&metricLines, line)
-			fmt.Fprintf(os.Stderr, "[kveritas] Claim: %s=%.6g (%s)\n", claim.Metric, claim.Value, where(lineNum))
-			return
-		}
-
-		if parser.ParseDeclared(line, declared) {
-			declaredSeen = true
-			fmt.Fprintf(os.Stderr, "[kveritas] Declared model card updated (%s)\n", where(lineNum))
-			return
-		}
-
-		if seedVal, ok := parser.ParseSeed(line); ok {
-			sc := session.SeedCommitment{
-				Source:    "seed:" + seedVal,
-				Value:     seedVal,
-				Line:      lineNum,
-				Timestamp: time.Now().UTC(),
-			}
-			mu.Lock()
-			allSeeds = append(allSeeds, sc)
-			mu.Unlock()
-			fmt.Fprintf(os.Stderr, "[kveritas] Seed committed: %s (%s)\n", seedVal, where(lineNum))
-			return
-		}
-
-		if decl, ok := parser.ParseArtifact(line); ok {
-			if art := buildArtifact(decl, sess.ProjectDir, salt, provLevel); art != nil {
-				mu.Lock()
-				allArtifacts = append(allArtifacts, *art)
-				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "[kveritas] Artifact attested: %s (%s, %s)\n", decl.Role, art.Visibility, where(lineNum))
-			} else {
-				// Silence here would let a mistyped path look attested to its author.
-				fmt.Fprintf(os.Stderr, "[kveritas] Warning: artifact %q not attested, cannot read %s (%s)\n",
-					decl.Role, decl.Path, where(lineNum))
-			}
-			return
-		}
-
-		if m, ok := parser.Parse(line, lineNum); ok {
-			mu.Lock()
-			allMetrics = append(allMetrics, *m)
-			mu.Unlock()
-			fmt.Fprintln(&metricLines, line)
-		} else if heuristics := parser.ParseHeuristic(line, lineNum); len(heuristics) > 0 {
-			mu.Lock()
-			allMetrics = append(allMetrics, heuristics...)
-			mu.Unlock()
-		}
-	}
-
-	// A malformed KV line is usually ordinary output (an LLM's "KV cache"), so it is
-	// noted once rather than per line.
-	nearMissShown := false
-	accept := func(line string, lineNum int) {
-		lines, ok, near := metrics.TranslateKV(line)
-		if ok {
-			for _, l := range lines {
-				handle(l, lineNum)
-			}
-			return
-		}
-		if near && !nearMissShown {
-			nearMissShown = true
-			fmt.Fprintf(os.Stderr, "[kveritas] Note: output line %d starts with KV but is not a result line; ignored\n", lineNum)
-		}
-		handle(line, lineNum)
-	}
-
-	var outWG sync.WaitGroup
-	outWG.Add(2)
+	var wg sync.WaitGroup
+	wg.Add(2)
 	go func() {
-		defer outWG.Done()
-		scanner := bufio.NewScanner(stdoutPipe)
-		scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-		lineNum := 0
-		for scanner.Scan() {
-			lineNum++
-			line := scanner.Text()
+		defer wg.Done()
+		sc := bufio.NewScanner(stdoutPipe)
+		sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+		for sc.Scan() {
+			line := sc.Text()
 			fmt.Fprintln(os.Stdout, line)
-			fmt.Fprintln(&stdoutBuf, line)
-			accept(line, lineNum)
+			r.Line(line)
 		}
-		stdoutLines = lineNum
 	}()
 	go func() {
-		defer outWG.Done()
-		io.Copy(&stderrBuf, io.TeeReader(stderrPipe, os.Stderr)) //nolint:errcheck
+		defer wg.Done()
+		io.Copy(r.Stderr(), io.TeeReader(stderrPipe, os.Stderr)) //nolint:errcheck
 	}()
-	outWG.Wait()
+	wg.Wait()
 
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
@@ -245,133 +69,7 @@ func Run(sess *session.Session, command []string, fileHints []string) (*session.
 			exitCode = exit.ExitCode()
 		}
 	}
-	// A low cap would make the stored rate depend on duration, silently rescaling
-	// anything later derived from how fast the counters move.
-	hwSamples := hardware.Decimate(sampler.Stop(), sampleCap())
-	if len(hwSamples) > 0 {
-		fmt.Fprintf(os.Stderr, "[kveritas] Hardware sampler: %d samples collected\n", len(hwSamples))
-	}
-
-	prov.Snapshot("run_end", "")
-	rec.Provenance = prov.Result()
-	if len(allArtifacts) > 0 {
-		rec.Artifacts = allArtifacts
-	}
-	if rec.Provenance != nil {
-		fmt.Fprintf(os.Stderr, "[kveritas] Provenance: %d snapshots, %d files, %d withheld (%s)\n",
-			len(rec.Provenance.Commits), rec.Provenance.FileCount,
-			len(rec.Provenance.Withheld), rec.Provenance.Disclosure)
-		if err := prov.Keystore().Save(filepath.Join(kvDir, "keystore-"+rec.ID+".json")); err != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not write proof keystore: %v\n", err)
-		}
-		if provLevel >= provenance.Open {
-			bundlePath := filepath.Join(kvDir, "bundle-"+rec.ID+".zip")
-			if h, err := prov.WriteBundle(bundlePath); err == nil && h != "" {
-				rec.ProvBundleHash = h
-				fmt.Fprintf(os.Stderr, "[kveritas] Checkout bundle written (%s)\n", bundlePath)
-			}
-		}
-	}
-
-	// The cleartext activity map exposes real file names, so it ships only once names are disclosed.
-	trace := obs.Stop()
-	if provLevel >= provenance.Names {
-		rec.Trace = trace
-		if trace != nil {
-			fmt.Fprintf(os.Stderr, "[kveritas] Activity trace: %d files, %d subprocesses\n",
-				len(trace.Files), len(trace.Procs))
-		}
-	}
-
-	rec.EndAt = time.Now().UTC()
-	rec.DurationSec = rec.EndAt.Sub(rec.StartAt).Seconds()
-	rec.DurationFmt = session.FormatDuration(rec.DurationSec)
-	rec.ExitCode = exitCode
-	if nodes := collectNodes(kvDir, rec.ID, expected); len(nodes) > 0 || expected > 1 {
-		rec.Nodes = nodes
-		rec.NodesExpected = expected
-		rec.Hardware.MachineID = hardware.MachineID()
-	}
-	rec.StdoutLines = stdoutLines
-	rec.StdoutHash = digestBuf(stdoutBuf.Bytes())
-	rec.StderrHash = digestBuf(stderrBuf.Bytes())
-	rec.Metrics = allMetrics
-	rec.Phases = allPhases
-	rec.Claims = allClaims
-	rec.Seeds = allSeeds
-	rec.MetricHash = digestBuf(metricLines.Bytes())
-	rec.HardwareSamples = hwSamples
-	if declaredSeen {
-		rec.Declared = declared
-	}
-
-	var postHashes map[string]string
-	var postHashErr error
-	var envDig, envPackages string
-
-	var postWg sync.WaitGroup
-	postWg.Add(2)
-	go func() {
-		defer postWg.Done()
-		postHashes, postHashErr = hashFiles(fileHints)
-	}()
-	go func() {
-		defer postWg.Done()
-		envDig, envPackages, _ = envDigest(command)
-	}()
-
-	if len(sess.SourceHashes) == 0 {
-		postWg.Add(1)
-		go func() {
-			defer postWg.Done()
-			files, err := bundle.CollectSourceFiles(sess.ProjectDir)
-			if err == nil && len(files) > 0 {
-				hashes, err := bundle.HashSourceFiles(sess.ProjectDir, files)
-				if err == nil {
-					sess.SourceHashes = hashes
-					fmt.Fprintf(os.Stderr, "[kveritas] Indexed %d source files for integrity tracking\n", len(hashes))
-				}
-			}
-		}()
-	}
-
-	postWg.Wait()
-
-	if postHashErr != nil {
-		return nil, fmt.Errorf("post-run file hashing: %w", postHashErr)
-	}
-	rec.PostHashes = postHashes
-	rec.EnvDigest = envDig
-	rec.EnvPackages = envPackages
-
-	if len(sess.SourceHashes) > 0 {
-		rec.SourceCodeHash = computeAggregateSourceHash(sess.SourceHashes)
-	}
-
-	for path, pre := range preHashes {
-		if post, ok := postHashes[path]; ok && post != pre {
-			rec.Modified = append(rec.Modified, path)
-		}
-	}
-	if len(rec.Modified) > 0 {
-		fmt.Fprintf(os.Stderr, "[kveritas] Warning: files modified during run: %v\n", rec.Modified)
-	}
-
-	// File-hint hashes are keyed by real paths and provenance already covers them,
-	// so they are dropped at the redacted level.
-	if provLevel < provenance.Names {
-		rec.PreHashes = nil
-		rec.PostHashes = nil
-		rec.Modified = nil
-		// The package list can name internal packages; redacted keeps only its digest, still signed.
-		rec.EnvPackages = ""
-	}
-
-	parser.WarnIfEmpty()
-	fmt.Fprintf(os.Stderr, "[kveritas] Run complete (%s, exit %d)\n",
-		rec.DurationFmt, rec.ExitCode)
-
-	return rec, nil
+	return r.Finish(exitCode)
 }
 
 func hashFiles(paths []string) (map[string]string, error) {

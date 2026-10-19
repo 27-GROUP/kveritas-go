@@ -29,6 +29,9 @@ type Session struct {
 	Disclosure   string            `json:"disclosure,omitempty"`
 	// Per-session salt for provenance leaf hashes. Kept local, never published.
 	ProvSalt string `json:"prov_salt,omitempty"`
+	// How results are captured when a run declares none: "declared", "autolog" or "none".
+	// Empty means not yet chosen.
+	Results string `json:"results,omitempty"`
 	// Every invocation, failed and interrupted ones included, advances the anchor chain.
 	Invocations int    `json:"invocations,omitempty"`
 	ChainHead   string `json:"chain_head,omitempty"`
@@ -81,6 +84,15 @@ type RunRecord struct {
 	// Multi-node runs: every other node's own measurement, delivered to node 0.
 	Nodes         []NodeRecord `json:"nodes,omitempty"`
 	NodesExpected int          `json:"nodes_expected,omitempty"`
+}
+
+// A result named as a claim when sealing rather than printed by the run. It is
+// signed apart from the runs, which were anchored as they ended and cannot change.
+type SealClaim struct {
+	Run    int     `json:"run"`
+	Metric string  `json:"metric"`
+	Value  float64 `json:"value"`
+	Source string  `json:"source"`
 }
 
 type NodeRecord struct {

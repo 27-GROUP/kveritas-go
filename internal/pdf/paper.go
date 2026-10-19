@@ -3,6 +3,7 @@ package pdf
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -348,7 +349,7 @@ func (b *builder) paperReport(sess *session.Session, runs []*session.RunRecord, 
 	})
 	b.setupSection(sess, runs)
 	b.runsSection(runs, seal)
-	b.resultsSection(runs)
+	b.resultsSection(runs, sealClaims(seal))
 	b.evidenceSection(runs, hmcaResult)
 	b.provenanceSection(sess, runs)
 	b.verificationSection(seal)
@@ -474,6 +475,9 @@ func (b *builder) setupSection(sess *session.Session, runs []*session.RunRecord)
 		}
 	}
 	for i, r := range runs {
+		if r.Launch == "shell" {
+			rows = append(rows, []string{fmt.Sprintf("Launch, run %d", i+1), "typed in a kveritas shell, terminal output captured"})
+		}
 		if r.Launch == "attached" {
 			detail := "attached: observed from inside the process, output not captured"
 			if r.OutputCaptured {
@@ -558,8 +562,26 @@ func (b *builder) runsSection(runs []*session.RunRecord, seal *session.SealRecor
 	}
 }
 
-func (b *builder) resultsSection(runs []*session.RunRecord) {
+func sealClaims(seal *session.SealRecord) []session.SealClaim {
+	var doc struct {
+		Claims []session.SealClaim `json:"seal_claims"`
+	}
+	if seal == nil || json.Unmarshal([]byte(seal.CanonicalJSON), &doc) != nil {
+		return nil
+	}
+	return doc.Claims
+}
+
+func (b *builder) resultsSection(runs []*session.RunRecord, claims []session.SealClaim) {
 	b.section("3  Results")
+	if len(claims) > 0 {
+		rows := make([][]string, 0, len(claims))
+		for _, c := range claims {
+			rows = append(rows, []string{c.Metric, fmt.Sprintf("%.6g", c.Value), fmt.Sprintf("run %d", c.Run), c.Source})
+		}
+		b.para("Claimed when the record was sealed, each taking the latest value its run recorded.")
+		b.table([]string{"Claim", "Value", "From", "Source"}, []float64{2, 1.2, 1.6, 1}, rows)
+	}
 	for i, r := range runs {
 		b.subsection(runTitle(i+1, r))
 		fm, count := finalMetrics(r)

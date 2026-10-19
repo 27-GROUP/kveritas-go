@@ -148,7 +148,7 @@ func sealedReportProblem(path string, meta *pdf.EmbeddedData) string {
 	if !haveSigned {
 		return "report predates stored canonical data"
 	}
-	computed, _, err := canonicalSessionHash(meta.Session, meta.Runs, seal.SourceBundleHash, seal.CheckoutBundleHash, signedHMCA, signedCerts)
+	computed, _, err := canonicalSessionHash(meta.Session, meta.Runs, seal.SourceBundleHash, seal.CheckoutBundleHash, signedHMCA, signedCerts, signedClaims(seal.CanonicalJSON))
 	if err != nil || computed != seal.DataHash || crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
 		return "embedded data does not match the signed data hash"
 	}

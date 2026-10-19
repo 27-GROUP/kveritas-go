@@ -36,6 +36,7 @@ make build
 ```bash
 kveritas run --seal -- python train.py   # run, sign, write report.pdf
 kveritas python train.py                 # short for kveritas run -- python train.py
+kveritas shell                           # recorded terminal: every command is a run
 kveritas seal -o report.pdf              # sign after several runs
 kveritas verify report.pdf               # --offline skips the server
 ```
@@ -58,7 +59,13 @@ print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}")
 | `KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]` | Workload card. |
 | `KV artifact role=model\|dataset [name=<ref>] path=<file> visibility=public\|private` | Model or dataset. |
 
-Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work. Metric-like output (`loss: 0.24 - val_acc: 0.94`) is picked up as heuristic.
+Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
+
+**Measured** on every run: time, CPU, memory, GPU, energy.
+
+**Autolog** (opt-in, `kveritas autolog on`): Hugging Face, Keras, Lightning, XGBoost, LightGBM, hyperfine, Google Benchmark, criterion, `time`, TensorBoard, MLflow, CSV logs. Marked `auto:<format>`.
+
+**Claims at seal:** `kveritas seal --claim val_acc`.
 
 ## Features
 
@@ -78,8 +85,10 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work. Metric-l
 | Command | |
 |---|---|
 | `run [--seal [path]] [--node-rank N] -- <cmd>` | Run. Starts a session if needed. |
-| `init [--local] [--harness] [--disclosure redacted\|names\|open]` | Start a session with options. |
-| `seal [-o path]` | Sign into a PDF. |
+| `shell` | Recorded terminal. Every command a run, anchored when it ends. |
+| `init [--local] [--harness] [--autolog] [--disclosure redacted\|names\|open]` | Start a session with options. |
+| `autolog [on\|off]` | Detect results when a run declares none. |
+| `seal [-o path] [--claim name]` | Sign into a PDF. |
 | `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |
 | `prove` / `verify-proof` | File proof. |
 | `harness-prove` / `verify-harness-proof` | Agent prompt/output proof. |
