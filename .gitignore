@@ -6,7 +6,3 @@ keys/private.pem
 **/.kveritas/
 *.pdf
 
-
-*.md
-!README.md
-!**/README.md
