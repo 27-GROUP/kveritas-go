@@ -85,7 +85,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | Command | |
 |---|---|
 | `run [--seal [path]] [--node-rank N] -- <cmd>` | Run. Starts a session if needed. |
-| `shell` | Recorded terminal. Every command a run, anchored when it ends. |
+| `shell` | Recorded terminal. Every command a run, anchored when it ends. Asks disclosure on a new session. |
 | `init [--local] [--harness] [--autolog] [--disclosure redacted\|names\|open]` | Start a session with options. |
 | `autolog [on\|off]` | Detect results when a run declares none. |
 | `seal [-o path] [--claim name]` | Sign into a PDF. |

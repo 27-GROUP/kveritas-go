@@ -52,7 +52,14 @@ var cmdShell = &cobra.Command{
 	Long: `Opens your own shell (bash or zsh) with (kv) in the prompt. Every command you type
 is a run, measured and anchored at the server when it ends, failed ones included.
 Results are read from KV lines, or detected when autolog is on. On exit, kveritas
-lists the latest results, lets you mark claims, and offers to seal.`,
+lists the latest results, lets you mark claims, and offers to seal.
+
+With no session in the folder, it starts one and asks what the report shows
+(redacted, names or open) and how to get results (declare, autolog or none).
+Exit without sealing and the next kveritas shell continues the same session.
+
+Not recorded: cd, export, source, clear, history, editors and pagers.
+Linux and macOS, bash 4.4+ or zsh.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error { return runShell() },
 }

@@ -47,12 +47,15 @@ Workflow:
   kveritas <cmd>             Same, for any program on PATH: kveritas python train.py
   kveritas run --seal -- <cmd>
                              Run, then sign and write report.pdf in one step.
+  kveritas shell             Recorded terminal: every command you type is a run.
   kveritas seal              Bundle and sign the session; produce a PDF report.
+  kveritas seal --claim acc  Same, claiming a result at its latest value.
   kveritas verify <pdf>      Verify a signed report (no account required).
   kveritas check --claims c.json --report r.pdf
                              Check paper claims against signed results.
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
+  kveritas autolog on        Find results in output and metric files when a run prints no KV lines.
   kveritas status            Show current session state.
   kveritas update            Update to the latest version.
 
@@ -63,7 +66,8 @@ Result lines your program prints:
   KV phase <name>
   KV model params=<int> arch=<name> precision=<fp16|bf16|fp32>
   KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]
-The KVERITAS_METRIC/PHASE/CLAIM/INPUT/MODEL/WORKLOAD lines are still accepted.`,
+The KVERITAS_METRIC/PHASE/CLAIM/INPUT/MODEL/WORKLOAD lines are still accepted.
+Every run also gets measured results: time, CPU, memory, GPU and energy.`,
 	SilenceUsage: true,
 }
 
@@ -526,7 +530,7 @@ func init() {
 	cmdInit.Flags().StringVar(&initOperator, "operator", "", "operator identity (default: current user)")
 	cmdInit.Flags().StringVar(&initDisclosure, "disclosure", "redacted", "provenance disclosure: redacted (default), names, or open")
 	cmdInit.Flags().BoolVar(&initShowNames, "show-names", false, "keep real file names in the report (no content bundled); same as --disclosure names")
-	cmdInit.Flags().BoolVar(&initAutolog, "autolog", false, "detect results from output and metric files when a run declares none")
+	cmdInit.Flags().BoolVar(&initAutolog, "autolog", false, "find results in output and metric files when a run prints no KV lines")
 	cmdInit.Flags().BoolVar(&initNoHooks, "no-hooks", false, "harness mode: do not install Claude Code hooks (actions are recorded another way)")
 	cmdProve.Flags().StringVar(&proveProject, "project", "", "project directory holding the files (default: current directory)")
 	cmdProve.Flags().StringVarP(&proveOutput, "output", "o", "", "output proof path (default: kveritas-proof.json)")
@@ -1186,6 +1190,9 @@ Print one line per result, from any language:
   KV phase eval                  (hardware snapshot at the boundary)
   KV claim accuracy=0.9471 phase=eval
   KV seed 42
+
+No KV lines? The first run asks once: declare them, autolog, or no results.
+See: kveritas autolog --help
 
 The whole output is hashed into the signed record. Files listed with --files are
 hashed before and after the run.

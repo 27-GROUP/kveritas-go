@@ -62,7 +62,7 @@ Choice [1]: `)
 
 var cmdAutolog = &cobra.Command{
 	Use:   "autolog [on|off]",
-	Short: "Detect results from output and metric files when a run declares none",
+	Short: "Find results in output and metric files when a run prints no KV lines",
 	Long: `Autolog reads results from the output of common tools (Hugging Face, Keras,
 Lightning, XGBoost, LightGBM, hyperfine, Google Benchmark, criterion, time) and from
 metric files a run writes (TensorBoard, trainer_state.json, CSV logs, MLflow). It is
