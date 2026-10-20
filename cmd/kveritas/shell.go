@@ -82,7 +82,7 @@ func runShell() error {
 	}
 	kvDir, err := session.Find()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[kveritas] No session here; starting one (%s disclosure)\n", initDisclosure)
+		initDisclosure = askDisclosure()
 		if err := cmdInit.RunE(cmdInit, nil); err != nil {
 			return err
 		}
@@ -571,6 +571,22 @@ func (s *shellRec) summary() []string {
 		}
 		fmt.Printf("No result named %q\n", bad)
 	}
+}
+
+func askDisclosure() string {
+	fmt.Fprint(os.Stderr, `[kveritas] New session. What should the report show?
+  1  Redacted: results only, no file names or code
+  2  Names: file names, no code
+  3  Open: your code too (needed to publish a record)
+Choice [1]: `)
+	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	switch strings.TrimSpace(line) {
+	case "2":
+		return "names"
+	case "3":
+		return "open"
+	}
+	return "redacted"
 }
 
 func confirm(prompt string) bool {

@@ -36,8 +36,8 @@ func askResults(kvDir string, sess *session.Session, intro string) string {
 	}
 	fmt.Fprint(os.Stderr, "[kveritas] "+intro+` How should results be captured?
   1  Declare them: print one line per result, e.g.  print("KV runtime_s=1.84")
-  2  Autolog: detect results from output and metric files (best effort, marked automatic)
-  3  No results: record code, hardware and timing only
+  2  Autolog: find them in what your program prints or saves (may miss some)
+  3  No results: record code, hardware and time only
 Choice [1]: `)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	choice := "declared"
