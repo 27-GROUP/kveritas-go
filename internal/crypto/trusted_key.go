@@ -2,65 +2,118 @@ package crypto
 
 import (
 	"crypto/rsa"
+	_ "embed"
+	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
 )
 
-// trustedServerKeyPEM is the K-Veritas production signing key, pinned into the
-// binary. A report is authentic only if its embedded key matches; any other key
-// means self-attested.
-const trustedServerKeyPEM = `-----BEGIN PUBLIC KEY-----
-MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA1QL3YyMgeShx8IhTC7jb
-sM0w2BnRXgsBn3+SMXKjtwHATqdekm1PlcjayJxD5fcPrOPPCqp/LoUFz5CUZzRi
-6+8FTv70dHuIz5A4LAt4vcgwP+iWscPc3HzpmjpsKbTmOemqgp6RB6GNnPpxYa5X
-7qU95EfEisX/GfoS9ToXtqPBwCcVWSPBX8efeC4TC58m96Fsp4mC8KIcEadbIbHN
-av0JjdTJ//CMOWZSIbdzE6qvEbNFcqDB5tNU7oHfYvBeNLrvPU9TAqdbtozdhQ+D
-AhfTRuJNgWEkjWD5lbOVhi4qlkweSOEMTKT3ye9Il5xEaJn4bku4eKqeS7VSZt3o
-XbUcmr2H5mKcKSvt6bXmX6ajAmgi900Cm9QJlaQkJM6z2iITnyvDMgueJtFxQpC9
-HNBPgPZ242NH8JgE6CNF7ToL9syanS67u7UMgIcNgeNHNcy9blGpU5annzP9gN2l
-6HEMldkXNdKQRb1rDWyEJf3N/50YHnXXPmuf5sb8R/pxWNqtfO4R5UGVV92qd2Mi
-1GN7lE3mbQRbPsLL/JApDXMNzNikaFfBsQK7iKxr7vIaTeZckFZWfThcYNT7Hasg
-+eE4bf/olCHBCf1VIDCkDxohehdZ0WRRcgM9iK3I/0zZdaBsgdc8WuJRmb8LPP9v
-8Jap/1PWjNcNku5cdW3gHLcCAwEAAQ==
------END PUBLIC KEY-----
-`
+// The K-Veritas signing keys, pinned into the binary. The next keys are published
+// before they are used, so a rotation never turns new reports SELF-ATTESTED for a
+// CLI built before it; a retired key stays trusted for what it signed until retired.
+//
+//go:embed trusted_keys.json
+var trustedKeysJSON []byte
+
+type TrustedKey struct {
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Until        string `json:"until,omitempty"`
+	PublicKeyPEM string `json:"public_key_pem"`
+	key          *rsa.PublicKey
+}
+
+var (
+	trustedOnce sync.Once
+	trusted     []TrustedKey
+)
+
+func TrustedKeys() []TrustedKey {
+	trustedOnce.Do(func() {
+		var doc struct {
+			Keys []TrustedKey `json:"keys"`
+		}
+		if json.Unmarshal(trustedKeysJSON, &doc) != nil {
+			return
+		}
+		for _, k := range doc.Keys {
+			if pk, err := LoadPublicKey([]byte(k.PublicKeyPEM)); err == nil {
+				k.key = pk
+				trusted = append(trusted, k)
+			}
+		}
+	})
+	return trusted
+}
+
+// Reports from a retired key count only up to its retirement, so a key that leaks
+// later cannot vouch for anything new.
+func (k TrustedKey) validAt(signedAt string) bool {
+	switch k.Status {
+	case "active", "next":
+		return true
+	case "retired":
+		if k.Until == "" {
+			return true
+		}
+		until, err := time.Parse(time.RFC3339Nano, k.Until)
+		if err != nil {
+			return false
+		}
+		at, err := time.Parse(time.RFC3339Nano, strings.Replace(strings.TrimSpace(signedAt), " ", "T", 1))
+		return err == nil && !at.After(until)
+	}
+	return false
+}
 
 func TrustedServerKey() (*rsa.PublicKey, error) {
-	return LoadPublicKey([]byte(trustedServerKeyPEM))
+	for _, k := range TrustedKeys() {
+		if k.Status == "active" {
+			return k.key, nil
+		}
+	}
+	return nil, fmt.Errorf("no active K-Veritas key pinned")
 }
 
 func SamePublicKey(a, b *rsa.PublicKey) bool {
 	return a != nil && b != nil && a.N.Cmp(b.N) == 0 && a.E == b.E
 }
 
-// OriginConfirmed reports whether the embedded key matches the trust anchor
-// (anchorPEM when non-empty, else the pinned server key). True means K-Veritas
-// signed the report; false means self-attested.
-func OriginConfirmed(embeddedPEM string, anchorPEM []byte) (bool, error) {
+// OriginConfirmed reports whether K-Veritas signed: the embedded key is one of the
+// pinned keys, trusted at signedAt, or matches anchorPEM when one is supplied.
+func OriginConfirmed(embeddedPEM string, anchorPEM []byte, signedAt string) (bool, error) {
 	embedded, err := LoadPublicKey([]byte(embeddedPEM))
 	if err != nil {
 		return false, err
 	}
-	var anchor *rsa.PublicKey
 	if len(anchorPEM) > 0 {
-		anchor, err = LoadPublicKey(anchorPEM)
-	} else {
-		anchor, err = TrustedServerKey()
+		anchor, err := LoadPublicKey(anchorPEM)
+		if err != nil {
+			return false, err
+		}
+		return SamePublicKey(embedded, anchor), nil
 	}
-	if err != nil {
-		return false, err
+	for _, k := range TrustedKeys() {
+		if SamePublicKey(embedded, k.key) && k.validAt(signedAt) {
+			return true, nil
+		}
 	}
-	return SamePublicKey(embedded, anchor), nil
+	return false, nil
 }
 
 func CheckpointPayload(seq int64, entryHash, at string) string {
 	return fmt.Sprintf("kveritas-ledger-checkpoint:%d:%s:%s", seq, entryHash, at)
 }
 
-// A checkpoint counts only when the pinned server key signed it.
+// A checkpoint counts only when a pinned key, trusted at its time, signed it.
 func CheckpointSigned(seq int64, entryHash, at, signature string) bool {
-	key, err := TrustedServerKey()
-	if err != nil {
-		return false
+	payload := CheckpointPayload(seq, entryHash, at)
+	for _, k := range TrustedKeys() {
+		if k.validAt(at) && VerifyPSS(k.key, payload, signature) == nil {
+			return true
+		}
 	}
-	return VerifyPSS(key, CheckpointPayload(seq, entryHash, at), signature) == nil
+	return false
 }

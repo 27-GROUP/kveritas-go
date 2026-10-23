@@ -524,8 +524,8 @@ func Verify(r *Report) Result {
 
 	// Valid signatures prove the chain is intact, not who signed it: a session signed
 	// with any key but the K-Veritas server key is self-attested, as reports are.
-	for _, pem := range []string{r.Genesis.Server.PublicKeyPEM, r.Seal.Server.PublicKeyPEM} {
-		if ok, err := crypto.OriginConfirmed(pem, nil); err != nil || !ok {
+	for _, s := range []ServerSig{r.Genesis.Server, r.Seal.Server} {
+		if ok, err := crypto.OriginConfirmed(s.PublicKeyPEM, nil, s.SignedAt); err != nil || !ok {
 			res.Verdict = "SELF-ATTESTED"
 			res.Detail = "chain and signatures are valid, but signed with a key other than the K-Veritas server key"
 			return res

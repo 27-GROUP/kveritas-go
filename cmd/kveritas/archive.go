@@ -173,7 +173,7 @@ func sealedReportProblem(path string, meta *pdf.EmbeddedData) string {
 	if err != nil || crypto.VerifyPSS(key, payload, seal.Signature) != nil {
 		return "invalid signature"
 	}
-	if ok, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil); err != nil || !ok {
+	if ok, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil, seal.SignedAt); err != nil || !ok {
 		return "not signed by the K-Veritas server"
 	}
 	return ""

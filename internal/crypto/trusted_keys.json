@@ -1,0 +1,55 @@
+{
+  "note": "K-Veritas signing keys. active: in use. next: published in advance, trusted, not in use yet. retired: trusted for reports signed until its 'until' time.",
+  "keys": [
+    {
+      "id": "139e7211ea8b538d",
+      "status": "active",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA1QL3YyMgeShx8IhTC7jb\nsM0w2BnRXgsBn3+SMXKjtwHATqdekm1PlcjayJxD5fcPrOPPCqp/LoUFz5CUZzRi\n6+8FTv70dHuIz5A4LAt4vcgwP+iWscPc3HzpmjpsKbTmOemqgp6RB6GNnPpxYa5X\n7qU95EfEisX/GfoS9ToXtqPBwCcVWSPBX8efeC4TC58m96Fsp4mC8KIcEadbIbHN\nav0JjdTJ//CMOWZSIbdzE6qvEbNFcqDB5tNU7oHfYvBeNLrvPU9TAqdbtozdhQ+D\nAhfTRuJNgWEkjWD5lbOVhi4qlkweSOEMTKT3ye9Il5xEaJn4bku4eKqeS7VSZt3o\nXbUcmr2H5mKcKSvt6bXmX6ajAmgi900Cm9QJlaQkJM6z2iITnyvDMgueJtFxQpC9\nHNBPgPZ242NH8JgE6CNF7ToL9syanS67u7UMgIcNgeNHNcy9blGpU5annzP9gN2l\n6HEMldkXNdKQRb1rDWyEJf3N/50YHnXXPmuf5sb8R/pxWNqtfO4R5UGVV92qd2Mi\n1GN7lE3mbQRbPsLL/JApDXMNzNikaFfBsQK7iKxr7vIaTeZckFZWfThcYNT7Hasg\n+eE4bf/olCHBCf1VIDCkDxohehdZ0WRRcgM9iK3I/0zZdaBsgdc8WuJRmb8LPP9v\n8Jap/1PWjNcNku5cdW3gHLcCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "91644651113e0027",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAxbwbSoANbQAsm+i03C0e\nJOCT9zwZ1DKE7g0wgyIlYLmzRODZBftOfrrR1PHhuXFyWStUryh1eyZzDcKS7M0b\nQxuSK5yp2ZkFwsr2+v5p6AkcQFMRkblMexbSRatJUXqM+OG1rt1XzEJF8ce+87n/\noCKplTtyO1ESmWLa7fTz4sbNfrSA0rMHnVsY9Zoccc5H93v7HO4hFTA8SpQsyF4E\nb5y0ZHqcsUoCPklLMpk9b3C2rfJdsXggZRhOODhqQTf4Nqyl4vI3SQgqOM13eyGP\ncuu4WWSpcC3TdSrWCdffm231SOxgOW/rdJ2uwz6Mc81Q9iyNAEMFvEdGxdtdcyF7\nfy48d8g2eXJOWJOYOB2+k24biBCWndIzADTLE5D/y/qpl64BSMwMuMXNuz+EwXBk\nTRFz+OEkMFt2D4SkH4oVJONgzzHmxW60bZVU22R+N/tleWLXvnffuQPIdFvkvFRd\nWYsrnVRjpNAQJaG6eMUyzj6o40qScOLqmaofjzD8hBdJPpOEBvGWK+1t11/gy0Hf\nU+Ch0832B68vt4GGVztolJ01HgGU8hKViPVU8UoRRFaSJPz2t1Gu3stUTdKqXkiA\nRB6jHLUDEm+Fxi1X8Uhs6ay8ej7QEwZAT5DmR5ZnmWTJcQEaTGiXUkMtXD/u9kDG\n7E2z4WruVa5Sm2Kl4fzobOcCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "a0ffb03e8e6a7530",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAqBU72xbZPIzs4E/eFokm\nNO2BLzHBmVLFcSUT++B52Ftp1iYjSktkyS9M5DX/fh6CME9Zr/oBfalCX1UqpJNO\nKo3mxDNM9r8g7SwX92MPj/nl1KBNs5JgOJnYlmuU/6oUsqaAVLSDZ2D31gPdPrN/\nrZ3CKQK3+u6KcR8HqOEAh0hG/6nWjL9rhEyUYT+tL+xfvLjDlFUpyxgIv0Hv/Cks\nhhaYHCdd5fwmHNcMnI9JUZWqhBPRyJoKXcwBXIcz1qCiNClqr8kQeU0BwQmhCVXj\niMGS4pvFIk7foodw5oSdqd7+B+CSm2ULJWgv/CjdLzxZeowKCgbC8YfIH5CDSMNj\ngv/N1l0BCP6M3xph1g/4nTgxzXmNZKJQWmO0ZFMaSLjF7vcAbbyZ5NV/Rg+hAPck\nidLZ99EhuJNWOAzOnT+Th0oTudqS2VGCjI2TaUltY3X2ptKYnn54YeW9KY5A7qw9\nJBBpwdW7YHhlnHqCFJVFS99zwLDmpLKjU4qW8mIio+Vjmv6Gy81YiWjYWYsjg0JF\nNJyLfNWsmgJEmz3hjeH0GFOMDUJ1Pk7xMZ2MQFGn/EhMT9KxRyC4sxiz8vVjtClt\ntanC9Nu5p0sb9V4hCE2XeIIvji0YT5EONn2VVLtpebO0kpUd0U9B2XpntzojHmLY\n0A+XS1B6TGa0RwicBmiPJBcCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "d6c477a9ec0be194",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAsy9DQMivEh7FQ/XTdxrE\nT0HO5ovEmdczSLoRINXRDc/MyYE5WMT7zvePcWQ9oCnEmBIXABRoHnhOPsSKKBNg\nfMZf5D+S4qTQZ9rVx/u18pOviGABWtaCeURBAsZeXgE/m68o6m8S8Y0uN72zm6N2\nGffF6hmjxfM7xGsPiZqhAgdE5lXaOz6WCNuddk2Fad700kFprAUZvhsC/di6YhAq\nT+C44Dp6adewricB4yvjaFpktvNC6I4PfhdXjocA6jvAHBaGwX1sJexbmoDbBqTG\n+HsWGYOSlydUkKGdzFFP+azs2sZeL2mxErt/L9C91nubZhc99af9FVxE+iozpnwb\ntswoWGyWkr/eo+kyxLOLC59tyv5zo/MsJxdfDNam/Ly7TpMkq+fcxHxs6P3l+Fdc\nV4Kz2TT5h53KK16MeQeWR3eQD8qd91mKfR94Q8thZKEDYqimnUOdaEN+UOBCEf1i\nlEckVyx/kmGzI1giM59PL84uF0o2KncrqHlxjZ3RIcQKKMPnyCx0yeFt3S6nTxm5\n8FMlT46wpk8inkP7SWK2YKAFT7axbTrgfRxXPXfNGiBPUBzE2Skn/pp422kR31yl\nW7h5OdOfc/tsljEhHE2hpnfo8rI3LY3E8qSooFSvuf8WnPzo3jHl34rPhfXgrMOU\nb9FPphJCLDuOD/5KkkZOW4cCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "1375d361c90aba6e",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyTFFx4+/Im7nVreqNgQq\n9lI3Fvl2GpiiUDoVaV8h8kiQAd+bwL/Wok5n9+u71+LinY512JWyVNoP/48W7KJq\nh00Jx5X/pngIU1NcZI0wOX6QxvWp7whnQloOX+IUq+J4+xPSDHNBf517iTQewtTP\nJXC8TVVm9ssCCfpU823AlHzYrxwhlNxISea0L7uOn174JN1reNR792zUSEeChSCe\nGt2zha6ndgzHOGBmltXuvJkU3X+/C3rk+HbU/EB64qDL5EqIKuIVX3ItxCBghARr\nk71dU1GoPeyWqdx6WC7EIGMaqRLeHIL0z1iY8pNUa7/ZpEFDKq6bICF0P0F3imNq\nISw9Nr2ZlR25WHbzVO5jKfg3oW0xkEW2u+R/tHMSHYdaxXQTS3QZ/QodDKwKEYYH\nHyTVL8MrRN7ciW8Vvoalu76HMAVGvViaJGE2vHODRpnIEc9b5hHnjP9zwFDSSXCw\nZfn7DUXr291libLJBy9v1xITep1Tr+KDlzwKX3Hi+/yeosCh7wYyMsBZKop9WH3y\nd8tt8Yspdq/N/P3B3aNt+1OXjw4HwmG0BdBW8cilMCFFDfHG1HzBkbjlMLI9eejc\nHEcCoeVGvlC3d5YMT6fsqr1T+6XVGibTdrpG9v66oemg3RpfKxy/1tKFaAFILbp7\n+0O6I4/HMcjPrbzD7mtNtZMCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "4baf1f14ce88a886",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAvDaZBebarj94r6Tym2xA\nS4Lrol39qG4qqlvVdfuVSE+D9snC3Xxwnv2Vy3QmGh4SXK4lGDI4WoMc54z82QLN\nFULrxLPy9+sTjVBw6YMnFKCC00FYUVIPBER0gQpjrX+oqzFurXAS3ho1PH+HFeJz\nICoeukycMyso0A+GQo7YB5do37ewjMQuIaqn1DI/AM9u7o67ScCQrRbPT9A7vB8t\n4Cj9nwSy5ZzsPsEBfV1oNQOzcQWXuxZi7SP4KGlFcUXaCkqzZ4UOD1i72mdHkPKR\n4RZAnKopgEcPy/3IyRvmeXRqu6+jJQBkYrrQmuUdgh/ctpb5mL6tQeKg9eRh1gZQ\nro6OA8876yHxaKks/CcRsVrdFsYUXF5tpa1VhvJHwk9qVX9eKn2ojiSY8oeHCieB\nSxtO7bg97uapYOnw5DzhDLglNTqIN+EssemnpCV6yeTixExTp6xSHFPdycGvtWSE\nRbrtkLQ+IDIT3duDR7aET+SdM3VjRxrNYlWwIv74E7UU6w4I85L+KuD2w5RNP4m5\n0spXK1S1O6nGaBSQbrdcvjV/SOZ/s7gjzPLBVnEzOA9QFYH7EGC6e9n0VsNIM1iR\nbHzksCa9vJV4V0Y4FTFmHUS5DBvBwDBN4YlKg4OTVFXKFP8+9N1vZrozcWCOI5XB\nUVg5ARCTuNxUzo4SimNfQCkCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "1279bdc0588068be",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAzDOUFddLi/qKIfFSM8l2\nOQ5yH7VsDLhZ1fkzjLaDHr9ygBfpbu7JrETE/V61k9ZVEVHSlzLGPb8z2fN3MUNR\nxz8OTNlEPB41f+A1qbdaSU6eBMzsjqIBXJGftIqK3NNQjL4lbxUCJA03Dg9CcGiU\nAokdx+lyc0Jl7aXww6BPqoYn2fBbYoXoezGfAFgpDPEqLQ8DOGwK4iif1iCRtDEC\nJy/VjTpY4kRY+3UxiorE3Et7pmWkSrvw6lXp4cDKdpTa8xTtqs6u3QyFj18lqK27\notjcn9yppQv5jVfiR05dPXhAulV6hPY56C1O/3B7mqy6ilvI6uY0hyPTbuqVimKJ\nhkf49P6Oh06OAEBeorJSHpF50YTa62DtYZXM+maafk+5n+03y7HXrAYfP/h2lPYy\nERAEydhjCp+JGVId8aR1JOgmaInngQ9LP4+TgO72DG2FolmvYo7t70YS5aYNy/Ut\n9nouorEw3V2bTsp0LQ/ZN0mdpBFZPkloehAzPECYkFP9Hbk018f2ZEvlP9sXOVsF\nZ0kNAIZcYhOXfOHfOrN6exprvlHQdgojEi4BP2bRln3c7OaUeoer0i4AAhy1jJNX\nKSNOR1yuSI2qrqFJFu6W0vm/7LU3vW5KFnIt0PI0Skk8aEP4fjSdVdzAHy7ZCQQw\nABMxbSAGn20E3XFIno1tkDUCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "df860650b4a75d8b",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAqaElmOSCdnw1CAIl0kMa\n3NYVvosvIzrhr19MI/pyO14lu0DxRy52NTHFrQmNFTwwo8miCHFWl8JcNIXxC5wx\nx4AdLlN6euwwsY7lqLcZu/ALF+7PDBDS+Z8RDqDEr+BbYcfAWN670JTBZXtS04zb\n4oOPJRxNMS4fshoPl38oArfCEv36CDN175v8tL88kadInVzECE2d639ENLNBFNby\ncCAQqatJkdyO6KAtbeIrXCaueI5CKt5luXmZG1Q3KeZ+XEpXqviICpeZeFE85wwl\nP9+ie0MAtaohIcvCNjUCA0f0aGh7qYlO4UxTDaeupZPvqMNeCyxjtx7yzBUsLYbt\nd1qUhse4gYkWMANDGKu1EuAXWtmEQuq/k/sjsuR4ehM/xnWGacobDYgo6KuhqvQA\nhljNRzi5jj/daEo3LEpJTz1ogOibK2XiLL/nNFpCYO15srW56lheQ9y9fwvMtu06\n5QFYfR/yuNTMonW/gDjuswUpG/u7TSeFdLeRx4YH/CME0vK7or3z7urvncwqZrm/\nH64WumBcddVI1l4NERci9xpZmipbbAAIKsEe46myJLj/oWEVMbsoP+5iEV7xsUfi\nSRHkuGV3EB2i25pHW926sgVxlNaNidj6Qpl69DcCQzGJ4HGVw8h5PQtSq+NcyNs/\nmo7McUD6kQJVSL9bnRxOEbECAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "d7f3e3553e8d83b4",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAq39cH2z7ccjVP2p0HNky\ngWpRcXIzqjt5LZ89hpyrxbKP08jQlIKYnUo66EsznALe+BbMrSHwjvTsE0naaDQp\njIlxjmAVpKjg4ZSrFhS6WRQpnveD8rPAwGEUKohuNPL3ig5ACYbCgesjc01FCYWg\nTqRbv6DrWNsDCgX5wE8nHF5IH7/l+Rco9ewCojab7VdWMqb+8WSQyAsw14PncgIG\n9oD1+usaCNj3xx3Ak3ALd6+ANT72/yKQvePoRxE68Uo6ebu+R/wIUhQVZPS/PHCE\nYkb0Z4QLagslyCb7XHaw0sU3iCIvMZhmnbv/aohLVIaI8/18ZSilBP57FZQkrAxG\nUWuAbqzO0rIS0DJ6wa86FPKOJFqcSRu3UuNRkXGSlsmO6qsZdh4U279+Qc9VCfxH\niqD9IwozC/EKQO6CmvgdL2tJWoNL//C27eLmF1JbNkT3o8hQu0cCtmAK/Mh4KkY6\ncOqxQ9d/36ga4YpQswLNQMud02qCqoL9KX4Jvdb7NJ9Dh88oQpGbcDrdDBkjuLJ/\neVpSiLkbwOZJ1nm8ZFoKvzv1jl3Kvb8t2ZmUXoDn4TevxTaimX4DDtJfw2DF6NIN\naNaHrEugga6EG5RUHb5gAbTtB25TE5Pnx+krCg5fzlsw1/xkaeE+N0ssqFKuE+w1\nsqY7SU5cpGlgJdGHG8gBehsCAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    },
+    {
+      "id": "830f94b96d51d185",
+      "status": "next",
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA32TIJvP8tmeeLHner1Vi\nVSrTDgKEkyDHxaTTlVSG8eINQY7K3UoXPka6fTy4iQFKfQVzq4yMgO5rQnF+ZdAd\n0BGfkwCvn2vxx/B3zXMHCLaC+RvEY/hnYTvQKKPRjH3e2GF/nKvwRUjUDeCPd2Xf\nthaq8CA59/XY5pHulq/A8k/h/xjv+A21JTaCWy+vjoWcNfN3OwL3idAewAUK/C0j\nvnDFrbBxzpX/2T9sm7OXJrhRyo+obJFuScufLPDZhh5I4ovFVC4YvIuPhP2IwLpj\nsOQK/LoQQPWlhXiOBQLy01JOmLLqo8gnoUv0oIV8WHZUuHqRPLsQu5oVqICsT9Wg\nO8ORryVY5zFLVUQCiVVaCCbyCnMFKOuvW3c0mZVcDHhPkLYwamg4I3iuZhphfGzw\nC92wegK/1VGLmnQktVktcRbbHWHliY/Bk83riZatl9avG5GJg1lVEVSMGoLzATcd\nvM8swHKK3CXKAzwL4r8O3Vcs74/0gJx2IcJauVbYi5lXE7bBXKGmCOzZnGWTM2jn\nFoRbbM32EUAgkCZk1dQZr7Zx3g9e9JB/fRsLqWGQWD/+7Genw3yjphIRj5KOsNpA\nIu5t1MoHEWTt+gaQw6CQ6RONuHqDc9wp8yNp2Z+F1ONTRwgGmYxRQwpMZC87g8Ad\nltw6XIwfg8blD+ySiywDxAECAwEAAQ==\n-----END PUBLIC KEY-----\n"
+    }
+  ]
+}

@@ -2203,7 +2203,7 @@ var cmdVerify = &cobra.Command{
 				return fmt.Errorf("reading public key: %w", err)
 			}
 		}
-		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM)
+		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, anchorPEM, seal.SignedAt)
 		if err != nil {
 			return fmt.Errorf("checking report origin: %w", err)
 		}
@@ -2645,7 +2645,7 @@ var cmdCheck = &cobra.Command{
 		}
 		// A valid signature only proves the report is self-consistent. Without this a
 		// reviewer checking a paper's numbers would accept a self-signed forgery.
-		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil)
+		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil, seal.SignedAt)
 		if err != nil {
 			return fmt.Errorf("checking report origin: %w", err)
 		}
