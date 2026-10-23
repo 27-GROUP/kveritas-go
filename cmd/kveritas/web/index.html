@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K-Veritas history</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">K-Veritas <span class="muted" id="where"></span></div>
+  <button class="btn ghost" id="theme" type="button">Light</button>
+</header>
+
+<main>
+  <p class="notice" id="notice" hidden></p>
+
+  <section class="card" id="working">
+    <div class="row wrap">
+      <label class="field">Branch
+        <select id="branch"></select>
+      </label>
+      <div class="based" id="based"></div>
+      <span class="pill" id="filestate"></span>
+    </div>
+    <ul class="files" id="files"></ul>
+    <form class="row wrap" id="cpform">
+      <input id="cpmsg" placeholder="What is this point? e.g. epoch 50 stable" maxlength="200">
+      <input id="cpfiles" placeholder="Extra files, e.g. model.pt (comma separated)">
+      <button class="btn" type="submit">Save checkpoint</button>
+    </form>
+  </section>
+
+  <section>
+    <div class="row between">
+      <h2>History</h2>
+      <span class="muted small">Newest first. Drag @ onto a checkpoint to restore. Right-click a row for actions.</span>
+    </div>
+    <div id="tree" class="tree"></div>
+    <p class="muted small foot">Every action here is sent to the server as a step in your history. Nothing is ever deleted.</p>
+  </section>
+</main>
+
+<div class="menu" id="menu" hidden></div>
+
+<div class="modal" id="modal" hidden>
+  <div class="dialog" role="dialog" aria-modal="true">
+    <h3 id="mtitle"></h3>
+    <p id="mtext"></p>
+    <input id="minput" hidden>
+    <div class="row end">
+      <button class="btn ghost" id="mcancel" type="button">Cancel</button>
+      <button class="btn" id="mok" type="button"></button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
@@ -152,17 +154,60 @@ func (m *Manifest) Root(salt []byte) string {
 }
 
 type Drift struct {
-	Added, Modified, Deleted []string
+	Added    []string `json:"added,omitempty"`
+	Modified []string `json:"modified,omitempty"`
+	Deleted  []string `json:"deleted,omitempty"`
 }
 
 func (d Drift) Clean() bool { return len(d.Added)+len(d.Modified)+len(d.Deleted) == 0 }
 
-func Compare(projectDir string, m *Manifest) Drift {
+// Remembers each file's hash by size and modification time, so repeated comparisons
+// only re-read files that changed.
+type HashCache struct {
+	mu sync.Mutex
+	m  map[string]cachedHash
+}
+
+type cachedHash struct {
+	size int64
+	mod  time.Time
+	hash string
+}
+
+func NewHashCache() *HashCache { return &HashCache{m: map[string]cachedHash{}} }
+
+func (c *HashCache) hash(path string) (string, error) {
+	if c == nil {
+		return crypto.HashFile(path)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	e, ok := c.m[path]
+	c.mu.Unlock()
+	if ok && e.size == st.Size() && e.mod.Equal(st.ModTime()) {
+		return e.hash, nil
+	}
+	h, err := crypto.HashFile(path)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	c.m[path] = cachedHash{size: st.Size(), mod: st.ModTime(), hash: h}
+	c.mu.Unlock()
+	return h, nil
+}
+
+func Compare(projectDir string, m *Manifest) Drift { return CompareCached(projectDir, m, nil) }
+
+func CompareCached(projectDir string, m *Manifest, cache *HashCache) Drift {
 	var d Drift
 	cur := map[string]bool{}
 	for _, rel := range tracked(projectDir, m.Extra) {
 		path := filepath.Join(projectDir, filepath.FromSlash(rel))
-		h, err := crypto.HashFile(path)
+		h, err := cache.hash(path)
 		if err != nil {
 			continue
 		}

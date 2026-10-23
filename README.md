@@ -92,6 +92,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `checkpoint [-m msg] [--files f]` / `restore <id>` | Save files, put them back. Copies stay local. |
 | `branch [name]` / `set-aside <run>` | Label runs; move a run out of the main results (still signed). |
 | `log [-v]` | Session as a tree. |
+| `web [--port N]` | Same history in the browser. Local only, secret link. |
 | `seal [-o path] [--claim name]` | Sign into a PDF. |
 | `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |
 | `prove` / `verify-proof` | File proof. |

@@ -204,54 +204,62 @@ record, and the restore itself is anchored as a new step.`,
 			return err
 		}
 		defer release()
-		target, err := findStep(sess, "checkpoint", args[0])
-		if err != nil {
-			return err
+		msgs, err := restoreTo(kvDir, sess, args[0])
+		for _, m := range msgs {
+			fmt.Println(m)
 		}
-		m, err := provenance.LoadManifest(kvDir, target.ID)
-		if err != nil {
-			return err
-		}
-		drift := provenance.Compare(sess.ProjectDir, m)
-		if len(drift.Modified)+len(drift.Deleted) == 0 {
-			fmt.Printf("Files already match checkpoint %s\n", checkpointLabel(target))
-			return nil
-		}
-		extra := m.Extra
-		base := baseCheckpoint(sess)
-		saved := false
-		if base != nil {
-			if bm, err := provenance.LoadManifest(kvDir, base.ID); err == nil {
-				saved = provenance.Compare(sess.ProjectDir, bm).Clean()
-				extra = append(extra, bm.Extra...)
-			}
-		}
-		if !saved {
-			var keep []string
-			for _, f := range extra {
-				if _, err := os.Stat(filepath.Join(sess.ProjectDir, filepath.FromSlash(f))); err == nil {
-					keep = append(keep, f)
-				}
-			}
-			auto, err := saveCheckpoint(kvDir, sess, "before restoring "+target.ID, keep)
-			if err != nil {
-				return fmt.Errorf("could not keep your current files: %w", err)
-			}
-			fmt.Printf("Current files kept as checkpoint %s\n", auto.ID)
-		}
-		n, err := provenance.Restore(sess.ProjectDir, kvDir, m)
-		if err != nil {
-			return err
-		}
-		if _, err := addStep(kvDir, sess, session.Step{Kind: "restore", Target: target.ID, Root: target.Root, Files: n}); err != nil {
-			return err
-		}
-		fmt.Printf("Restored %s from checkpoint %s\n", files(n), checkpointLabel(target))
-		for _, f := range drift.Added {
-			fmt.Printf("  kept (new since the checkpoint): %s\n", f)
-		}
-		return nil
+		return err
 	},
+}
+
+func restoreTo(kvDir string, sess *session.Session, ref string) ([]string, error) {
+	target, err := findStep(sess, "checkpoint", ref)
+	if err != nil {
+		return nil, err
+	}
+	m, err := provenance.LoadManifest(kvDir, target.ID)
+	if err != nil {
+		return nil, err
+	}
+	drift := provenance.Compare(sess.ProjectDir, m)
+	if len(drift.Modified)+len(drift.Deleted) == 0 {
+		return []string{"Files already match checkpoint " + checkpointLabel(target)}, nil
+	}
+	var msgs []string
+	extra := m.Extra
+	base := baseCheckpoint(sess)
+	saved := false
+	if base != nil {
+		if bm, err := provenance.LoadManifest(kvDir, base.ID); err == nil {
+			saved = provenance.Compare(sess.ProjectDir, bm).Clean()
+			extra = append(extra, bm.Extra...)
+		}
+	}
+	if !saved {
+		var keep []string
+		for _, f := range extra {
+			if _, err := os.Stat(filepath.Join(sess.ProjectDir, filepath.FromSlash(f))); err == nil {
+				keep = append(keep, f)
+			}
+		}
+		auto, err := saveCheckpoint(kvDir, sess, "before restoring "+target.ID, keep)
+		if err != nil {
+			return nil, fmt.Errorf("could not keep your current files: %w", err)
+		}
+		msgs = append(msgs, "Current files kept as checkpoint "+auto.ID)
+	}
+	n, err := provenance.Restore(sess.ProjectDir, kvDir, m)
+	if err != nil {
+		return msgs, err
+	}
+	if _, err := addStep(kvDir, sess, session.Step{Kind: "restore", Target: target.ID, Root: target.Root, Files: n}); err != nil {
+		return msgs, err
+	}
+	msgs = append(msgs, fmt.Sprintf("Restored %s from checkpoint %s", files(n), checkpointLabel(target)))
+	for _, f := range drift.Added {
+		msgs = append(msgs, "  kept (new since the checkpoint): "+f)
+	}
+	return msgs, nil
 }
 
 func branches(sess *session.Session, runs []*session.RunRecord) []string {
@@ -315,40 +323,45 @@ checkpoint. The report puts the current branch first and lists the others.`,
 			}
 			return nil
 		}
-		name := args[0]
-		if !branchName.MatchString(name) {
-			return fmt.Errorf("branch names use letters, digits, '.', '_' or '-' (up to 40)")
-		}
 		kvDir, sess, release, err := historySession(false)
 		if err != nil {
 			return err
 		}
 		defer release()
-		from := sess.CurrentBranch()
-		if name == from {
-			fmt.Printf("Already on %s\n", name)
-			return nil
-		}
-		kind := "branch"
-		for _, b := range branches(sess, loadRuns(kvDir, sess)) {
-			if b == name {
-				kind = "switch"
-			}
-		}
-		sess.Branch = name
-		if name == "main" {
-			sess.Branch = ""
-		}
-		if _, err := addStep(kvDir, sess, session.Step{Kind: kind, Branch: name, Target: from}); err != nil {
+		msg, err := switchBranch(kvDir, sess, args[0])
+		if err != nil {
 			return err
 		}
-		if kind == "branch" {
-			fmt.Printf("Started branch %s from %s\n", name, from)
-		} else {
-			fmt.Printf("Switched to %s\n", name)
-		}
+		fmt.Println(msg)
 		return nil
 	},
+}
+
+func switchBranch(kvDir string, sess *session.Session, name string) (string, error) {
+	if !branchName.MatchString(name) {
+		return "", fmt.Errorf("branch names use letters, digits, '.', '_' or '-' (up to 40)")
+	}
+	from := sess.CurrentBranch()
+	if name == from {
+		return "Already on " + name, nil
+	}
+	kind := "branch"
+	for _, b := range branches(sess, loadRuns(kvDir, sess)) {
+		if b == name {
+			kind = "switch"
+		}
+	}
+	sess.Branch = name
+	if name == "main" {
+		sess.Branch = ""
+	}
+	if _, err := addStep(kvDir, sess, session.Step{Kind: kind, Branch: name, Target: from}); err != nil {
+		return "", err
+	}
+	if kind == "branch" {
+		return fmt.Sprintf("Started branch %s from %s", name, from), nil
+	}
+	return "Switched to " + name, nil
 }
 
 var (
@@ -369,96 +382,125 @@ an auditor sees exactly what was set aside. --undo brings it back.`,
 			return err
 		}
 		defer release()
-		id := ""
-		for _, r := range sess.Runs {
-			if strings.HasPrefix(r, args[0]) {
-				if id != "" {
-					return fmt.Errorf("%q matches more than one run", args[0])
-				}
-				id = r
-			}
-		}
-		if id == "" {
-			return fmt.Errorf("no kept run %q; see kveritas log (failed runs are never in the main results)", args[0])
-		}
-		_, aside := sess.SetAside()[id]
-		kind := "set-aside"
-		switch {
-		case asideUndo && !aside:
-			return fmt.Errorf("run %s is not set aside", id)
-		case asideUndo:
-			kind = "bring-back"
-		case aside:
-			return fmt.Errorf("run %s is already set aside", id)
-		}
-		if _, err := addStep(kvDir, sess, session.Step{Kind: kind, Target: id, Message: asideMsg}); err != nil {
+		msg, err := setAside(kvDir, sess, args[0], asideMsg, asideUndo)
+		if err != nil {
 			return err
 		}
-		if asideUndo {
-			fmt.Printf("Run %s is back in the main results\n", id)
-		} else {
-			fmt.Printf("Run %s set aside; it stays in the report, apart from the main results\n", id)
-		}
+		fmt.Println(msg)
 		return nil
 	},
 }
 
-type logNode struct {
-	branch string
-	glyph  string
-	text   string
-	detail []string
+func setAside(kvDir string, sess *session.Session, ref, reason string, undo bool) (string, error) {
+	id := ""
+	for _, r := range sess.Runs {
+		if ref != "" && strings.HasPrefix(r, ref) {
+			if id != "" {
+				return "", fmt.Errorf("%q matches more than one run", ref)
+			}
+			id = r
+		}
+	}
+	if id == "" {
+		return "", fmt.Errorf("no kept run %q; see kveritas log (failed runs are never in the main results)", ref)
+	}
+	_, aside := sess.SetAside()[id]
+	kind := "set-aside"
+	switch {
+	case undo && !aside:
+		return "", fmt.Errorf("run %s is not set aside", id)
+	case undo:
+		kind = "bring-back"
+	case aside:
+		return "", fmt.Errorf("run %s is already set aside", id)
+	}
+	if _, err := addStep(kvDir, sess, session.Step{Kind: kind, Target: id, Message: reason}); err != nil {
+		return "", err
+	}
+	if undo {
+		return fmt.Sprintf("Run %s is back in the main results", id), nil
+	}
+	return fmt.Sprintf("Run %s set aside; it stays in the report, apart from the main results", id), nil
 }
 
-func runSummary(r *session.RunRecord, all bool) string {
-	last := map[string]session.Metric{}
-	var names []string
+type nodeValue struct {
+	Name   string  `json:"name"`
+	Value  float64 `json:"value"`
+	Step   string  `json:"step,omitempty"`
+	Source string  `json:"source"`
+}
+
+type logNode struct {
+	Kind     string      `json:"kind"`
+	ID       string      `json:"id"`
+	Inv      int         `json:"inv"`
+	Branch   string      `json:"branch"`
+	Glyph    string      `json:"glyph"`
+	Title    string      `json:"title"`
+	Note     string      `json:"note,omitempty"`
+	At       time.Time   `json:"at"`
+	Duration string      `json:"duration,omitempty"`
+	Results  []nodeValue `json:"results,omitempty"`
+	Measured []nodeValue `json:"measured,omitempty"`
+	Changed  []string    `json:"changed,omitempty"`
+	Aside    bool        `json:"aside,omitempty"`
+	Target   string      `json:"target,omitempty"`
+	text     string
+}
+
+func finalValues(r *session.RunRecord) (results, measured []nodeValue) {
+	idx := map[string]int{}
 	for _, m := range r.Metrics {
+		v := nodeValue{Name: m.Name, Value: m.Value, Step: m.Step, Source: m.Source}
+		list := &results
 		if m.Source == "measured" {
+			list = &measured
+		}
+		key := m.Source + "\x00" + m.Name
+		if k, ok := idx[key]; ok {
+			(*list)[k] = v
 			continue
 		}
-		if _, ok := last[m.Name]; !ok {
-			names = append(names, m.Name)
-		}
-		last[m.Name] = m
+		idx[key] = len(*list)
+		*list = append(*list, v)
 	}
-	if !all && len(names) > 3 {
-		names = append(names[:3], fmt.Sprintf("+%d", len(names)-3))
-	}
-	parts := make([]string, 0, len(names))
-	for _, n := range names {
-		if m, ok := last[n]; ok {
-			parts = append(parts, fmt.Sprintf("%s=%.4g", n, m.Value))
-		} else {
-			parts = append(parts, n)
+	return results, measured
+}
+
+func runSummary(vals []nodeValue, all bool) string {
+	parts := make([]string, 0, len(vals))
+	for i, v := range vals {
+		if !all && i == 3 {
+			parts = append(parts, fmt.Sprintf("+%d", len(vals)-3))
+			break
 		}
+		parts = append(parts, fmt.Sprintf("%s=%.4g", v.Name, v.Value))
 	}
 	return strings.Join(parts, " ")
 }
 
-func logNodes(sess *session.Session, runs []*session.RunRecord, verbose bool) []logNode {
+func logNodes(sess *session.Session, runs []*session.RunRecord) []logNode {
 	byInv := map[int]logNode{}
 	aside := sess.SetAside()
 	for _, r := range runs {
-		text := fmt.Sprintf("%s  run         %s  %s  %s", r.ID, strings.Join(r.Command, " "), r.DurationFmt, runSummary(r, false))
+		n := logNode{Kind: "run", ID: r.ID, Inv: r.Invocation, Branch: session.RunBranch(r), Glyph: "o",
+			Title: strings.Join(r.Command, " "), At: r.EndAt, Duration: r.DurationFmt}
+		n.Results, n.Measured = finalValues(r)
+		if p := r.Provenance; p != nil && len(p.Commits) > 0 {
+			for _, c := range p.Commits[len(p.Commits)-1].Changed {
+				n.Changed = append(n.Changed, c.Op+" "+c.Path)
+			}
+		}
+		n.text = fmt.Sprintf("%s  run         %s  %s  %s", r.ID, n.Title, r.DurationFmt, runSummary(n.Results, false))
 		if why, ok := aside[r.ID]; ok {
-			text += "  (set aside"
+			n.Aside, n.Note = true, why
+			n.text += "  (set aside"
 			if why != "" {
-				text += ": " + why
+				n.text += ": " + why
 			}
-			text += ")"
+			n.text += ")"
 		}
-		n := logNode{branch: session.RunBranch(r), glyph: "o", text: strings.TrimRight(text, " ")}
-		if verbose {
-			if s := runSummary(r, true); s != "" {
-				n.detail = append(n.detail, "results: "+s)
-			}
-			if p := r.Provenance; p != nil && len(p.Commits) > 0 {
-				for _, c := range p.Commits[len(p.Commits)-1].Changed {
-					n.detail = append(n.detail, c.Op+" "+c.Path)
-				}
-			}
-		}
+		n.text = strings.TrimRight(n.text, " ")
 		byInv[r.Invocation] = n
 	}
 	for _, f := range sess.Failed {
@@ -470,59 +512,87 @@ func logNodes(sess *session.Session, runs []*session.RunRecord, verbose bool) []
 		if b == "" {
 			b = "main"
 		}
-		byInv[f.Invocation] = logNode{branch: b, glyph: "x", text: fmt.Sprintf("#%-7d run         %s  %s", f.Invocation+1, strings.Join(f.Command, " "), what)}
+		title := strings.Join(f.Command, " ")
+		byInv[f.Invocation] = logNode{Kind: "failed", ID: fmt.Sprintf("#%d", f.Invocation+1), Inv: f.Invocation, Branch: b,
+			Glyph: "x", Title: title, Note: what, At: f.At,
+			text: fmt.Sprintf("#%-7d run         %s  %s", f.Invocation+1, title, what)}
 	}
 	for _, st := range sess.Steps {
+		n := logNode{Kind: st.Kind, ID: st.ID, Inv: st.Invocation, Branch: st.Branch, Glyph: "o", At: st.At, Target: st.Target, Note: st.Message}
 		var text string
 		switch st.Kind {
 		case "checkpoint":
+			n.Title = st.Message
+			n.Duration = files(st.Files)
 			text = fmt.Sprintf("checkpoint  %q  %s", st.Message, files(st.Files))
 		case "restore":
+			n.Title = "restored to " + st.Target
 			text = fmt.Sprintf("restore     to %s, %s written", st.Target, files(st.Files))
 		case "branch":
+			n.Title = fmt.Sprintf("started %s from %s", st.Branch, st.Target)
 			text = fmt.Sprintf("branch      %s, from %s", st.Branch, st.Target)
 		case "switch":
+			n.Title = "switched to " + st.Branch
 			text = fmt.Sprintf("switch      to %s", st.Branch)
 		case "set-aside":
+			n.Title = "set aside run " + st.Target
 			text = "set aside   run " + st.Target
 			if st.Message != "" {
 				text += ": " + st.Message
 			}
 		case "bring-back":
+			n.Title = "brought back run " + st.Target
 			text = "bring back  run " + st.Target
 		}
-		byInv[st.Invocation] = logNode{branch: st.Branch, glyph: "o", text: st.ID + "  " + text}
+		n.text = st.ID + "  " + text
+		byInv[st.Invocation] = n
 	}
 	nodes := make([]logNode, 0, sess.Invocations)
 	for k := 0; k < sess.Invocations; k++ {
 		n, ok := byInv[k]
 		if !ok {
-			n = logNode{branch: "main", glyph: "x", text: fmt.Sprintf("#%-7d run         failed or interrupted", k+1)}
+			n = logNode{Kind: "failed", ID: fmt.Sprintf("#%d", k+1), Inv: k, Branch: "main", Glyph: "x",
+				Note: "failed or interrupted", text: fmt.Sprintf("#%-7d run         failed or interrupted", k+1)}
 		}
 		nodes = append(nodes, n)
 	}
 	for i := len(nodes) - 1; i >= 0; i-- {
-		if nodes[i].branch == sess.CurrentBranch() && nodes[i].glyph == "o" {
-			nodes[i].glyph = "@"
+		if nodes[i].Branch == sess.CurrentBranch() && nodes[i].Glyph == "o" {
+			nodes[i].Glyph = "@"
 			break
 		}
 	}
 	return nodes
 }
 
+type lane struct {
+	Up   bool `json:"up,omitempty"`
+	Down bool `json:"down,omitempty"`
+	Node bool `json:"node,omitempty"`
+}
+
+// Node is an index into the nodes, or -1 for the row that joins a branch to the one it
+// started from (From and To are their columns).
+type graphRow struct {
+	Node  int    `json:"node"`
+	Lanes []lane `json:"lanes"`
+	From  int    `json:"from"`
+	To    int    `json:"to"`
+}
+
 // Newest first, one column per branch, each branch joined to the one it started from.
-func renderLog(sess *session.Session, nodes []logNode) {
+func graphLayout(sess *session.Session, nodes []logNode) ([]string, []graphRow) {
 	col := map[string]int{"main": 0}
 	order := []string{"main"}
 	parent := map[string]string{}
 	forkAt := map[string]int{}
 	for i, n := range nodes {
-		if _, ok := col[n.branch]; !ok {
-			col[n.branch] = len(order)
-			order = append(order, n.branch)
+		if _, ok := col[n.Branch]; !ok {
+			col[n.Branch] = len(order)
+			order = append(order, n.Branch)
 		}
-		if _, ok := forkAt[n.branch]; !ok && n.branch != "main" {
-			forkAt[n.branch] = i
+		if _, ok := forkAt[n.Branch]; !ok && n.Branch != "main" {
+			forkAt[n.Branch] = i
 		}
 	}
 	for _, st := range sess.Steps {
@@ -533,10 +603,10 @@ func renderLog(sess *session.Session, nodes []logNode) {
 	oldest := map[string]int{}
 	newest := map[string]int{}
 	for i, n := range nodes {
-		if _, ok := oldest[n.branch]; !ok {
-			oldest[n.branch] = i
+		if _, ok := oldest[n.Branch]; !ok {
+			oldest[n.Branch] = i
 		}
-		newest[n.branch] = i
+		newest[n.Branch] = i
 	}
 	for b, i := range forkAt {
 		p := parent[b]
@@ -556,51 +626,79 @@ func renderLog(sess *session.Session, nodes []logNode) {
 		o, ok := oldest[b]
 		return ok && o <= i-1 && i <= newest[b]
 	}
-	pad := func(s string) string { return s + strings.Repeat(" ", 2*len(order)+1-len([]rune(s))) }
+	var rows []graphRow
 	for i := len(nodes) - 1; i >= 0; i-- {
-		n := nodes[i]
-		var row, gap strings.Builder
+		r := graphRow{Node: i}
 		for _, b := range order {
-			o, ok := oldest[b]
-			switch {
-			case b == n.branch:
-				row.WriteString(n.glyph + " ")
-			case ok && o < i && i < newest[b]:
-				row.WriteString("│ ")
-			default:
-				row.WriteString("  ")
+			r.Lanes = append(r.Lanes, lane{Up: below(b, i+1), Down: below(b, i), Node: b == nodes[i].Branch})
+		}
+		rows = append(rows, r)
+		for _, b := range order {
+			if f, ok := forkAt[b]; !ok || f != i {
+				continue
 			}
-			if below(b, i) {
+			link := graphRow{Node: -1, From: col[parent[b]], To: col[b]}
+			for _, ob := range order {
+				pass := below(ob, i)
+				link.Lanes = append(link.Lanes, lane{Up: pass, Down: pass})
+			}
+			rows = append(rows, link)
+		}
+	}
+	return order, rows
+}
+
+func renderLog(sess *session.Session, nodes []logNode, verbose bool) {
+	order, rows := graphLayout(sess, nodes)
+	pad := func(s string) string { return s + strings.Repeat(" ", 2*len(order)+1-len([]rune(s))) }
+	for _, r := range rows {
+		var line strings.Builder
+		if r.Node < 0 {
+			for c, l := range r.Lanes {
+				switch {
+				case c == r.From:
+					line.WriteString("├─")
+				case c > r.From && c < r.To:
+					line.WriteString("──")
+				case c == r.To:
+					line.WriteString("╯ ")
+				case l.Down:
+					line.WriteString("│ ")
+				default:
+					line.WriteString("  ")
+				}
+			}
+			fmt.Println(strings.TrimRight(line.String(), " "))
+			continue
+		}
+		n := nodes[r.Node]
+		var gap strings.Builder
+		for _, l := range r.Lanes {
+			switch {
+			case l.Node:
+				line.WriteString(n.Glyph + " ")
+			case l.Up && l.Down:
+				line.WriteString("│ ")
+			default:
+				line.WriteString("  ")
+			}
+			if l.Down {
 				gap.WriteString("│ ")
 			} else {
 				gap.WriteString("  ")
 			}
 		}
-		fmt.Println(pad(row.String()) + n.text)
-		for _, d := range n.detail {
-			fmt.Println(pad(gap.String()) + "  " + d)
+		fmt.Println(pad(line.String()) + n.text)
+		if !verbose {
+			continue
 		}
-		for b, f := range forkAt {
-			if f != i {
-				continue
-			}
-			pc, bc := col[parent[b]], col[b]
-			var link strings.Builder
-			for c, ob := range order {
-				switch {
-				case c == pc:
-					link.WriteString("├─")
-				case c > pc && c < bc:
-					link.WriteString("──")
-				case c == bc:
-					link.WriteString("╯ ")
-				case below(ob, i):
-					link.WriteString("│ ")
-				default:
-					link.WriteString("  ")
-				}
-			}
-			fmt.Println(strings.TrimRight(link.String(), " "))
+		var detail []string
+		if s := runSummary(n.Results, true); s != "" {
+			detail = append(detail, "results: "+s)
+		}
+		detail = append(detail, n.Changed...)
+		for _, d := range detail {
+			fmt.Println(pad(gap.String()) + "  " + d)
 		}
 	}
 }
@@ -626,7 +724,7 @@ hardware readings are left out; -v adds every result and the files each run chan
 			fmt.Println("Nothing recorded yet.")
 			return nil
 		}
-		renderLog(sess, logNodes(sess, loadRuns(kvDir, sess), logVerbose))
+		renderLog(sess, logNodes(sess, loadRuns(kvDir, sess)), logVerbose)
 		return nil
 	},
 }

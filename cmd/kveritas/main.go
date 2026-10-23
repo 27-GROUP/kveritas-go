@@ -63,6 +63,7 @@ History (every step is anchored; nothing is ever deleted):
   kveritas restore <id>      Put the files back as they were at a checkpoint.
   kveritas branch [name]     List branches, or start or switch to one.
   kveritas set-aside <run>   Move a run out of the main results, keeping it in the report.
+  kveritas web               The same, in your browser: tree, changed files, buttons.
 
   kveritas status            Show current session state.
   kveritas update            Update to the latest version.
@@ -124,7 +125,7 @@ func main() {
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
 	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdAutolog, cmdShell)
-	root.AddCommand(cmdCheckpoint, cmdRestore, cmdBranch, cmdSetAside, cmdLog)
+	root.AddCommand(cmdCheckpoint, cmdRestore, cmdBranch, cmdSetAside, cmdLog, cmdWeb)
 	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
