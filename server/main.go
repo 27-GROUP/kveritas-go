@@ -36,7 +36,10 @@ type runInvocation struct {
 	Chain       string  `json:"-"`
 	EndedAt     string  `json:"ended_at,omitempty"`
 	ReceivedAt  string  `json:"received_at,omitempty"`
+	Kind        string  `json:"kind,omitempty"`
 }
+
+var stepKinds = map[string]bool{"checkpoint": true, "restore": true, "branch": true, "switch": true, "set-aside": true, "bring-back": true}
 
 func anchorGenesis(sessionID string) string {
 	return crypto.HashBytes([]byte("kveritas-run-chain:" + sessionID))
@@ -53,12 +56,12 @@ func anchored(runs []runInvocation) map[int]runInvocation {
 }
 
 type srv struct {
-	privKey      *rsa.PrivateKey
-	pubKeyPEM    string
-	mu           sync.RWMutex
-	sessions     map[string]*serverSession     // session_id -> session
-	tokens       map[string]string              // token -> session_id
-	runHistory   map[string][]runInvocation     // session_id -> runs
+	privKey    *rsa.PrivateKey
+	pubKeyPEM  string
+	mu         sync.RWMutex
+	sessions   map[string]*serverSession  // session_id -> session
+	tokens     map[string]string          // token -> session_id
+	runHistory map[string][]runInvocation // session_id -> runs
 }
 
 func main() {
@@ -233,9 +236,14 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 		RunDigest   string  `json:"run_digest"`
 		Chain       string  `json:"chain"`
 		EndedAt     string  `json:"ended_at"`
+		Kind        string  `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Kind != "" && (!stepKinds[req.Kind] || req.Invocation == nil || req.RunDigest == "") {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown step kind %q", req.Kind))
 		return
 	}
 
@@ -258,6 +266,7 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 		ExitCode:    req.ExitCode,
 		MetricHash:  req.MetricHash,
 		StdoutLines: req.StdoutLines,
+		Kind:        req.Kind,
 	}
 	if req.Invocation != nil && req.RunDigest != "" {
 		k := *req.Invocation
@@ -309,7 +318,12 @@ func (s *srv) handleRunHistory(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid session or token")
 		return
 	}
-	runs := s.runHistory[sessionID]
+	var runs []runInvocation
+	for _, r := range s.runHistory[sessionID] {
+		if r.Kind == "" {
+			runs = append(runs, r)
+		}
+	}
 	s.mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{

@@ -56,6 +56,14 @@ Workflow:
   kveritas generate-claims --report r.pdf
                              Generate a claims.json template from a report.
   kveritas autolog on        Find results in output and metric files when a run prints no KV lines.
+
+History (every step is anchored; nothing is ever deleted):
+  kveritas log               The session as a tree: runs, checkpoints, branches.
+  kveritas checkpoint -m msg Save the project's files as a point to come back to.
+  kveritas restore <id>      Put the files back as they were at a checkpoint.
+  kveritas branch [name]     List branches, or start or switch to one.
+  kveritas set-aside <run>   Move a run out of the main results, keeping it in the report.
+
   kveritas status            Show current session state.
   kveritas update            Update to the latest version.
 
@@ -116,6 +124,7 @@ func main() {
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
 	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdAutolog, cmdShell)
+	root.AddCommand(cmdCheckpoint, cmdRestore, cmdBranch, cmdSetAside, cmdLog)
 	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -1070,6 +1079,7 @@ func sanitizeForReport(s *session.Session) *session.Session {
 	clean.ProvSalt = ""
 	// The session token is a server credential; never publish it in the report.
 	clean.Token = ""
+	clean.Failed = nil
 	if provenance.ParseLevel(s.Disclosure) < provenance.Names {
 		clean.SourceHashes = nil
 	}
@@ -1349,6 +1359,7 @@ func recordInvocation(kvDir string, sess *session.Session, rec *session.RunRecor
 }
 
 func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int) error {
+	rec.Branch = sess.Branch
 	// Digest the record as it will read back from disk and from the report, not the
 	// in-memory copy, so the anchor matches at seal and at verify.
 	data, err := json.Marshal(rec)
@@ -1377,6 +1388,9 @@ func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecor
 	}
 	sess.Invocations = inv + 1
 	sess.ChainHead = chain
+	if rec.ExitCode != 0 {
+		sess.Failed = append(sess.Failed, session.FailedRun{Invocation: inv, Command: rec.Command, ExitCode: rec.ExitCode, At: rec.EndAt, Branch: sess.Branch})
+	}
 	if err := sess.Save(kvDir); err != nil {
 		return err
 	}
@@ -1497,6 +1511,11 @@ var cmdSeal = &cobra.Command{
 			}
 			runs = append(runs, r)
 		}
+		for i, st := range sess.Steps {
+			if d, derr := stepDigest(st); derr != nil || d != st.Digest {
+				return fmt.Errorf("history step %d (%s) was modified after it was anchored", i+1, st.Kind)
+			}
+		}
 
 		if len(sess.SourceHashes) > 0 {
 			modified, missing, err := bundle.VerifySourceIntegrity(sess.ProjectDir, sess.SourceHashes)
@@ -1549,7 +1568,7 @@ var cmdSeal = &cobra.Command{
 			checkoutBundleHash = h
 		}
 
-		claims, err := sealClaims(runs, sealClaimNames)
+		claims, err := sealClaims(sess, runs, sealClaimNames)
 		if err != nil {
 			return err
 		}
@@ -1742,7 +1761,14 @@ func signedClaims(canonicalJSON string) []session.SealClaim {
 
 // A claim made at seal takes the value the latest run recorded for that name, so it
 // can only point at a number the signed runs already contain.
-func sealClaims(runs []*session.RunRecord, names []string) ([]session.SealClaim, error) {
+// Only the runs the report leads with: a set-aside run or another branch's run is
+// never claimed by accident.
+func sealClaims(sess *session.Session, runs []*session.RunRecord, names []string) ([]session.SealClaim, error) {
+	aside := sess.SetAside()
+	featured := func(r *session.RunRecord) bool {
+		_, set := aside[r.ID]
+		return !set && session.RunBranch(r) == sess.CurrentBranch()
+	}
 	var out []session.SealClaim
 	for _, name := range names {
 		name = strings.TrimSpace(name)
@@ -1751,6 +1777,9 @@ func sealClaims(runs []*session.RunRecord, names []string) ([]session.SealClaim,
 		}
 		found := false
 		for i := len(runs) - 1; i >= 0 && !found; i-- {
+			if !featured(runs[i]) {
+				continue
+			}
 			for j := len(runs[i].Metrics) - 1; j >= 0; j-- {
 				if m := runs[i].Metrics[j]; m.Name == name {
 					out = append(out, session.SealClaim{Run: i + 1, Metric: name, Value: m.Value, Source: m.Source})
@@ -1760,7 +1789,7 @@ func sealClaims(runs []*session.RunRecord, names []string) ([]session.SealClaim,
 			}
 		}
 		if !found {
-			return nil, fmt.Errorf("no run recorded a result named %q", name)
+			return nil, fmt.Errorf("no run on %s that is not set aside recorded a result named %q", sess.CurrentBranch(), name)
 		}
 	}
 	return out, nil
@@ -1819,6 +1848,7 @@ type runPayload struct {
 	Cells           []session.NotebookCell   `json:"cells,omitempty"`
 	Nodes           []session.NodeRecord     `json:"nodes,omitempty"`
 	NodesExpected   int                      `json:"nodes_expected,omitempty"`
+	Branch          string                   `json:"branch,omitempty"`
 }
 
 func runPayloadOf(r *session.RunRecord) runPayload {
@@ -1860,6 +1890,7 @@ func runPayloadOf(r *session.RunRecord) runPayload {
 		Cells:           r.Cells,
 		Nodes:           r.Nodes,
 		NodesExpected:   r.NodesExpected,
+		Branch:          r.Branch,
 	}
 }
 
@@ -1914,6 +1945,10 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 	if len(claims) > 0 {
 		signingData["seal_claims"] = claims
 	}
+	if len(sess.Steps) > 0 {
+		signingData["steps"] = sess.Steps
+		signingData["branch"] = sess.CurrentBranch()
+	}
 
 	return crypto.CanonicalHashWithBytes(signingData)
 }
@@ -1930,7 +1965,11 @@ func sealAnchors(runs []*session.RunRecord) []client.SealAnchor {
 
 func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash string) (*session.SealRecord, error) {
 	c := client.New(sess.ServerURL)
-	resp, err := c.Seal(sess, dataHash, len(runs), sealAnchors(runs))
+	anchors := sealAnchors(runs)
+	for _, st := range sess.Steps {
+		anchors = append(anchors, client.SealAnchor{Run: -1, Invocation: st.Invocation, RunDigest: st.Digest})
+	}
+	resp, err := c.Seal(sess, dataHash, len(runs), anchors)
 	if err != nil {
 		var se *client.ServerError
 		if errors.As(err, &se) {
@@ -2100,6 +2139,13 @@ var cmdVerify = &cobra.Command{
 				return nil
 			}
 		}
+		for i, st := range sess.Steps {
+			if d, derr := stepDigest(st); derr != nil || d != st.Digest {
+				fmt.Fprintf(out, "TAMPERED\nHistory step %d (%s) does not match its anchor.\n", i+1, st.Kind)
+				jr.set("TAMPERED", fmt.Sprintf("history step %d does not match its anchor", i+1))
+				return nil
+			}
+		}
 
 		if final, ferr := pdf.SealIsFinal(reportPath); ferr == nil && !final {
 			fmt.Fprintf(out, "TAMPERED\nContent was appended after the seal; a PDF reader may render it in place of the signed pages.\n")
@@ -2263,6 +2309,18 @@ var cmdVerify = &cobra.Command{
 		}
 		for _, c := range signedClaims(seal.CanonicalJSON) {
 			fmt.Fprintf(out, "Claim:      %s = %.6g (run %d, claimed at seal, %s)\n", c.Metric, c.Value, c.Run, c.Source)
+		}
+		if len(sess.Steps) > 0 {
+			fmt.Fprintf(out, "Branch:     %s (leads the report)\n", sess.CurrentBranch())
+			fmt.Fprintf(out, "History:    %s, each anchored\n", historyCounts(sess.Steps))
+			aside := sess.SetAside()
+			for i, r := range runs {
+				if why, ok := aside[r.ID]; ok {
+					fmt.Fprintf(out, "Run %d:      set aside (%s), still signed and counted\n", i+1, orDash(why))
+				} else if b := session.RunBranch(r); b != sess.CurrentBranch() {
+					fmt.Fprintf(out, "Run %d:      on branch %s\n", i+1, b)
+				}
+			}
 		}
 		if phaseCount > 0 {
 			fmt.Fprintf(out, "Phases:     %d boundaries\n", phaseCount)
@@ -2683,6 +2741,7 @@ var cmdStatus = &cobra.Command{
 		fmt.Printf("Sealed:       %v\n", sess.Sealed)
 		fmt.Printf("Runs:         %d\n", len(sess.Runs))
 		if !sess.Sealed {
+			printWorkingState(kvDir, sess)
 			if err := recoverInterrupted(kvDir, sess); err != nil {
 				fmt.Printf("Interrupted run could not be recorded: %v\n", err)
 			}

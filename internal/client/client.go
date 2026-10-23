@@ -85,6 +85,7 @@ type RunAnchor struct {
 	RunDigest   string  `json:"run_digest"`
 	Chain       string  `json:"chain"`
 	EndedAt     string  `json:"ended_at"`
+	Kind        string  `json:"kind,omitempty"`
 }
 
 // A reply from the server, as opposed to a network failure. A rejected anchor must
@@ -177,6 +178,22 @@ func NewRunAnchor(sess *session.Session, rec *session.RunRecord, chain string) R
 		RunDigest:   rec.RunDigest,
 		Chain:       chain,
 		EndedAt:     rec.EndAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func NewStepAnchor(sess *session.Session, st *session.Step, chain string) RunAnchor {
+	at := st.At.UTC().Format(time.RFC3339Nano)
+	return RunAnchor{
+		Token:      sess.Token,
+		SessionID:  sess.ID,
+		MachineID:  sess.MachineID,
+		RunIndex:   -1,
+		StartedAt:  at,
+		Invocation: st.Invocation,
+		RunDigest:  st.Digest,
+		Chain:      chain,
+		EndedAt:    at,
+		Kind:       st.Kind,
 	}
 }
 

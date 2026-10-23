@@ -188,7 +188,7 @@ func runShell() error {
 	_ = term.Restore(int(os.Stdin.Fd()), state)
 
 	names := s.summary()
-	if len(sess.Runs) == 0 || !interactive() {
+	if len(s.sess.Runs) == 0 || !interactive() {
 		return nil
 	}
 	if !confirm("Seal now? [Y/n] ") {
@@ -204,7 +204,7 @@ func runShell() error {
 // The rc files carry the nonce and delete themselves once read, so no command the
 // user runs can learn it and forge a run boundary.
 func shellCommand(dir, nonce, fifo string) (*exec.Cmd, error) {
-	env := append(os.Environ(), "KVERITAS_SHELL=1")
+	env := append(os.Environ(), "KVERITAS_SHELL="+strconv.Itoa(os.Getpid()))
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	if path := os.Getenv("SHELL"); filepath.Base(path) == "zsh" {
 		zenv := filepath.Join(dir, ".zshenv")
@@ -469,6 +469,9 @@ func (s *shellRec) start(text string) {
 	}
 	if shellSkip[filepath.Base(words[0])] && !strings.ContainsAny(text, ";&|") {
 		return
+	}
+	if fresh, err := session.Load(s.kvDir); err == nil {
+		s.sess = fresh
 	}
 	var hints []string
 	for _, w := range words {

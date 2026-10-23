@@ -35,6 +35,60 @@ type Session struct {
 	// Every invocation, failed and interrupted ones included, advances the anchor chain.
 	Invocations int    `json:"invocations,omitempty"`
 	ChainHead   string `json:"chain_head,omitempty"`
+	// History steps share the invocation chain with runs, so none can be dropped or edited.
+	Branch string      `json:"branch,omitempty"`
+	Steps  []Step      `json:"steps,omitempty"`
+	Failed []FailedRun `json:"failed,omitempty"`
+}
+
+type Step struct {
+	Kind       string    `json:"kind"`
+	ID         string    `json:"id"`
+	At         time.Time `json:"at"`
+	Branch     string    `json:"branch"`
+	Message    string    `json:"message,omitempty"`
+	Target     string    `json:"target,omitempty"`
+	Root       string    `json:"root,omitempty"`
+	Files      int       `json:"files,omitempty"`
+	Invocation int       `json:"invocation"`
+	Digest     string    `json:"digest"`
+}
+
+// Local only, for the history view; the server's anchors are what make failures count.
+type FailedRun struct {
+	Invocation int       `json:"invocation"`
+	Command    []string  `json:"command"`
+	ExitCode   int       `json:"exit_code"`
+	At         time.Time `json:"at"`
+	Branch     string    `json:"branch,omitempty"`
+}
+
+func (s *Session) CurrentBranch() string {
+	if s.Branch == "" {
+		return "main"
+	}
+	return s.Branch
+}
+
+// Run ID to reason, replaying set-aside and bring-back steps in order.
+func (s *Session) SetAside() map[string]string {
+	out := map[string]string{}
+	for _, st := range s.Steps {
+		switch st.Kind {
+		case "set-aside":
+			out[st.Target] = st.Message
+		case "bring-back":
+			delete(out, st.Target)
+		}
+	}
+	return out
+}
+
+func RunBranch(r *RunRecord) string {
+	if r.Branch == "" {
+		return "main"
+	}
+	return r.Branch
 }
 
 type RunRecord struct {
@@ -84,6 +138,7 @@ type RunRecord struct {
 	// Multi-node runs: every other node's own measurement, delivered to node 0.
 	Nodes         []NodeRecord `json:"nodes,omitempty"`
 	NodesExpected int          `json:"nodes_expected,omitempty"`
+	Branch        string       `json:"branch,omitempty"`
 }
 
 // A result named as a claim when sealing rather than printed by the run. It is

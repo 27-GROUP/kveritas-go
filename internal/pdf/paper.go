@@ -349,7 +349,7 @@ func (b *builder) paperReport(sess *session.Session, runs []*session.RunRecord, 
 	})
 	b.setupSection(sess, runs)
 	b.runsSection(runs, seal)
-	b.resultsSection(runs, sealClaims(seal))
+	b.resultsSection(sess, runs, sealClaims(seal))
 	b.evidenceSection(runs, hmcaResult)
 	b.provenanceSection(sess, runs)
 	b.verificationSection(seal)
@@ -572,7 +572,7 @@ func sealClaims(seal *session.SealRecord) []session.SealClaim {
 	return doc.Claims
 }
 
-func (b *builder) resultsSection(runs []*session.RunRecord, claims []session.SealClaim) {
+func (b *builder) resultsSection(sess *session.Session, runs []*session.RunRecord, claims []session.SealClaim) {
 	b.section("3  Results")
 	if len(claims) > 0 {
 		rows := make([][]string, 0, len(claims))
@@ -582,7 +582,21 @@ func (b *builder) resultsSection(runs []*session.RunRecord, claims []session.Sea
 		b.para("Claimed when the record was sealed, each taking the latest value its run recorded.")
 		b.table([]string{"Claim", "Value", "From", "Source"}, []float64{2, 1.2, 1.6, 1}, rows)
 	}
+	aside := sess.SetAside()
+	var apart [][]string
 	for i, r := range runs {
+		why, isAside := aside[r.ID]
+		if isAside || session.RunBranch(r) != sess.CurrentBranch() {
+			status := "branch " + session.RunBranch(r)
+			if isAside {
+				status = "set aside"
+				if why != "" {
+					status += ": " + why
+				}
+			}
+			apart = append(apart, []string{fmt.Sprintf("Run %d", i+1), session.RunBranch(r), status, metricSummary(r)})
+			continue
+		}
 		b.subsection(runTitle(i+1, r))
 		fm, count := finalMetrics(r)
 		if len(fm) == 0 {
@@ -609,6 +623,60 @@ func (b *builder) resultsSection(runs []*session.RunRecord, claims []session.Sea
 			b.para(fmt.Sprintf("Seed committed: %s, output line %d, %s.", s.Source, s.Line, s.Timestamp.UTC().Format(time.RFC3339)))
 		}
 	}
+	if len(apart) > 0 {
+		b.subsection("Set aside and other branches")
+		b.para("Kept apart from the results above by the author. Every one is still signed, counted, and in the appendix.")
+		b.table([]string{"Run", "Branch", "Status", "Results"}, []float64{0.8, 1.2, 2, 2.4}, apart)
+	}
+	if len(sess.Steps) > 0 {
+		b.subsection("History")
+		b.para(fmt.Sprintf("Branch %s leads this report. Each step below was anchored at the server when it was taken, in the same chain as the runs, so none can be removed or changed.", sess.CurrentBranch()))
+		rows := make([][]string, 0, len(sess.Steps))
+		for _, st := range sess.Steps {
+			rows = append(rows, []string{fmt.Sprintf("#%d", st.Invocation+1), st.Kind, stepDetail(st), st.At.UTC().Format("2006-01-02 15:04")})
+		}
+		b.table([]string{"Order", "Step", "Detail", "Time (UTC)"}, []float64{0.7, 1.1, 3.2, 1.4}, rows)
+	}
+}
+
+func metricSummary(r *session.RunRecord) string {
+	fm, _ := finalMetrics(r)
+	var parts []string
+	for _, m := range fm {
+		if m.Source == "measured" {
+			continue
+		}
+		if len(parts) == 3 {
+			parts = append(parts, "...")
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s=%.4g", m.Name, m.Value))
+	}
+	return strings.Join(parts, " ")
+}
+
+func stepDetail(st session.Step) string {
+	switch st.Kind {
+	case "checkpoint":
+		if st.Message != "" {
+			return fmt.Sprintf("%s, %q, %d files", st.ID, st.Message, st.Files)
+		}
+		return fmt.Sprintf("%s, %d files", st.ID, st.Files)
+	case "restore":
+		return fmt.Sprintf("files restored to checkpoint %s", st.Target)
+	case "branch":
+		return fmt.Sprintf("started %s from %s", st.Branch, st.Target)
+	case "switch":
+		return "switched to " + st.Branch
+	case "set-aside":
+		if st.Message != "" {
+			return fmt.Sprintf("run %s: %s", st.Target, st.Message)
+		}
+		return "run " + st.Target
+	case "bring-back":
+		return "run " + st.Target + " back in the results"
+	}
+	return st.Kind
 }
 
 func peaks(samples []session.HardwareSample) (cpu, mem, gpu float64) {

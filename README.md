@@ -77,6 +77,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 - **Checkout bundle.** `--disclosure open` binds the source to the report.
 - **Artifacts.** Attest a model or dataset by public hash or private commitment.
 - **Run anchors.** Every run anchored at the server when it ends, failed ones too.
+- **History.** Checkpoints, restore, branches, set-aside. Each step anchored in the same chain; nothing erased.
 - **Origin.** K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
 - **Agent sessions.** `init --harness`: hash-chained log of agent actions.
 
@@ -88,6 +89,9 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `shell` | Recorded terminal. Every command a run, anchored when it ends. Asks disclosure on a new session. |
 | `init [--local] [--harness] [--autolog] [--disclosure redacted\|names\|open]` | Start a session with options. |
 | `autolog [on\|off]` | Detect results when a run declares none. |
+| `checkpoint [-m msg] [--files f]` / `restore <id>` | Save files, put them back. Copies stay local. |
+| `branch [name]` / `set-aside <run>` | Label runs; move a run out of the main results (still signed). |
+| `log [-v]` | Session as a tree. |
 | `seal [-o path] [--claim name]` | Sign into a PDF. |
 | `verify <report.pdf \| session.json \| proof.json> [--offline] [--bundle z] [--paper pdf]` | Local checks plus server audit. |
 | `prove` / `verify-proof` | File proof. |
