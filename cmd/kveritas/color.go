@@ -10,6 +10,7 @@ import (
 
 const (
 	toneID       = "93;1"
+	toneRunID    = "96;1"
 	toneCurrent  = "35"
 	toneFaded    = "90"
 	toneBranch   = "32"

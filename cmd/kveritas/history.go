@@ -697,6 +697,9 @@ func renderLog(sess *session.Session, nodes []logNode, verbose bool) {
 			tone = toneFaded
 		}
 		idTone := toneID
+		if n.Kind == "run" || n.Kind == "failed" {
+			idTone = toneRunID
+		}
 		if tone == toneFaded {
 			idTone = toneFaded
 		}

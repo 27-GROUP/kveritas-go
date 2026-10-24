@@ -253,7 +253,7 @@ function nodeRow(r) {
   gutter(r.lanes, n),
   el("div", { class: "body" },
     el("div", { class: "head" },
-      el("span", { class: "id" }, n.id),
+      el("span", { class: n.kind === "run" || n.kind === "failed" ? "id run" : "id" }, n.id),
       el("span", { title: n.at ? new Date(n.at).toLocaleString() : "" }, n.at ? ago(n.at) : ""),
       el("span", {}, KIND[n.kind === "failed" ? "run" : n.kind] || n.kind),
       (n.kind === "run" || n.kind === "checkpoint") && n.duration ? el("span", {}, n.duration) : null,
