@@ -7,11 +7,11 @@
 
 # K-Veritas Go
 
-Cryptographic verification for computational experiments. Binds a result to the code, hardware and time that produced it, in a signed PDF anyone can verify. Any language. One static binary.
+Cryptographic verification for computational experiments. Binds a result to the code, hardware and time that produced it, in a signed PDF anyone can verify. Any language, one static binary.
 
 **Proves:** these numbers came from this code, at this time, unchanged. Not that the experiment is correct.
 
-**Faking it:** every run is sealed, failed ones too. An attempt shows, and cannot be denied.
+**Faking it:** every run is recorded, failed ones too, so an attempt shows.
 
 Official implementation of [Computer Science Conferences Should Require Nonrepudiable Experimental Results](https://arxiv.org/abs/2605.08586) (Keita and Homan, NeurIPS 2026 Position Paper Track).
 
@@ -43,7 +43,7 @@ kveritas verify report.pdf               # --offline skips the server
 
 ## Result lines
 
-Print them, any language. Everything captured is signed.
+Print them from any language.
 
 ```python
 print(f"KV val_acc={acc:.4f} loss={loss:.4f} step={epoch}")
@@ -65,20 +65,20 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 
 **Autolog** (opt-in, `kveritas autolog on`): Hugging Face, Keras, Lightning, XGBoost, LightGBM, hyperfine, Google Benchmark, criterion, `time`, TensorBoard, MLflow, CSV logs. Marked `auto:<format>`.
 
-**Claims at seal:** `kveritas seal --claim val_acc`.
+**Headline results:** `kveritas seal --claim val_acc`.
 
 ## Features
 
-- **Coherence (HMCA).** Metric-blind. Per-process telemetry at ~10 Hz; do the channels move as one process. PASS / WARN / FAIL / N/A.
-- **Multi-node.** Same command on every node (`srun kveritas run -- ...`). Every node measured, judged on its own.
+- **Coherence (HMCA).** Metric-blind: do the per-process telemetry channels move as one process. PASS / WARN / FAIL / N/A.
+- **Multi-node.** Same command on every node (`srun kveritas run -- ...`); each node measured and judged.
 - **Compute.** Declared FLOPs vs time, energy, memory. PASS / REVIEW / FABRICATION-IMPOSSIBLE / N/A.
 - **Provenance.** Signed Merkle timeline. Disclosure: redacted / names / open. `.kveritasignore` keeps files hash-only.
 - **Proofs.** Reveal one file, or one agent prompt/output, nothing else.
 - **Checkout bundle.** `--disclosure open` binds the source to the report.
 - **Artifacts.** Attest a model or dataset by public hash or private commitment.
 - **Run anchors.** Every run anchored at the server when it ends, failed ones too.
-- **History.** Checkpoints, restore, branches, set-aside. Each step anchored in the same chain; nothing erased.
-- **Origin.** K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
+- **History.** Checkpoints, restore, branches, set-aside, each anchored; nothing erased.
+- **Origin.** Signed by a trusted K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
 - **Agent sessions.** `init --harness`: hash-chained log of agent actions.
 
 ## Commands
@@ -89,7 +89,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `shell` | Recorded terminal. Every command a run, anchored when it ends. Asks disclosure on a new session. |
 | `init [--local] [--harness] [--autolog] [--disclosure redacted\|names\|open]` | Start a session with options. |
 | `autolog [on\|off]` | Detect results when a run declares none. |
-| `checkpoint [-m msg] [--files f]` / `restore <id>` | Save files, put them back. Copies stay local. |
+| `checkpoint [-m msg] [--files f]` / `restore <id>` | Save every project file (like `git add -A`), put them back. Copies stay local. |
 | `branch [name]` / `set-aside <run>` | Label runs; move a run out of the main results (still signed). |
 | `log [-v]` | Session as a tree. |
 | `web [--port N]` | Same history in the browser. Local only, secret link. |
@@ -99,7 +99,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `harness-prove` / `verify-harness-proof` | Agent prompt/output proof. |
 | `checkout <bundle.zip> <[run:]snapshot> <dir>` | Rebuild a snapshot. |
 | `check --claims c.json --report r.pdf` | Check paper claims. |
-| `status` / `update` / `clean` | State, self-update, remove session. |
+| `status [-v]` / `update` / `clean` | Branch and changed files, self-update, remove session. |
 
 ## Cryptographic protocol
 
@@ -110,20 +110,15 @@ payload        = "{data_hash}:{nonce}:{signed_at}"
 signature      = RSA-PSS-SHA256(payload, key=4096-bit)
 ```
 
-The canonical JSON, signature, and public key are embedded after `%%EOF` between the seal markers. Verifiers hash the stored bytes directly.
+Canonical JSON, signature and public key are embedded after `%%EOF` between the seal markers.
 
 ## Web verification
 
-Upload the report PDF at [kveritas.org/verify](https://kveritas.org/verify), optionally with the bundle and a manuscript. No account.
+Upload the report at [kveritas.org/verify](https://kveritas.org/verify), optionally with the bundle and a manuscript.
 
 ## Records
 
-Publish an open-disclosure report and its bundle as a citable record: [kveritas.org/records](https://kveritas.org/records). Submit through [KVERITAS-SCIENCE/records](https://github.com/KVERITAS-SCIENCE/records).
-
-## Related repositories
-
-- [kveritas-go](https://github.com/27-GROUP/kveritas-go): this repo, the CLI and server
-- [kveritas-releases](https://github.com/27-GROUP/kveritas-releases): prebuilt binaries
+Publish an open-disclosure report and its bundle as a citable record at [kveritas.org/records](https://kveritas.org/records), via [KVERITAS-SCIENCE/records](https://github.com/KVERITAS-SCIENCE/records).
 
 ## License
 
