@@ -65,7 +65,7 @@ History (every step is anchored; nothing is ever deleted):
   kveritas set-aside <run>   Move a run out of the main results, keeping it in the report.
   kveritas web               The same, in your browser: tree, changed files, buttons.
 
-  kveritas status            Show current session state.
+  kveritas status            Your branch, files changed since the checkpoint, the session.
   kveritas update            Update to the latest version.
 
 Result lines your program prints:
@@ -75,6 +75,7 @@ Result lines your program prints:
   KV phase <name>
   KV model params=<int> arch=<name> precision=<fp16|bf16|fp32>
   KV workload dataset_size=<int> epochs=<float> batch_size=<int> [seq_len=<int>]
+  KV artifact role=model|dataset [name=<ref>] path=<file> visibility=public|private
 The KVERITAS_METRIC/PHASE/CLAIM/INPUT/MODEL/WORKLOAD lines are still accepted.
 Every run also gets measured results: time, CPU, memory, GPU and energy.`,
 	SilenceUsage: true,
