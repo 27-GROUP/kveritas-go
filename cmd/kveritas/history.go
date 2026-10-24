@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -170,9 +169,10 @@ var (
 var cmdCheckpoint = &cobra.Command{
 	Use:   "checkpoint [-m message] [--files f1,f2]",
 	Short: "Save the project's files as a point you can come back to",
-	Long: `Saves a copy of the project's code and config files, plus any files named with
---files (a model checkpoint, a dataset split), so kveritas restore can bring them
-back. The copy stays on this machine. The server receives a salted fingerprint,
+	Long: `Saves a copy of every file in the project, like git add -A: data and weights
+included, caches, virtual environments and .gitignore'd paths left out (name those
+with --files to keep them too), so kveritas restore can bring them back. The copy
+stays on this machine; unchanged files are never copied twice. The server receives a salted fingerprint,
 anchored in the same chain as your runs, so a checkpoint cannot be removed later.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -221,7 +221,7 @@ func restoreTo(kvDir string, sess *session.Session, ref string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	drift := provenance.Compare(sess.ProjectDir, m)
+	drift := provenance.Compare(sess.ProjectDir, kvDir, m)
 	if len(drift.Modified)+len(drift.Deleted) == 0 {
 		return []string{"Files already match checkpoint " + checkpointLabel(target)}, nil
 	}
@@ -231,7 +231,7 @@ func restoreTo(kvDir string, sess *session.Session, ref string) ([]string, error
 	saved := false
 	if base != nil {
 		if bm, err := provenance.LoadManifest(kvDir, base.ID); err == nil {
-			saved = provenance.Compare(sess.ProjectDir, bm).Clean()
+			saved = provenance.Compare(sess.ProjectDir, kvDir, bm).Clean()
 			extra = append(extra, bm.Extra...)
 		}
 	}
@@ -445,7 +445,8 @@ type logNode struct {
 	Changed  []string    `json:"changed,omitempty"`
 	Aside    bool        `json:"aside,omitempty"`
 	Target   string      `json:"target,omitempty"`
-	text     string
+	desc     string
+	note     string
 }
 
 func finalValues(r *session.RunRecord) (results, measured []nodeValue) {
@@ -491,16 +492,14 @@ func logNodes(sess *session.Session, runs []*session.RunRecord) []logNode {
 				n.Changed = append(n.Changed, c.Op+" "+c.Path)
 			}
 		}
-		n.text = fmt.Sprintf("%s  run         %s  %s  %s", r.ID, n.Title, r.DurationFmt, runSummary(n.Results, false))
+		n.desc = strings.TrimRight(n.Title+"  "+runSummary(n.Results, false), " ")
 		if why, ok := aside[r.ID]; ok {
 			n.Aside, n.Note = true, why
-			n.text += "  (set aside"
+			n.note = "(set aside)"
 			if why != "" {
-				n.text += ": " + why
+				n.note = "(set aside: " + why + ")"
 			}
-			n.text += ")"
 		}
-		n.text = strings.TrimRight(n.text, " ")
 		byInv[r.Invocation] = n
 	}
 	for _, f := range sess.Failed {
@@ -515,36 +514,34 @@ func logNodes(sess *session.Session, runs []*session.RunRecord) []logNode {
 		title := strings.Join(f.Command, " ")
 		byInv[f.Invocation] = logNode{Kind: "failed", ID: fmt.Sprintf("#%d", f.Invocation+1), Inv: f.Invocation, Branch: b,
 			Glyph: "x", Title: title, Note: what, At: f.At,
-			text: fmt.Sprintf("#%-7d run         %s  %s", f.Invocation+1, title, what)}
+			desc: title, note: what}
 	}
 	for _, st := range sess.Steps {
 		n := logNode{Kind: st.Kind, ID: st.ID, Inv: st.Invocation, Branch: st.Branch, Glyph: "o", At: st.At, Target: st.Target, Note: st.Message}
-		var text string
 		switch st.Kind {
 		case "checkpoint":
 			n.Title = st.Message
 			n.Duration = files(st.Files)
-			text = fmt.Sprintf("checkpoint  %q  %s", st.Message, files(st.Files))
+			n.desc = fmt.Sprintf("%q  %s", st.Message, files(st.Files))
 		case "restore":
 			n.Title = "restored to " + st.Target
-			text = fmt.Sprintf("restore     to %s, %s written", st.Target, files(st.Files))
+			n.desc = fmt.Sprintf("restored to %s, %s written", st.Target, files(st.Files))
 		case "branch":
 			n.Title = fmt.Sprintf("started %s from %s", st.Branch, st.Target)
-			text = fmt.Sprintf("branch      %s, from %s", st.Branch, st.Target)
+			n.desc = n.Title
 		case "switch":
 			n.Title = "switched to " + st.Branch
-			text = fmt.Sprintf("switch      to %s", st.Branch)
+			n.desc = n.Title
 		case "set-aside":
 			n.Title = "set aside run " + st.Target
-			text = "set aside   run " + st.Target
+			n.desc = n.Title
 			if st.Message != "" {
-				text += ": " + st.Message
+				n.desc += ": " + st.Message
 			}
 		case "bring-back":
 			n.Title = "brought back run " + st.Target
-			text = "bring back  run " + st.Target
+			n.desc = n.Title
 		}
-		n.text = st.ID + "  " + text
 		byInv[st.Invocation] = n
 	}
 	nodes := make([]logNode, 0, sess.Invocations)
@@ -552,7 +549,7 @@ func logNodes(sess *session.Session, runs []*session.RunRecord) []logNode {
 		n, ok := byInv[k]
 		if !ok {
 			n = logNode{Kind: "failed", ID: fmt.Sprintf("#%d", k+1), Inv: k, Branch: "main", Glyph: "x",
-				Note: "failed or interrupted", text: fmt.Sprintf("#%-7d run         failed or interrupted", k+1)}
+				Note: "failed or interrupted", note: "failed or interrupted"}
 		}
 		nodes = append(nodes, n)
 	}
@@ -648,59 +645,200 @@ func graphLayout(sess *session.Session, nodes []logNode) ([]string, []graphRow) 
 	return order, rows
 }
 
+// A header and a description per entry; a branch joins its parent on the
+// description line of the branch's first entry.
 func renderLog(sess *session.Session, nodes []logNode, verbose bool) {
-	order, rows := graphLayout(sess, nodes)
-	pad := func(s string) string { return s + strings.Repeat(" ", 2*len(order)+1-len([]rune(s))) }
-	for _, r := range rows {
-		var line strings.Builder
+	_, rows := graphLayout(sess, nodes)
+	tips := map[int]string{}
+	for b, i := range branchTips(nodes) {
+		tips[i] = b
+	}
+	now := time.Now()
+	for k, r := range rows {
 		if r.Node < 0 {
-			for c, l := range r.Lanes {
-				switch {
-				case c == r.From:
-					line.WriteString("├─")
-				case c > r.From && c < r.To:
-					line.WriteString("──")
-				case c == r.To:
-					line.WriteString("╯ ")
-				case l.Down:
-					line.WriteString("│ ")
-				default:
-					line.WriteString("  ")
-				}
-			}
-			fmt.Println(strings.TrimRight(line.String(), " "))
 			continue
 		}
 		n := nodes[r.Node]
-		var gap strings.Builder
-		for _, l := range r.Lanes {
+		col := 0
+		var head, under strings.Builder
+		for c, l := range r.Lanes {
 			switch {
 			case l.Node:
-				line.WriteString(n.Glyph + " ")
+				col = c
+				head.WriteString(n.Glyph + " ")
 			case l.Up && l.Down:
-				line.WriteString("│ ")
+				head.WriteString("│ ")
 			default:
-				line.WriteString("  ")
+				head.WriteString("  ")
 			}
+		}
+		next := r.Lanes
+		descGraph := ""
+		if k+1 < len(rows) && rows[k+1].Node < 0 {
+			descGraph = joinGraph(rows[k+1], r)
+			next = rows[k+1].Lanes
+		}
+		for _, l := range next {
 			if l.Down {
-				gap.WriteString("│ ")
+				under.WriteString("│ ")
 			} else {
-				gap.WriteString("  ")
+				under.WriteString("  ")
 			}
 		}
-		fmt.Println(pad(line.String()) + n.text)
-		if !verbose {
-			continue
+		if descGraph == "" {
+			descGraph = under.String()
 		}
-		var detail []string
-		if s := runSummary(n.Results, true); s != "" {
-			detail = append(detail, "results: "+s)
+
+		tone := ""
+		switch {
+		case n.Glyph == "@":
+			tone = toneCurrent
+		case n.Glyph == "x" || n.Aside:
+			tone = toneFaded
 		}
-		detail = append(detail, n.Changed...)
-		for _, d := range detail {
-			fmt.Println(pad(gap.String()) + "  " + d)
+		idTone := toneID
+		if tone == toneFaded {
+			idTone = toneFaded
+		}
+		kind := n.Kind
+		if kind == "failed" {
+			kind = "run"
+		}
+		fields := []string{paint(idTone, n.ID)}
+		dur := n.Duration
+		if n.Kind != "run" {
+			dur = ""
+		}
+		for _, f := range []string{smartDate(n.At, now), kind, dur} {
+			if f != "" {
+				fields = append(fields, paint(tone, f))
+			}
+		}
+		if b, ok := tips[r.Node]; ok {
+			if b == sess.CurrentBranch() {
+				fields = append(fields, paint(toneActive, b+"*"))
+			} else {
+				fields = append(fields, paint(toneBranch, b))
+			}
+		}
+		glyph := paint(glyphTone(n), n.Glyph)
+		fmt.Println(strings.Replace(graphCol(head.String(), col), n.Glyph, glyph, 1) + strings.Join(fields, "  "))
+
+		desc := paint(tone, n.desc)
+		if n.note != "" {
+			desc = strings.TrimLeft(desc+"  ", " ") + paint(toneFaded, n.note)
+		}
+		if desc != "" {
+			fmt.Println(graphCol(descGraph, col) + desc)
+		}
+		if verbose {
+			if s := runSummary(n.Results, true); s != "" && len(n.Results) > 3 {
+				fmt.Println(graphCol(under.String(), col) + s)
+			}
+			for _, c := range n.Changed {
+				fmt.Println(graphCol(under.String(), col) + changeLine(c))
+			}
+		}
+		if k < len(rows)-1 {
+			fmt.Println(strings.TrimRight(under.String(), " "))
 		}
 	}
+}
+
+// The graph part of a line, trimmed but wide enough to keep text aligned with the node.
+func graphCol(g string, col int) string {
+	g = strings.TrimRight(g, " ")
+	if w := 2*col + 1; len([]rune(g)) < w {
+		g += strings.Repeat(" ", w-len([]rune(g)))
+	}
+	return g + "  "
+}
+
+func joinGraph(link, node graphRow) string {
+	var b strings.Builder
+	lo, hi := min(link.From, link.To), max(link.From, link.To)
+	for c, l := range link.Lanes {
+		switch {
+		case c == link.From && link.From < link.To:
+			b.WriteString(map[bool]string{true: "├─", false: "╭─"}[node.Lanes[c].Up])
+		case c == link.From:
+			b.WriteString(map[bool]string{true: "┤ ", false: "╮ "}[node.Lanes[c].Up])
+		case c == link.To && link.From < link.To:
+			b.WriteString("╯ ")
+		case c == link.To:
+			b.WriteString("╰─")
+		case c > lo && c < hi && l.Down:
+			b.WriteString("┼─")
+		case c > lo && c < hi:
+			b.WriteString("──")
+		case l.Down:
+			b.WriteString("│ ")
+		default:
+			b.WriteString("  ")
+		}
+	}
+	return b.String()
+}
+
+func branchTips(nodes []logNode) map[string]int {
+	tips := map[string]int{}
+	for i, n := range nodes {
+		tips[n.Branch] = i
+	}
+	return tips
+}
+
+func glyphTone(n logNode) string {
+	switch {
+	case n.Glyph == "@":
+		return toneCurrent
+	case n.Glyph == "x" || n.Aside:
+		return toneFaded
+	}
+	return ""
+}
+
+func changeLine(c string) string {
+	op, path, _ := strings.Cut(c, " ")
+	switch op {
+	case "add":
+		return paint(toneAdded, "A "+path)
+	case "delete":
+		return paint(toneRemoved, "R "+path)
+	}
+	return paint(toneModified, "M "+path)
+}
+
+// Minutes ago within 90 minutes, then the day and time.
+func smartDate(t, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	t, now = t.Local(), now.Local()
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < 90*time.Minute:
+		if m := int(d.Minutes()); m != 1 {
+			return fmt.Sprintf("%d minutes ago", m)
+		}
+		return "1 minute ago"
+	}
+	y1, m1, d1 := t.Date()
+	y2, m2, d2 := now.Date()
+	y3, m3, d3 := now.AddDate(0, 0, -1).Date()
+	switch {
+	case y1 == y2 && m1 == m2 && d1 == d2:
+		return "Today at " + t.Format("15:04")
+	case y1 == y3 && m1 == m3 && d1 == d3:
+		return "Yesterday at " + t.Format("15:04")
+	case d < 6*24*time.Hour:
+		return t.Format("Monday at 15:04")
+	case y1 == y2:
+		return t.Format("Jan 2 at 15:04")
+	}
+	return t.Format("Jan 2 2006")
 }
 
 var logVerbose bool
@@ -739,44 +877,35 @@ func workingState(kvDir string, sess *session.Session) (*session.Step, *provenan
 	if err != nil {
 		return base, nil
 	}
-	d := provenance.Compare(sess.ProjectDir, m)
+	d := provenance.Compare(sess.ProjectDir, kvDir, m)
 	return base, &d
 }
 
 func printWorkingState(kvDir string, sess *session.Session) {
-	if len(sess.Steps) == 0 {
-		return
-	}
-	fmt.Printf("Branch:       %s\n", sess.CurrentBranch())
+	head := paint(toneActive, sess.CurrentBranch()+"*")
 	base, d := workingState(kvDir, sess)
-	if base == nil {
-		return
-	}
-	fmt.Printf("Checkpoint:   %s\n", checkpointLabel(base))
 	switch {
-	case d == nil:
-		fmt.Println("Files:        unknown (saved copy missing)")
-	case d.Clean():
-		fmt.Println("Files:        CLEAN, same as the checkpoint")
+	case base == nil:
+		head += "  no checkpoint yet"
+	case base.Message != "":
+		head += fmt.Sprintf("  based on %s %q", paint(toneID, base.ID), base.Message)
 	default:
-		fmt.Printf("Files:        CHANGED since the checkpoint\n")
+		head += "  based on " + paint(toneID, base.ID)
+	}
+	fmt.Println(head)
+	switch {
+	case base != nil && d == nil:
+		fmt.Println(paint(toneFaded, "saved copy of the checkpoint is missing"))
+	case d != nil:
 		for _, f := range d.Modified {
-			fmt.Printf("  modified  %s\n", f)
+			fmt.Println(changeLine("modify " + f))
 		}
 		for _, f := range d.Added {
-			fmt.Printf("  added     %s\n", f)
+			fmt.Println(changeLine("add " + f))
 		}
 		for _, f := range d.Deleted {
-			fmt.Printf("  deleted   %s\n", f)
+			fmt.Println(changeLine("delete " + f))
 		}
-	}
-	if aside := sess.SetAside(); len(aside) > 0 {
-		ids := make([]string, 0, len(aside))
-		for id := range aside {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		fmt.Printf("Set aside:    %s\n", strings.Join(ids, ", "))
 	}
 }
 

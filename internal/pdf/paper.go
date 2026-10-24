@@ -587,7 +587,7 @@ func (b *builder) resultsSection(sess *session.Session, runs []*session.RunRecor
 	for i, r := range runs {
 		why, isAside := aside[r.ID]
 		if isAside || session.RunBranch(r) != sess.CurrentBranch() {
-			status := "branch " + session.RunBranch(r)
+			status := "other branch"
 			if isAside {
 				status = "set aside"
 				if why != "" {
@@ -655,13 +655,20 @@ func metricSummary(r *session.RunRecord) string {
 	return strings.Join(parts, " ")
 }
 
+func fileCount(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
+}
+
 func stepDetail(st session.Step) string {
 	switch st.Kind {
 	case "checkpoint":
 		if st.Message != "" {
-			return fmt.Sprintf("%s, %q, %d files", st.ID, st.Message, st.Files)
+			return fmt.Sprintf("%s, %q, %s", st.ID, st.Message, fileCount(st.Files))
 		}
-		return fmt.Sprintf("%s, %d files", st.ID, st.Files)
+		return fmt.Sprintf("%s, %s", st.ID, fileCount(st.Files))
 	case "restore":
 		return fmt.Sprintf("files restored to checkpoint %s", st.Target)
 	case "branch":

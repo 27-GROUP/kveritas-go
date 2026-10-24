@@ -24,14 +24,14 @@ func TestCheckpointRestore(t *testing.T) {
 	if len(m.Files) != 2 || len(m.Extra) != 1 {
 		t.Fatalf("captured %v, extra %v", m.Files, m.Extra)
 	}
-	if !Compare(dir, m).Clean() {
+	if !Compare(dir, kv, m).Clean() {
 		t.Fatal("fresh checkpoint should be clean")
 	}
 
 	write("train.py", "lr = 0.5\n")
 	write("model.bin", "weights-63")
 	write("new.py", "x = 1\n")
-	d := Compare(dir, m)
+	d := Compare(dir, kv, m)
 	if len(d.Modified) != 2 || len(d.Added) != 1 {
 		t.Fatalf("drift %+v", d)
 	}

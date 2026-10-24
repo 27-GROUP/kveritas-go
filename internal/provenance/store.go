@@ -1,22 +1,25 @@
 package provenance
 
 import (
+	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/Mamadou2727/kveritas-go/internal/bundle"
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
+	"github.com/klauspost/compress/zstd"
 )
 
 // A checkpoint's files by content hash. The contents sit in .kveritas/objects and
@@ -45,18 +48,39 @@ func cleanRel(projectDir, p string) (string, error) {
 }
 
 func tracked(projectDir string, extra []string) []string {
-	files, _ := bundle.CollectSourceFiles(projectDir)
+	files := projectFiles(projectDir)
 	seen := map[string]bool{}
-	var out []string
-	for _, f := range append(files, extra...) {
-		f = filepath.ToSlash(f)
-		if !seen[f] {
+	for _, f := range files {
+		seen[f] = true
+	}
+	for _, f := range extra {
+		if f = filepath.ToSlash(f); !seen[f] {
 			seen[f] = true
-			out = append(out, f)
+			files = append(files, f)
 		}
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(files)
+	return files
+}
+
+func parallel(n int, fn func(i int)) {
+	workers := min(runtime.NumCPU(), 8, n)
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				fn(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
 }
 
 func Capture(projectDir, kvDir string, extra []string) (*Manifest, error) {
@@ -76,26 +100,98 @@ func Capture(projectDir, kvDir string, extra []string) (*Manifest, error) {
 	if err := os.MkdirAll(objectsDir(kvDir), 0700); err != nil {
 		return nil, err
 	}
-	for _, rel := range tracked(projectDir, m.Extra) {
-		h, err := store(kvDir, filepath.Join(projectDir, filepath.FromSlash(rel)))
-		if err != nil {
-			continue
+	cache := LoadHashCache(kvDir)
+	rels := tracked(projectDir, m.Extra)
+	hashes := make([]string, len(rels))
+	parallel(len(rels), func(i int) {
+		hashes[i], _ = store(kvDir, cache, rels[i], filepath.Join(projectDir, filepath.FromSlash(rels[i])))
+	})
+	for i, rel := range rels {
+		if hashes[i] != "" {
+			m.Files[rel] = hashes[i]
 		}
-		m.Files[rel] = h
 	}
-	return m, nil
+	return m, cache.Save()
 }
 
-// Hashes first so an unchanged file is not copied again; the copy is hashed as it is
-// written, so the stored name always matches the stored bytes.
-func store(kvDir, path string) (string, error) {
-	h, err := crypto.HashFile(path)
+func objectPath(kvDir, hash string) (string, bool) {
+	raw := filepath.Join(objectsDir(kvDir), hash)
+	if _, err := os.Stat(raw); err == nil {
+		return raw, true
+	}
+	if _, err := os.Stat(raw + ".zst"); err == nil {
+		return raw + ".zst", true
+	}
+	return "", false
+}
+
+func tempName(dir, prefix string) string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return filepath.Join(dir, prefix+hex.EncodeToString(b))
+}
+
+func isText(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8192)
+	n, _ := io.ReadFull(f, buf)
+	return !bytes.Contains(buf[:n], []byte{0})
+}
+
+// Text is stored zstd-compressed; anything else as a copy-on-write clone where the
+// filesystem allows it, otherwise a plain copy. Objects are named by the hash of the
+// bytes actually stored, so a file that changes mid-copy can never be mislabeled.
+func store(kvDir string, cache *HashCache, rel, path string) (string, error) {
+	st, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(filepath.Join(objectsDir(kvDir), h)); err == nil {
+	if h, ok := cache.lookup(rel, st); ok {
+		if _, ok := objectPath(kvDir, h); ok {
+			return h, nil
+		}
+	}
+	text := isText(path)
+	if !text {
+		tmp := tempName(objectsDir(kvDir), "tmp-")
+		if cloneFile(path, tmp) == nil {
+			h, err := crypto.HashFile(tmp)
+			if err != nil {
+				os.Remove(tmp)
+				return "", err
+			}
+			if _, ok := objectPath(kvDir, h); ok {
+				os.Remove(tmp)
+			} else if err := os.Rename(tmp, filepath.Join(objectsDir(kvDir), h)); err != nil {
+				os.Remove(tmp)
+				return "", err
+			}
+			if after, err := os.Stat(path); err == nil && stateOf(after) == stateOf(st) {
+				cache.remember(rel, st, h)
+			}
+			return h, nil
+		}
+	}
+	h, err := cache.hash(rel, path)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := objectPath(kvDir, h); ok {
 		return h, nil
 	}
+	return copyIn(kvDir, path, text)
+}
+
+var encoders = sync.Pool{New: func() any {
+	zw, _ := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1), zstd.WithLowerEncoderMem(true))
+	return zw
+}}
+
+func copyIn(kvDir, path string, compress bool) (string, error) {
 	src, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -105,18 +201,40 @@ func store(kvDir, path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, sum), src); err != nil {
+	fail := func(err error) (string, error) {
 		tmp.Close()
 		os.Remove(tmp.Name())
 		return "", err
+	}
+	sum := sha256.New()
+	if compress {
+		zw := encoders.Get().(*zstd.Encoder)
+		defer encoders.Put(zw)
+		zw.Reset(tmp)
+		if _, err := io.Copy(io.MultiWriter(zw, sum), src); err != nil {
+			zw.Close()
+			return fail(err)
+		}
+		if err := zw.Close(); err != nil {
+			return fail(err)
+		}
+	} else if _, err := io.Copy(io.MultiWriter(tmp, sum), src); err != nil {
+		return fail(err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		return "", err
 	}
 	got := hex.EncodeToString(sum.Sum(nil))
-	return got, os.Rename(tmp.Name(), filepath.Join(objectsDir(kvDir), got))
+	if _, ok := objectPath(kvDir, got); ok {
+		os.Remove(tmp.Name())
+		return got, nil
+	}
+	dest := filepath.Join(objectsDir(kvDir), got)
+	if compress {
+		dest += ".zst"
+	}
+	return got, os.Rename(tmp.Name(), dest)
 }
 
 func SaveManifest(kvDir, id string, m *Manifest) error {
@@ -161,54 +279,23 @@ type Drift struct {
 
 func (d Drift) Clean() bool { return len(d.Added)+len(d.Modified)+len(d.Deleted) == 0 }
 
-// Remembers each file's hash by size and modification time, so repeated comparisons
-// only re-read files that changed.
-type HashCache struct {
-	mu sync.Mutex
-	m  map[string]cachedHash
+func Compare(projectDir, kvDir string, m *Manifest) Drift {
+	cache := LoadHashCache(kvDir)
+	d := CompareCached(projectDir, m, cache)
+	_ = cache.Save()
+	return d
 }
-
-type cachedHash struct {
-	size int64
-	mod  time.Time
-	hash string
-}
-
-func NewHashCache() *HashCache { return &HashCache{m: map[string]cachedHash{}} }
-
-func (c *HashCache) hash(path string) (string, error) {
-	if c == nil {
-		return crypto.HashFile(path)
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	e, ok := c.m[path]
-	c.mu.Unlock()
-	if ok && e.size == st.Size() && e.mod.Equal(st.ModTime()) {
-		return e.hash, nil
-	}
-	h, err := crypto.HashFile(path)
-	if err != nil {
-		return "", err
-	}
-	c.mu.Lock()
-	c.m[path] = cachedHash{size: st.Size(), mod: st.ModTime(), hash: h}
-	c.mu.Unlock()
-	return h, nil
-}
-
-func Compare(projectDir string, m *Manifest) Drift { return CompareCached(projectDir, m, nil) }
 
 func CompareCached(projectDir string, m *Manifest, cache *HashCache) Drift {
 	var d Drift
+	rels := tracked(projectDir, m.Extra)
+	hashes := make([]string, len(rels))
+	parallel(len(rels), func(i int) {
+		hashes[i], _ = cache.hash(rels[i], filepath.Join(projectDir, filepath.FromSlash(rels[i])))
+	})
 	cur := map[string]bool{}
-	for _, rel := range tracked(projectDir, m.Extra) {
-		path := filepath.Join(projectDir, filepath.FromSlash(rel))
-		h, err := cache.hash(path)
-		if err != nil {
+	for i, rel := range rels {
+		if hashes[i] == "" {
 			continue
 		}
 		cur[rel] = true
@@ -216,7 +303,7 @@ func CompareCached(projectDir string, m *Manifest, cache *HashCache) Drift {
 		switch {
 		case !ok:
 			d.Added = append(d.Added, rel)
-		case want != h:
+		case want != hashes[i]:
 			d.Modified = append(d.Modified, rel)
 		}
 	}
@@ -232,6 +319,8 @@ func CompareCached(projectDir string, m *Manifest, cache *HashCache) Drift {
 // Writes back every file that differs from the checkpoint. Files created since are
 // left alone: restore never deletes the author's work.
 func Restore(projectDir, kvDir string, m *Manifest) (int, error) {
+	cache := LoadHashCache(kvDir)
+	defer cache.Save()
 	n := 0
 	rels := make([]string, 0, len(m.Files))
 	for rel := range m.Files {
@@ -244,22 +333,27 @@ func Restore(projectDir, kvDir string, m *Manifest) (int, error) {
 			return n, err
 		}
 		dest := filepath.Join(projectDir, filepath.FromSlash(rel))
-		if h, err := crypto.HashFile(dest); err == nil && h == want {
+		if h, err := cache.hash(rel, dest); err == nil && h == want {
 			continue
 		}
-		obj := filepath.Join(objectsDir(kvDir), want)
-		if h, err := crypto.HashFile(obj); err != nil || h != want {
-			return n, fmt.Errorf("saved copy of %s is missing or damaged", rel)
+		if err := restoreFile(kvDir, want, dest); err != nil {
+			return n, fmt.Errorf("%s: %w", rel, err)
 		}
-		if err := copyFile(obj, dest); err != nil {
-			return n, err
+		if st, err := os.Stat(dest); err == nil {
+			cache.remember(rel, st, want)
 		}
 		n++
 	}
 	return n, nil
 }
 
-func copyFile(src, dest string) error {
+var errDamaged = errors.New("saved copy is missing or damaged")
+
+func restoreFile(kvDir, want, dest string) error {
+	obj, ok := objectPath(kvDir, want)
+	if !ok {
+		return errDamaged
+	}
 	mode := os.FileMode(0644)
 	if st, err := os.Stat(dest); err == nil {
 		mode = st.Mode().Perm()
@@ -267,27 +361,46 @@ func copyFile(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return err
 	}
-	in, err := os.Open(src)
+	tmp := tempName(filepath.Dir(dest), ".kveritas-restore-")
+	if strings.HasSuffix(obj, ".zst") || cloneFile(obj, tmp) != nil {
+		if err := writeObject(obj, tmp); err != nil {
+			os.Remove(tmp)
+			return err
+		}
+	}
+	if h, err := crypto.HashFile(tmp); err != nil || h != want {
+		os.Remove(tmp)
+		return errDamaged
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dest)
+}
+
+func writeObject(obj, dest string) error {
+	in, err := os.Open(obj)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(dest), ".kveritas-restore-")
+	var r io.Reader = in
+	if strings.HasSuffix(obj, ".zst") {
+		zr, err := zstd.NewReader(in, zstd.WithDecoderConcurrency(1))
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		r = zr
+	}
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
+	if _, err := io.Copy(out, r); err != nil {
+		out.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), mode); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), dest)
+	return out.Close()
 }

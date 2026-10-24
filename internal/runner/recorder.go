@@ -54,6 +54,7 @@ type Recorder struct {
 	provLevel provenance.Level
 	salt      []byte
 	pid       int
+	srcHashes map[string]string
 
 	parser    *metrics.Parser
 	auto      *metrics.Auto
@@ -88,9 +89,17 @@ func NewRecorder(sess *session.Session, command, fileHints []string, opts Option
 	var preErr error
 	var hw session.HardwareInfo
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); preHashes, preErr = hashFiles(fileHints) }()
 	go func() { defer wg.Done(); hw = hardware.Snapshot() }()
+	// The code as this run starts, so a run's source hash is its own and seal compares
+	// against the latest run, not the first.
+	go func() {
+		defer wg.Done()
+		if files, err := bundle.CollectSourceFiles(sess.ProjectDir); err == nil && len(files) > 0 {
+			r.srcHashes = provenance.HashFilesCached(sess.ProjectDir, filepath.Join(sess.ProjectDir, session.DirName), files)
+		}
+	}()
 	wg.Wait()
 	if preErr != nil {
 		return nil, fmt.Errorf("pre-run file hashing: %w", preErr)
@@ -301,19 +310,6 @@ func (r *Recorder) Finish(exitCode int) (*Result, error) {
 	wg.Add(2)
 	go func() { defer wg.Done(); postHashes, postErr = hashFiles(r.fileHints) }()
 	go func() { defer wg.Done(); envDig, envPackages, _ = envDigest(r.command) }()
-	if len(r.sess.SourceHashes) == 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			files, err := bundle.CollectSourceFiles(r.sess.ProjectDir)
-			if err == nil && len(files) > 0 {
-				if hashes, err := bundle.HashSourceFiles(r.sess.ProjectDir, files); err == nil {
-					r.sess.SourceHashes = hashes
-					fmt.Fprintf(r.log, "[kveritas] Indexed %d source files for integrity tracking\n", len(hashes))
-				}
-			}
-		}()
-	}
 	wg.Wait()
 	if postErr != nil {
 		return nil, fmt.Errorf("post-run file hashing: %w", postErr)
@@ -321,8 +317,12 @@ func (r *Recorder) Finish(exitCode int) (*Result, error) {
 	rec.PostHashes = postHashes
 	rec.EnvDigest = envDig
 	rec.EnvPackages = envPackages
-	if len(r.sess.SourceHashes) > 0 {
-		rec.SourceCodeHash = computeAggregateSourceHash(r.sess.SourceHashes)
+	if len(r.srcHashes) > 0 {
+		if len(r.sess.SourceHashes) == 0 {
+			fmt.Fprintf(r.log, "[kveritas] Indexed %d source files for integrity tracking\n", len(r.srcHashes))
+		}
+		r.sess.SourceHashes = r.srcHashes
+		rec.SourceCodeHash = computeAggregateSourceHash(r.srcHashes)
 	}
 	for path, pre := range rec.PreHashes {
 		if post, ok := postHashes[path]; ok && post != pre {

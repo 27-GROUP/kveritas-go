@@ -2719,8 +2719,11 @@ func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bo
 }
 
 var cmdStatus = &cobra.Command{
-	Use:   "status",
-	Short: "Show current session state",
+	Use:   "status [-v]",
+	Short: "Show your branch, the files changed since the checkpoint, and the session",
+	Long: `The first line is your branch and the checkpoint the files are based on, then
+one line per changed file: M modified, A added, R removed. -v adds the session
+details and every run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		kvDir, err := session.Find()
 		if err != nil {
@@ -2735,12 +2738,6 @@ var cmdStatus = &cobra.Command{
 			return printStatusJSON(kvDir, sess)
 		}
 
-		fmt.Printf("Session ID:   %s\n", sess.ID)
-		fmt.Printf("Initialized:  %s\n", sess.InitAt.UTC().Format(time.RFC3339))
-		fmt.Printf("Machine ID:   %s\n", sess.MachineID)
-		fmt.Printf("Server:       %s\n", sess.ServerURL)
-		fmt.Printf("Sealed:       %v\n", sess.Sealed)
-		fmt.Printf("Runs:         %d\n", len(sess.Runs))
 		if !sess.Sealed {
 			printWorkingState(kvDir, sess)
 			if err := recoverInterrupted(kvDir, sess); err != nil {
@@ -2751,12 +2748,39 @@ var cmdStatus = &cobra.Command{
 					_, _ = anchor.Flush(client.New(sess.ServerURL), kvDir)
 				}
 			}
-			fmt.Printf("Invocations:  %d (failed and interrupted included)\n", sess.Invocations)
-			if q := anchor.Pending(kvDir); len(q) > 0 {
-				fmt.Printf("Queued:       %d run anchor(s) not yet delivered; they are retried automatically\n", len(q))
-			}
+		} else if seal, err := session.LoadSeal(kvDir); err == nil {
+			fmt.Printf("%s  %s\n", paint(toneBranch, "sealed"), seal.SealedAt.Local().Format("Jan 2 2006 at 15:04"))
 		}
 
+		disclosure := sess.Disclosure
+		if disclosure == "" {
+			disclosure = "redacted"
+		}
+		summary := []string{"session " + paint(toneID, sess.ID[:min(8, len(sess.ID))]), disclosure, plural(len(sess.Runs), "run")}
+		if !sess.Sealed && sess.Invocations != len(sess.Runs) {
+			summary = append(summary, plural(sess.Invocations, "invocation"))
+		}
+		if n := len(sess.SetAside()); n > 0 {
+			summary = append(summary, fmt.Sprintf("%d set aside", n))
+		}
+		fmt.Println()
+		fmt.Println(paint(toneFaded, strings.Join(summary, " · ")))
+		if !sess.Sealed {
+			if q := anchor.Pending(kvDir); len(q) > 0 {
+				fmt.Printf("%d run anchor(s) waiting to reach the server; retried automatically\n", len(q))
+			}
+		}
+		if !statusVerbose {
+			return nil
+		}
+
+		fmt.Println()
+		fmt.Printf("Session ID:   %s\n", sess.ID)
+		fmt.Printf("Initialized:  %s\n", sess.InitAt.UTC().Format(time.RFC3339))
+		fmt.Printf("Machine ID:   %s\n", sess.MachineID)
+		if !sess.Sealed {
+			fmt.Printf("Invocations:  %d (failed and interrupted included)\n", sess.Invocations)
+		}
 		for i, id := range sess.Runs {
 			r, err := session.LoadRun(kvDir, id)
 			if err != nil {
@@ -2771,22 +2795,28 @@ var cmdStatus = &cobra.Command{
 				i+1, statusStr, strings.Join(r.Command, " "), r.DurationFmt,
 				len(r.Metrics), len(r.Claims), len(r.Phases), len(r.Seeds))
 		}
-
 		if sess.Sealed {
-			seal, err := session.LoadSeal(kvDir)
-			if err == nil {
-				fmt.Printf("\nSealed at:  %s\n", seal.SealedAt.UTC().Format(time.RFC3339))
-				fmt.Printf("Data hash:  %s\n", seal.DataHash)
+			if seal, err := session.LoadSeal(kvDir); err == nil {
+				fmt.Printf("Sealed at:    %s\n", seal.SealedAt.UTC().Format(time.RFC3339))
+				fmt.Printf("Data hash:    %s\n", seal.DataHash)
 			}
 		}
 		return nil
 	},
 }
 
-var statusJSON bool
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+var statusJSON, statusVerbose bool
 
 func init() {
 	cmdStatus.Flags().BoolVar(&statusJSON, "json", false, "print as JSON")
+	cmdStatus.Flags().BoolVarP(&statusVerbose, "verbose", "v", false, "also show the session details and every run")
 }
 
 func printStatusJSON(kvDir string, sess *session.Session) error {

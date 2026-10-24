@@ -168,15 +168,11 @@ function showMenu(e, n) {
 function glyph(g, n, x) {
   const y = DOT_Y;
   if (n.glyph === "x") {
-    g.append(svg("path", { d: `M${x - 4} ${y - 4}L${x + 4} ${y + 4}M${x + 4} ${y - 4}L${x - 4} ${y + 4}`, stroke: "currentColor", "stroke-width": 2 }));
+    g.append(svg("path", { d: `M${x - 4} ${y - 4}L${x + 4} ${y + 4}M${x + 4} ${y - 4}L${x - 4} ${y + 4}`, stroke: "var(--faded)", "stroke-width": 2 }));
   } else if (n.glyph === "@") {
-    g.append(svg("circle", { cx: x, cy: y, r: 6, fill: "var(--strong)", stroke: "var(--strong)" }));
-  } else if (n.kind === "checkpoint") {
-    g.append(svg("rect", { x: x - 5, y: y - 5, width: 10, height: 10, fill: "var(--bg)", stroke: "currentColor", "stroke-width": 1.6 }));
-  } else if (n.kind === "run") {
-    g.append(svg("circle", { cx: x, cy: y, r: 5, fill: "var(--bg)", stroke: "currentColor", "stroke-width": 1.6, "stroke-dasharray": n.aside ? "2 2" : "none" }));
+    g.append(svg("circle", { cx: x, cy: y, r: 6, fill: "var(--current)", stroke: "var(--current)" }));
   } else {
-    g.append(svg("circle", { cx: x, cy: y, r: 3, fill: "currentColor" }));
+    g.append(svg("circle", { cx: x, cy: y, r: 5, fill: "var(--bg)", stroke: n.aside ? "var(--faded)" : "var(--text)", "stroke-width": 1.6, "stroke-dasharray": n.aside ? "2 2" : "none" }));
   }
 }
 
@@ -227,7 +223,7 @@ function detailOf(n) {
   if (n.changed && n.changed.length) {
     d.append(el("ul", { class: "files" }, n.changed.map((c) => {
       const i = c.indexOf(" ");
-      return el("li", {}, el("span", { class: "op" }, c.slice(0, i)), c.slice(i + 1));
+      return change(c.slice(0, i), c.slice(i + 1));
     })));
   }
   if (n.at) d.append(el("div", { class: "muted small" }, new Date(n.at).toLocaleString()));
@@ -244,26 +240,28 @@ function nodeRow(r) {
   if (n.kind === "set-aside" && n.note) title += ": " + n.note;
 
   const chips = [];
-  if (n.aside) chips.push(el("span", { class: "chip tag" }, "set aside" + (n.note ? ": " + n.note : "")));
-  if (n.branch !== "main") chips.push(el("span", { class: "chip" }, n.branch));
   for (const v of (n.results || []).slice(0, 6)) chips.push(el("span", { class: "chip mono" }, `${v.name} ${fmt(v.value)}`));
+  if (n.aside) chips.push(el("span", { class: "faded" }, "(set aside" + (n.note ? ": " + n.note : "") + ")"));
+  const tip = state.tips[n.branch] === r.node;
+  const tone = n.glyph === "@" ? "current" : n.glyph === "x" || n.aside ? "faded" : "";
 
   const row = el("div", {
-    class: "node",
+    class: "node " + tone,
     onclick: () => { if (open.has(key)) open.delete(key); else open.add(key); render(); },
     oncontextmenu: (e) => showMenu(e, n),
   },
   gutter(r.lanes, n),
   el("div", { class: "body" },
     el("div", { class: "head" },
-      el("span", { class: "kind" }, n.glyph === "@" ? "you are here" : KIND[n.kind] || n.kind),
-      el("span", { class: n.kind === "run" || n.kind === "failed" ? "title mono" : "title" }, title),
-      el("span", { class: "meta" },
-        el("span", { class: "actions" }, acts.map(([label, fn]) =>
-          el("button", { class: "btn small ghost", type: "button", onclick: (e) => { e.stopPropagation(); fn(); } }, label))),
-        n.duration ? el("span", {}, n.duration) : null,
-        el("span", { title: n.at ? new Date(n.at).toLocaleString() : "" }, n.at ? ago(n.at) : ""),
-        el("span", { class: "id" }, n.id))),
+      el("span", { class: "id" }, n.id),
+      el("span", { title: n.at ? new Date(n.at).toLocaleString() : "" }, n.at ? ago(n.at) : ""),
+      el("span", {}, KIND[n.kind === "failed" ? "run" : n.kind] || n.kind),
+      (n.kind === "run" || n.kind === "checkpoint") && n.duration ? el("span", {}, n.duration) : null,
+      tip ? el("span", { class: n.branch === state.branch ? "book active" : "book" }, n.branch + (n.branch === state.branch ? "*" : "")) : null,
+      n.glyph === "@" ? el("span", { class: "here" }, "you are here") : null,
+      el("span", { class: "actions" }, acts.map(([label, fn]) =>
+        el("button", { class: "btn small ghost", type: "button", onclick: (e) => { e.stopPropagation(); fn(); } }, label)))),
+    el("div", { class: n.kind === "run" || n.kind === "failed" ? "title mono" : "title" }, title),
     chips.length ? el("div", { class: "chips" }, chips) : null,
     open.has(key) ? detailOf(n) : null));
 
@@ -281,6 +279,11 @@ function nodeRow(r) {
     });
   }
   return row;
+}
+
+function change(op, name) {
+  const [letter, cls] = { add: ["A", "added"], delete: ["R", "removed"] }[op] || ["M", "modified"];
+  return el("li", { class: cls }, el("span", { class: "op" }, letter), name);
 }
 
 function renderWorking() {
@@ -309,8 +312,8 @@ function renderWorking() {
     pill.textContent = s.clean ? "CLEAN" : "CHANGED";
     pill.className = s.clean ? "pill" : "pill changed";
     const f = s.files || {};
-    for (const [op, names] of [["modified", f.modified], ["added", f.added], ["deleted", f.deleted]]) {
-      for (const name of names || []) list.append(el("li", {}, el("span", { class: "op" }, op), name));
+    for (const [op, names] of [["modify", f.modified], ["add", f.added], ["delete", f.deleted]]) {
+      for (const name of names || []) list.append(change(op, name));
     }
   }
   for (const id of ["cpmsg", "cpfiles"]) $(id).disabled = !!s.busy;
@@ -334,6 +337,8 @@ function render() {
     tree.replaceChildren(el("p", { class: "muted" }, "Nothing recorded yet. Run a command with kveritas run, or open kveritas shell."));
     return;
   }
+  state.tips = {};
+  state.nodes.forEach((n, i) => { state.tips[n.branch] = i; });
   tree.replaceChildren(...state.rows.map((r) => (r.node < 0 ? linkRow(r) : nodeRow(r))));
 }
 

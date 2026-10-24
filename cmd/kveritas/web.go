@@ -80,7 +80,7 @@ func serveWeb() error {
 		kvDir: kvDir,
 		token: hex.EncodeToString(secret),
 		hosts: map[string]bool{fmt.Sprintf("127.0.0.1:%d", port): true, fmt.Sprintf("localhost:%d", port): true},
-		cache: provenance.NewHashCache(),
+		cache: provenance.LoadHashCache(kvDir),
 	}
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -206,6 +206,7 @@ func (s *webServer) state(r *http.Request) (any, error) {
 		st.Checkpoint = base
 		if m, err := provenance.LoadManifest(s.kvDir, base.ID); err == nil {
 			d := provenance.CompareCached(sess.ProjectDir, m, s.cache)
+			_ = s.cache.Save()
 			st.Files, st.Clean = &d, d.Clean()
 		}
 	}
