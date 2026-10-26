@@ -11,7 +11,6 @@ func t0(sec int) time.Time {
 	return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(sec) * time.Second)
 }
 
-// gpuSamples builds an active GPU trace over durSec seconds.
 func gpuSamples(durSec int, util, powerW, memMB, cpuPerSec float64) []session.HardwareSample {
 	var s []session.HardwareSample
 	cpu := 0.0
@@ -25,7 +24,6 @@ func gpuSamples(durSec int, util, powerW, memMB, cpuPerSec float64) []session.Ha
 	return s
 }
 
-// cpuSamples builds a CPU-only trace (no GPU) accumulating cpuPerSec core-seconds/s.
 func cpuSamples(durSec int, cpuPerSec float64) []session.HardwareSample {
 	var s []session.HardwareSample
 	cpu := 0.0
@@ -44,8 +42,6 @@ func gpuHW() session.HardwareInfo {
 }
 func cpuHW() session.HardwareInfo { return session.HardwareInfo{CPUCores: 16} }
 
-// The benchmark matrix: honest runs must not be accused; fabrications on GPU AND
-// CPU must be caught; runs with no evidence or no card abstain.
 func TestComputeBenchmark(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -66,7 +62,7 @@ func TestComputeBenchmark(t *testing.T) {
 			rec: session.RunRecord{
 				Hardware:        cpuHW(),
 				Declared:        &session.DeclaredModel{Params: 5_000_000, DatasetSize: 60000, Epochs: 5},
-				HardwareSamples: cpuSamples(60, 12), // ~720 core-seconds
+				HardwareSamples: cpuSamples(60, 12),
 			},
 			expect: "PASS",
 		},
@@ -84,7 +80,7 @@ func TestComputeBenchmark(t *testing.T) {
 			rec: session.RunRecord{
 				Hardware:        cpuHW(),
 				Declared:        &session.DeclaredModel{Params: 70_000_000_000, DatasetSize: 10_000_000, Epochs: 3, SeqLen: 2048},
-				HardwareSamples: cpuSamples(6, 13), // ~80 core-seconds, no GPU
+				HardwareSamples: cpuSamples(6, 13),
 			},
 			expect: "FABRICATION-IMPOSSIBLE",
 		},
@@ -97,29 +93,21 @@ func TestComputeBenchmark(t *testing.T) {
 			expect: "N/A",
 		},
 		{
-			// Heavy training declared, no telemetry captured, duration unknown: not
-			// provably impossible, but unverifiable, so it must not pass silently.
 			name:   "heavy_declared_no_telemetry",
 			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000, DatasetSize: 10_000_000, Epochs: 3, SeqLen: 2048}},
 			expect: "REVIEW",
 		},
 		{
-			// Print-and-exit fake: declares a heavy training workload but the process
-			// ran for half a second, too short for the FLOPs on any hardware. Caught by
-			// the wall-clock floor even though the sampler captured nothing.
 			name:   "fast_fake_declared_workload",
 			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000, DatasetSize: 10_000_000, Epochs: 3, SeqLen: 2048}, DurationSec: 0.5},
 			expect: "FABRICATION-IMPOSSIBLE",
 		},
 		{
-			// Evaluation fake: declares a 70B model and a benchmark score but no training
-			// workload (so no FLOP bound) and no telemetry. Large model, no evidence: review.
 			name:   "eval_large_model_no_evidence",
 			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 70_000_000_000}, DurationSec: 0.4},
 			expect: "REVIEW",
 		},
 		{
-			// Small declared work that finishes fast is legitimately not checkable.
 			name:   "small_declared_fast_no_telemetry",
 			rec:    session.RunRecord{Hardware: cpuHW(), Declared: &session.DeclaredModel{Params: 200_000, DatasetSize: 1000, Epochs: 1}, DurationSec: 0.3},
 			expect: "N/A",

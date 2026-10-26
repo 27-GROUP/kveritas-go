@@ -201,8 +201,7 @@ func runShell() error {
 	return cmdSeal.RunE(cmdSeal, nil)
 }
 
-// The rc files carry the nonce and delete themselves once read, so no command the
-// user runs can learn it and forge a run boundary.
+// The rc files delete themselves once read, so no command can learn the nonce and forge a boundary.
 func shellCommand(dir, nonce, fifo string) (*exec.Cmd, error) {
 	env := append(os.Environ(), "KVERITAS_SHELL="+strconv.Itoa(os.Getpid()))
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -294,8 +293,7 @@ PS1="(kv) $PS1"
 	return cmd, nil
 }
 
-// Polls so the copier stops once the shell exits instead of swallowing the first
-// key typed at the seal prompt.
+// Polls so the copier stops with the shell instead of eating the first key at the seal prompt.
 func copyInput(dst io.Writer, done <-chan struct{}) {
 	fd := int(os.Stdin.Fd())
 	buf := make([]byte, 4096)
@@ -343,8 +341,6 @@ func (s *shellRec) pump(r io.Reader) {
 	s.emit(pend)
 }
 
-// Markers are cut out of the stream wherever they fall; a partial one at the end of
-// a read is held back until the rest arrives.
 func (s *shellRec) scan(b []byte) []byte {
 	for {
 		i := bytes.Index(b, []byte(markerPrefix))
@@ -459,8 +455,7 @@ func commandWords(text string) []string {
 	return words
 }
 
-// The child is not forked until the shell reads the ack, so measuring starts
-// before the command's first instruction.
+// The child is not forked until the ack, so measuring starts before its first instruction.
 func (s *shellRec) start(text string) {
 	text = strings.TrimSpace(text)
 	words := commandWords(text)
@@ -531,7 +526,6 @@ func (s *shellRec) end(code int) {
 	s.say("Run %d recorded: %d result(s), %s", s.inv+1, results, rec.DurationFmt)
 }
 
-// The latest value of each result, as seal --claim would take it.
 func (s *shellRec) summary() []string {
 	fmt.Printf("\n[kveritas] Shell closed: %d run(s) kept, %d failed\n", len(s.kept), s.failed)
 	if len(s.kept) == 0 {

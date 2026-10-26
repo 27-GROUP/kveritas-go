@@ -8,13 +8,8 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// gpuRefreshEvery refreshes the slower GPU counters once every N ticks; at a 100ms
-// tick that is ~500ms, against ~10 Hz for the /proc channels.
 const gpuRefreshEvery = 5
 
-// Sampler captures hardware state in the background, scoped to the run's process
-// tree once the PID is set. The cheap /proc channels are read at the tick rate;
-// the expensive nvidia-smi channels are refreshed less often and forward-filled.
 type Sampler struct {
 	interval time.Duration
 	mu       sync.Mutex
@@ -26,8 +21,6 @@ type Sampler struct {
 	tick     int
 }
 
-// SetPID scopes sampling to the given process and its descendants, and takes a
-// baseline sample right away so cumulative counters start near zero.
 func (s *Sampler) SetPID(pid int) {
 	atomic.StoreInt32(&s.pid, int32(pid))
 	s.lastGPU = ProcessGPUCounters(pid)
@@ -65,8 +58,7 @@ func hasGPU(c session.HardwareCounters) bool {
 }
 
 func (s *Sampler) capture() {
-	// Record only while the run's process is alive, so no sample mixes in a pre-run
-	// or post-exit system reading.
+	// Only while the process is alive, so no sample mixes in pre-run or post-exit readings.
 	pid := atomic.LoadInt32(&s.pid)
 	if pid == 0 || !ProcessAlive(int(pid)) {
 		return
@@ -90,8 +82,6 @@ func (s *Sampler) capture() {
 	s.mu.Unlock()
 }
 
-// Decimate evenly reduces a series to at most max points, keeping the first and
-// last, so the signed report stays small without losing the fluctuation structure.
 func Decimate(samples []session.HardwareSample, max int) []session.HardwareSample {
 	n := len(samples)
 	if max < 2 || n <= max {

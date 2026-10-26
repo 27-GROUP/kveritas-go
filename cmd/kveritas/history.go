@@ -20,8 +20,7 @@ import (
 
 var branchName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$`)
 
-// Inside a kveritas shell the shell holds the run lock and is idle while one of these
-// commands runs, so they act under its lock instead of taking their own.
+// Inside kveritas shell the shell holds the run lock, so these commands run under it.
 func historySession(create bool) (string, *session.Session, func(), error) {
 	kvDir, err := session.Find()
 	if err != nil {
@@ -568,8 +567,7 @@ type lane struct {
 	Node bool `json:"node,omitempty"`
 }
 
-// Node is an index into the nodes, or -1 for the row that joins a branch to the one it
-// started from (From and To are their columns).
+// Node -1 is the row joining a branch to its parent (From and To are columns).
 type graphRow struct {
 	Node  int    `json:"node"`
 	Lanes []lane `json:"lanes"`
@@ -577,7 +575,6 @@ type graphRow struct {
 	To    int    `json:"to"`
 }
 
-// Newest first, one column per branch, each branch joined to the one it started from.
 func graphLayout(sess *session.Session, nodes []logNode) ([]string, []graphRow) {
 	col := map[string]int{"main": 0}
 	order := []string{"main"}
@@ -618,7 +615,6 @@ func graphLayout(sess *session.Session, nodes []logNode) ([]string, []graphRow) 
 			newest[p] = i
 		}
 	}
-	// A line passes between row i and row i-1 when the branch has nodes on both sides.
 	below := func(b string, i int) bool {
 		o, ok := oldest[b]
 		return ok && o <= i-1 && i <= newest[b]
@@ -645,8 +641,6 @@ func graphLayout(sess *session.Session, nodes []logNode) ([]string, []graphRow) 
 	return order, rows
 }
 
-// A header and a description per entry; a branch joins its parent on the
-// description line of the branch's first entry.
 func renderLog(sess *session.Session, nodes []logNode, verbose bool) {
 	_, rows := graphLayout(sess, nodes)
 	tips := map[int]string{}
@@ -748,7 +742,6 @@ func renderLog(sess *session.Session, nodes []logNode, verbose bool) {
 	}
 }
 
-// The graph part of a line, trimmed but wide enough to keep text aligned with the node.
 func graphCol(g string, col int) string {
 	g = strings.TrimRight(g, " ")
 	if w := 2*col + 1; len([]rune(g)) < w {
@@ -812,7 +805,6 @@ func changeLine(c string) string {
 	return paint(toneModified, "M "+path)
 }
 
-// Minutes ago within 90 minutes, then the day and time.
 func smartDate(t, now time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -870,7 +862,6 @@ hardware readings are left out; -v adds every result and the files each run chan
 	},
 }
 
-// Files changed since the checkpoint the project is based on.
 func workingState(kvDir string, sess *session.Session) (*session.Step, *provenance.Drift) {
 	base := baseCheckpoint(sess)
 	if base == nil {

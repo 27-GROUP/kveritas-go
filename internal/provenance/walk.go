@@ -139,8 +139,6 @@ func isEnvDir(path string) bool {
 	return false
 }
 
-// Every regular file in the project, like git add -A: caches, environments and
-// .gitignore'd paths are left out; symlinks are not followed.
 func projectFiles(root string) []string {
 	var files []string
 	sets := map[string][]*ignoreSet{}

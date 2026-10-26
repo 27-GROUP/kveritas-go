@@ -10,9 +10,7 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// macOS has no /proc: one ps call gives every process's parent, CPU time and memory,
-// which is enough to scope CPU and memory to the run's tree. Apple GPUs expose no
-// per-process counters, so GPU readings stay machine-wide.
+// Apple GPUs expose no per-process counters, so GPU readings stay machine-wide.
 func ProcessCounters(rootPID int) session.HardwareCounters {
 	c := ProcessCPUCounters(rootPID)
 	g := ProcessGPUCounters(rootPID)

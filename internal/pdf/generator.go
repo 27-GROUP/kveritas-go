@@ -1,13 +1,3 @@
-// Package pdf generates K-Veritas verification reports as self-contained PDFs.
-// Attestation metadata is appended after %%EOF between delimiters, so standard
-// readers show the visual report while verify extracts the seal without a PDF
-// parser.
-//
-// Metadata block format (appended verbatim after %%EOF):
-//
-//	%%KVERITAS_SEAL_BEGIN%%
-//	<JSON>
-//	%%KVERITAS_SEAL_END%%
 package pdf
 
 import (
@@ -65,7 +55,6 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 		Seal:    seal,
 	}
 
-	// First pass: build the JSON without seal_block_hash
 	metaJSON1, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
@@ -73,7 +62,6 @@ func Generate(sess *session.Session, runs []*session.RunRecord, seal *session.Se
 	blockHash := sha256.Sum256(metaJSON1)
 	seal.SealBlockHash = hex.EncodeToString(blockHash[:])
 
-	// Second pass: rebuild with the seal_block_hash included
 	meta.Seal = seal
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -110,9 +98,7 @@ func ExtractMetadata(pdfPath string) (*EmbeddedData, error) {
 	return &meta, nil
 }
 
-// Covers fields the signed canonical JSON does not, such as run_history, which verify
-// prints but the signature never bound. The field is stripped before re-hashing since
-// it was hashed before it contained itself.
+// Stripped before re-hashing: it was hashed before it contained itself.
 func SealBlockHash(pdfPath string) (string, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {
@@ -134,8 +120,7 @@ func SealBlockHash(pdfPath string) (string, error) {
 
 var sealBlockHashField = regexp.MustCompile(`,?\s*"seal_block_hash"\s*:\s*"[a-f0-9]*"`)
 
-// A PDF reader resolves objects through the last cross-reference table, so an update
-// appended after the seal can redefine a page while every hash still matches.
+// An update appended after the seal could redefine a page while every hash matches.
 func SealIsFinal(pdfPath string) (bool, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {
@@ -148,8 +133,6 @@ func SealIsFinal(pdfPath string) (bool, error) {
 	return len(bytes.TrimSpace(data[end+len(metaEnd):])) == 0, nil
 }
 
-// VisualPDFHash re-derives the SHA-256 of the report's visual pages (everything
-// before the seal marker), so an edit to the human-readable PDF is detectable.
 func VisualPDFHash(pdfPath string) (string, error) {
 	data, err := os.ReadFile(pdfPath)
 	if err != nil {
@@ -241,8 +224,6 @@ func (b *builder) render() ([]byte, error) {
 		pageNums = append(pageNums, pgObj)
 	}
 
-	// Pages and Catalog are emitted last with their actual object numbers rather
-	// than the conventional 1 and 2, since fonts were written first.
 	kidsStr := ""
 	for i, n := range pageNums {
 		if i > 0 {
@@ -268,7 +249,7 @@ func (b *builder) render() ([]byte, error) {
 	fmt.Fprintf(&buf, "trailer\n<< /Size %d /Root %d 0 R >>\n", objCount+1, catalogObj)
 	fmt.Fprintf(&buf, "startxref\n%d\n%%%%EOF\n", xrefOffset)
 
-	_ = pagesObj // suppress unused warning (used in kidsStr)
+	_ = pagesObj
 	return buf.Bytes(), nil
 }
 
@@ -286,26 +267,24 @@ func pdfEscape(s string) string {
 		case r >= 32 && r <= 126:
 			b.WriteRune(r)
 		case r >= 0xA0 && r <= 0xFF:
-			// WinAnsiEncoding supports Latin-1 supplement directly as octal
 			b.WriteString(fmt.Sprintf("\\%03o", r))
-		case r == 0x2013: // en dash
+		case r == 0x2013:
 			b.WriteString("\\226")
-		case r == 0x2014: // em dash
+		case r == 0x2014:
 			b.WriteString("\\227")
-		case r == 0x2018: // left single quote
+		case r == 0x2018:
 			b.WriteString("\\221")
-		case r == 0x2019: // right single quote / apostrophe
+		case r == 0x2019:
 			b.WriteString("\\222")
-		case r == 0x201C: // left double quote
+		case r == 0x201C:
 			b.WriteString("\\223")
-		case r == 0x201D: // right double quote
+		case r == 0x201D:
 			b.WriteString("\\224")
-		case r == 0x2022: // bullet
+		case r == 0x2022:
 			b.WriteString("\\225")
-		case r == 0x2026: // ellipsis
+		case r == 0x2026:
 			b.WriteString("\\205")
 		case unicode.IsPrint(r):
-			// Non-WinAnsi printable: transliterate to ASCII approximation
 			b.WriteRune(transliterate(r))
 		default:
 			b.WriteByte(' ')
@@ -316,7 +295,7 @@ func pdfEscape(s string) string {
 
 func transliterate(r rune) rune {
 	switch {
-	case r >= 0x0100 && r <= 0x017F: // Latin Extended-A
+	case r >= 0x0100 && r <= 0x017F:
 		base := strings.ToLower(string(r))
 		if len(base) > 0 {
 			first := []rune(base)[0]

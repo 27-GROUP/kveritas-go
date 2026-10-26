@@ -1,6 +1,3 @@
-// Package hmca measures single-cause coherence: whether a run's telemetry
-// channels co-fluctuate as shadows of one process. Genuine computation couples
-// them; a fabricated, replayed, or spliced trace does not. Metric-blind.
 package hmca
 
 import (
@@ -12,24 +9,16 @@ import (
 )
 
 const (
-	minSamples = 20 // below this, abstain
-	// Two channels reduce the statistic to a single correlation coefficient,
-	// which is too noisy to accuse on: tight CPU loops that move only processor
-	// time and context switches swing between 0.06 and 1.00 across seeds.
+	minSamples = 20
+	// Two channels are one correlation coefficient, too noisy to accuse on.
 	minActive      = 3
-	minSamplesTop2 = 150  // below this the two-cause estimator is too noisy; use one cause
-	gpuIdleRangeW  = 15.0 // GPU power swing below this means the GPU did not engage
-	// Coherence thresholds (0..1), calibrated on genuine vs fabricated traces.
-	coherentPASS = 0.15
-	coherentWARN = 0.08
-	// Real computation drives its channels in bursts, so the shared component is
-	// heavy-tailed (kurtosis well above the Gaussian 3, typically tens). A duty
-	// cycle that manufactures coherence by toggling load on a timer is closer to a
-	// square wave and lands near 1. Only meaningful at a known sampling rate.
+	minSamplesTop2 = 150
+	gpuIdleRangeW  = 15.0
+	coherentPASS   = 0.15
+	coherentWARN   = 0.08
+	// Real work is bursty (kurtosis in the tens); a timer duty cycle lands near 1.
 	analysisRateHz  = 2.0
 	uniformKurtosis = 2.0
-	// Telemetry cannot predate a run's start or outlive its end; the tolerance only
-	// absorbs clock granularity.
 	windowTolerance = time.Second
 	nodeClockSkew   = 5 * time.Minute
 )
@@ -39,7 +28,7 @@ type channel struct {
 	vals []float64
 }
 
-// The samples argument is unused; it is kept for signature compatibility.
+// The samples argument is unused; kept for signature compatibility.
 func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) session.HMCAResult {
 	var scores []float64
 	var flags []string
@@ -65,7 +54,6 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 		cross, kurt, status := coherenceOne(run.HardwareSamples)
 		switch status {
 		case "insufficient":
-			// too few samples: abstain, no accusation
 			return 0, "N/A"
 		case "no_activity":
 			judged++
@@ -104,7 +92,6 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 			nr := &session.RunRecord{StartAt: n.StartAt, EndAt: n.EndAt, DurationSec: n.DurationSec,
 				Hardware: n.Hardware, HardwareSamples: n.HardwareSamples}
 			score, verdict := judge(label, nr)
-			// Node clocks differ from node 0's, so only a gross mismatch is evidence.
 			if n.StartAt.After(run.EndAt.Add(nodeClockSkew)) || n.EndAt.Before(run.StartAt.Add(-nodeClockSkew)) {
 				replayed = true
 				verdict = "FAIL"
@@ -124,15 +111,12 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 	}
 
 	if judged == 0 {
-		// Nothing measurable: HMCA abstains; authenticity rests on the other checks.
 		if len(nodes) > 0 {
 			return session.HMCAResult{Score: 0, Verdict: "N/A", Flags: flags, Nodes: nodes}
 		}
 		return session.HMCAResult{Score: 0, Verdict: "N/A", Flags: nil}
 	}
 
-	// Session score is the weakest run's coherence; no scored runs means every
-	// judged run had no activity.
 	score := 0.0
 	verdict := "FAIL"
 	if len(scores) > 0 {
@@ -150,22 +134,18 @@ func Analyze(runs []*session.RunRecord, samples []session.HardwareSample) sessio
 		default:
 			verdict = "FAIL"
 		}
-		// Coherence this regular is cheap to manufacture, so it is not evidence of
-		// work. Withhold the pass; do not accuse, the shape alone is not proof.
+		// Regular coherence is cheap to fake: withhold the pass, but do not accuse.
 		if (uniform || sameMachine) && verdict == "PASS" {
 			verdict = "WARN"
 		}
 	}
-	// Coherence measures the telemetry it is given; it cannot tell that the trace
-	// belongs to some other execution. Timestamps can, and they are signed.
 	if replayed {
 		verdict = "FAIL"
 	}
 	return session.HMCAResult{Score: score, Flags: flags, Verdict: verdict, Nodes: nodes}
 }
 
-// More processor time than the cores could deliver in the wall-clock window is
-// arithmetically impossible, so a replayed trace squeezed into a shorter run trips it.
+// CPU time above cores x wall-clock is impossible, so a replay squeezed into a shorter run trips it.
 func cpuTimeExceedsCores(run *session.RunRecord) bool {
 	cores := run.Hardware.CPUCores
 	n := len(run.HardwareSamples)
@@ -176,8 +156,7 @@ func cpuTimeExceedsCores(run *session.RunRecord) bool {
 	return used > float64(cores)*run.DurationSec*1.10
 }
 
-// A replayed or borrowed trace was recorded at some other time, so it falls outside
-// the run's own window even when it is perfectly coherent in itself.
+// A replayed trace falls outside the run's own window even when coherent.
 func telemetryInWindow(run *session.RunRecord) bool {
 	if run.StartAt.IsZero() || run.EndAt.IsZero() || len(run.HardwareSamples) == 0 {
 		return true
@@ -192,9 +171,6 @@ func telemetryInWindow(run *session.RunRecord) bool {
 	return true
 }
 
-// coherenceOne returns one run's coherence (0..1), the kurtosis of its shared
-// component (NaN when the trace is too coarse to judge shape), and a status:
-// "" (genuine), "no_activity", or "insufficient".
 func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	n := len(samples)
 	if n < minSamples {
@@ -206,13 +182,10 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 		return 0, math.NaN(), "no_activity"
 	}
 	if len(act) < minActive {
-		// Work is present but one channel cannot show coupling. Abstain rather
-		// than accuse: a light but genuine run looks like this.
 		return 0, math.NaN(), "insufficient"
 	}
 
-	// First-difference each channel (removes the shared trend, so a smooth ramp is
-	// not read as coupling), then standardize to unit variance.
+	// First differences, so a smooth ramp is not read as coupling.
 	var cols [][]float64
 	for _, ch := range act {
 		d := diff(ch.vals)
@@ -229,10 +202,7 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 		return 0, math.NaN(), "insufficient"
 	}
 
-	// How much the top components of the correlation matrix explain, relative to
-	// chance (top/k). One cause is not enough for a phase-alternating run (CPU then
-	// GPU), so use the top two components: near top/k when channels are independent,
-	// near 1 when a few shared causes drive them. Rescaled to 0..1.
+	// Top two components: a phase-alternating run (CPU then GPU) has two causes.
 	C := correlation(cols)
 	lam1, v1 := dominantEigen(C)
 	top := 1
@@ -250,9 +220,7 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	}
 	cross := (evr - float64(top)/float64(k)) / (1.0 - float64(top)/float64(k))
 
-	// Independent channels still leave a positive residue in finite samples, and
-	// it grows as the trace shortens, so a short or channel-poor run would score
-	// above threshold on noise alone. Subtract that expected residue.
+	// Subtract the residue independent channels leave in finite samples.
 	null := nullCoherence(k, n, top)
 	cross = (cross - null) / (1.0 - null)
 
@@ -266,8 +234,7 @@ func coherenceOne(samples []session.HardwareSample) (float64, float64, string) {
 	return cross, shapeKurtosis(samples), ""
 }
 
-// Burstiness of the shared component, re-derived at a fixed rate: judged at the raw
-// rate the same run would change shape with its duration. NaN if the trace is coarser.
+// At a fixed rate: at the raw rate the shape would change with duration.
 func shapeKurtosis(samples []session.HardwareSample) float64 {
 	rs, rate := resample(samples, analysisRateHz)
 	if rate < analysisRateHz*0.9 || len(rs) < minSamples {
@@ -302,7 +269,6 @@ func sampleDt(samples []session.HardwareSample) float64 {
 	return span / float64(n-1)
 }
 
-// resample puts the trace on a fixed-rate time grid and reports the rate achieved.
 func resample(samples []session.HardwareSample, hz float64) ([]session.HardwareSample, float64) {
 	n := len(samples)
 	if n < 2 {
@@ -328,8 +294,6 @@ func resample(samples []session.HardwareSample, hz float64) ([]session.HardwareS
 	return out, hz
 }
 
-// project collapses the standardized channels onto the shared component v, giving
-// the one signal every channel is a shadow of.
 func project(cols [][]float64, v []float64) []float64 {
 	m := len(cols[0])
 	out := make([]float64, m)
@@ -363,9 +327,6 @@ func kurtosis(v []float64) float64 {
 	return m4 / (m2 * m2)
 }
 
-// nullCoherence is the value the statistic takes when the channels are
-// independent, fitted to simulated correlation matrices. It falls as 1/sqrt(n)
-// and, for the two-cause form, rises as the channel count falls.
 func nullCoherence(k, n, top int) float64 {
 	if n < 2 {
 		return 0
@@ -381,8 +342,7 @@ func nullCoherence(k, n, top int) float64 {
 	return null
 }
 
-// cpu_freq and gpu_temp are deliberately excluded: they are board-wide, so an
-// external process could drive them and inject a shared signal into an idle run.
+// cpu_freq and gpu_temp are board-wide, so another process could inject a shared signal.
 func activeChannels(samples []session.HardwareSample, dt float64) []channel {
 	get := func(f func(session.HardwareCounters) float64) []float64 {
 		out := make([]float64, len(samples))
@@ -400,10 +360,7 @@ func activeChannels(samples []session.HardwareSample, dt float64) []channel {
 		rate  bool
 		f     func(session.HardwareCounters) float64
 	}
-	// Cumulative counters are gated on work per second, which means the same thing
-	// at any sampling rate and cannot be accumulated past by simply running longer.
-	// The rest are instantaneous levels, where coarser sampling genuinely averages
-	// fluctuation away, so they keep an absolute floor on movement between samples.
+	// Cumulative counters gate on work per second; levels keep an absolute floor.
 	specs := []spec{
 		{"cpu_time", 0.05, false, true, func(c session.HardwareCounters) float64 { return c.CPUTimeSec }},
 		{"ctx_sw", 10, false, true, func(c session.HardwareCounters) float64 { return c.CtxSwitches }},
@@ -497,8 +454,6 @@ func correlation(cols [][]float64) [][]float64 {
 	return C
 }
 
-// dominantEigen returns the largest eigenvalue and its unit eigenvector by power
-// iteration, enough for a k<=10 symmetric correlation matrix.
 func dominantEigen(C [][]float64) (float64, []float64) {
 	k := len(C)
 	x := make([]float64, k)
@@ -543,8 +498,6 @@ func dominantEigen(C [][]float64) (float64, []float64) {
 	return lambda, y
 }
 
-// deflate removes the component along v (eigenvalue lam) so the next power
-// iteration finds the second eigenvalue.
 func deflate(C [][]float64, lam float64, v []float64) {
 	for i := range C {
 		for j := range C[i] {

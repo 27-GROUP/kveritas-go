@@ -12,7 +12,6 @@ func runEnv() []string {
 			return env
 		}
 	}
-	// Piped Python output is block-buffered, which would delay result lines and skew
-	// the hardware snapshots taken at phase boundaries.
+	// Block-buffered Python output would delay result lines and skew phase snapshots.
 	return append(env, "PYTHONUNBUFFERED=1")
 }

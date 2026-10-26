@@ -27,7 +27,6 @@ var (
 	nameClean   = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
-// Names that track progress or configuration rather than an outcome.
 var notResults = map[string]bool{
 	"epoch": true, "step": true, "steps": true, "global_step": true, "batch": true, "iter": true,
 	"iteration": true, "lr": true, "learning_rate": true, "batch_size": true, "seed": true,
@@ -35,8 +34,6 @@ var notResults = map[string]bool{
 	"total_flos": true, "grad_norm": true, "eta": true, "it_s": true, "s_it": true,
 }
 
-// Auto reads results from the console output of common tools. Every value it returns
-// is labelled with the format it came from, so it is never mistaken for a declared one.
 type Auto struct {
 	epoch string
 	bench string

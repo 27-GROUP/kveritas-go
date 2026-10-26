@@ -8,7 +8,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// Human-readable verify output goes here; --json silences it and prints one document instead.
 var out io.Writer = os.Stdout
 
 type verifyDoc struct {
@@ -67,7 +66,6 @@ type nodeDoc struct {
 	Score       float64  `json:"coherence_score"`
 }
 
-// Node 0 is the run itself; the coherence comes from the signed analysis.
 func nodeDocs(run int, r *session.RunRecord, h *session.HMCAResult) []nodeDoc {
 	if len(r.Nodes) == 0 && r.NodesExpected < 2 {
 		return nil

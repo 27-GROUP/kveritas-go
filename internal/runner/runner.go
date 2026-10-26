@@ -106,9 +106,6 @@ func redactCommand(cmd []string, level provenance.Level) []string {
 	return []string{cmd[0], "<redacted>"}
 }
 
-// buildArtifact hashes a declared model or dataset. Public artifacts get a plain
-// content hash so they can be matched to a published reference; private ones get a
-// salted commitment, with the name kept only once names are disclosed.
 func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, level provenance.Level) *session.Artifact {
 	content, err := os.ReadFile(filepath.Join(projectDir, d.Path))
 	if err != nil {
@@ -128,10 +125,7 @@ func buildArtifact(d *metrics.ArtifactDecl, projectDir string, salt []byte, leve
 	return art
 }
 
-// envDigest captures the run's dependency environment. For Python it follows the
-// exact interpreter that ran the code, not whatever pip is first on PATH. Returns
-// the freeze content and its digest; the digest is always signed, the content is
-// withheld at the redacted level.
+// Follows the interpreter that ran the code, not the first pip on PATH.
 func envDigest(command []string) (digest string, content string, err error) {
 	if len(command) > 0 && strings.HasPrefix(strings.ToLower(filepath.Base(command[0])), "python") {
 		interp := command[0]
@@ -144,7 +138,6 @@ func envDigest(command []string) (digest string, content string, err error) {
 			return digestBuf(out), string(out), nil
 		}
 	}
-	// Fallbacks: pip on PATH, then R, then Julia.
 	for _, pip := range []string{"pip", "pip3"} {
 		if out, e := exec.Command(pip, "freeze").Output(); e == nil {
 			return digestBuf(out), string(out), nil
@@ -159,8 +152,6 @@ func envDigest(command []string) (digest string, content string, err error) {
 	return "", "", fmt.Errorf("no package manager available (tried the run interpreter, pip, R, Julia)")
 }
 
-// MetricLinesDigest hashes the concatenated metric and claim lines for ledger
-// recording; only the hash is published, not the values.
 func MetricLinesDigest(metricLines []string) string {
 	h := sha256.New()
 	for _, l := range metricLines {

@@ -170,7 +170,6 @@ func CreateBundle(rootDir string, files []string, outPath string) (string, error
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Returns the modified and the missing files, in that order.
 func VerifySourceIntegrity(rootDir string, storedHashes map[string]string) (modified []string, missing []string, err error) {
 	for f, expectedHash := range storedHashes {
 		currentHash, err := crypto.HashFile(filepath.Join(rootDir, f))

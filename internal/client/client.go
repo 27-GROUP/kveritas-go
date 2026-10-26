@@ -88,8 +88,7 @@ type RunAnchor struct {
 	Kind        string  `json:"kind,omitempty"`
 }
 
-// A reply from the server, as opposed to a network failure. A rejected anchor must
-// not be retried, while an unreachable server must.
+// A rejected anchor must not be retried; an unreachable server must.
 type ServerError struct {
 	Status int
 	Body   string
@@ -372,8 +371,7 @@ func (c *Client) AuditReport(reportPath, bundlePath, manuscriptPath string) (*Se
 		return nil, err
 	}
 
-	// The AI checks can outlast the proxy in front of the server, so the audit runs
-	// as a job that is polled. Servers without job support get the old single call.
+	// The AI checks outlast the proxy, so the audit runs as a polled job.
 	status, body, err := c.postForm("/api/audit/start", buf.Bytes(), w.FormDataContentType())
 	if err != nil {
 		return nil, err

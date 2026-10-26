@@ -56,7 +56,6 @@ func (tl sweepTrace) record() *session.RunRecord {
 	}
 }
 
-// cardFor builds a model card whose 6ND product lands on the requested FLOP count.
 func cardFor(flops float64) *session.DeclaredModel {
 	const params = int64(1e8)
 	tokens := flops / (6.0 * float64(params))
@@ -66,8 +65,6 @@ func cardFor(flops float64) *session.DeclaredModel {
 	return &session.DeclaredModel{Params: params, DatasetSize: int64(tokens), Epochs: 1, Arch: "transformer"}
 }
 
-// TestBoundarySweep walks the declared FLOP count across orders of magnitude on a
-// real trace and reports where the verdict changes.
 func TestBoundarySweep(t *testing.T) {
 	traces := loadSweep(t, "/tmp/hmca_paper/kvsys.jsonl")
 	var heavy sweepTrace
@@ -124,9 +121,6 @@ func TestBoundarySweep(t *testing.T) {
 	}
 }
 
-// TestRealDeclaredCards is the property that matters: the accusatory verdict is
-// bound into the signature, so it must never fire on an honest declaration. These
-// are the cards the workloads actually emitted, not synthetic ones.
 func TestRealDeclaredCards(t *testing.T) {
 	traces := loadSweep(t, "/tmp/hmca_paper/kvsys_cert.jsonl")
 	byLabel := map[string]map[string]int{}
@@ -168,7 +162,6 @@ func TestRealDeclaredCards(t *testing.T) {
 		t.Errorf("genuine run accused: %s", a)
 	}
 
-	// How far an honest declaration sits below the bound that would accuse it.
 	margins := map[string][]float64{}
 	for _, tl := range traces {
 		if tl.Declared == nil {
@@ -194,8 +187,6 @@ func TestRealDeclaredCards(t *testing.T) {
 	}
 }
 
-// TestPrintAndExit covers the fake with no telemetry at all: only the wall-clock
-// floor can catch it.
 func TestPrintAndExit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

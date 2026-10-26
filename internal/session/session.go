@@ -28,17 +28,13 @@ type Session struct {
 	SourceHashes map[string]string `json:"source_hashes,omitempty"`
 	Disclosure   string            `json:"disclosure,omitempty"`
 	// Per-session salt for provenance leaf hashes. Kept local, never published.
-	ProvSalt string `json:"prov_salt,omitempty"`
-	// How results are captured when a run declares none: "declared", "autolog" or "none".
-	// Empty means not yet chosen.
-	Results string `json:"results,omitempty"`
-	// Every invocation, failed and interrupted ones included, advances the anchor chain.
-	Invocations int    `json:"invocations,omitempty"`
-	ChainHead   string `json:"chain_head,omitempty"`
-	// History steps share the invocation chain with runs, so none can be dropped or edited.
-	Branch string      `json:"branch,omitempty"`
-	Steps  []Step      `json:"steps,omitempty"`
-	Failed []FailedRun `json:"failed,omitempty"`
+	ProvSalt    string      `json:"prov_salt,omitempty"`
+	Results     string      `json:"results,omitempty"`
+	Invocations int         `json:"invocations,omitempty"`
+	ChainHead   string      `json:"chain_head,omitempty"`
+	Branch      string      `json:"branch,omitempty"`
+	Steps       []Step      `json:"steps,omitempty"`
+	Failed      []FailedRun `json:"failed,omitempty"`
 }
 
 type Step struct {
@@ -54,7 +50,6 @@ type Step struct {
 	Digest     string    `json:"digest"`
 }
 
-// Local only, for the history view; the server's anchors are what make failures count.
 type FailedRun struct {
 	Invocation int       `json:"invocation"`
 	Command    []string  `json:"command"`
@@ -70,7 +65,6 @@ func (s *Session) CurrentBranch() string {
 	return s.Branch
 }
 
-// Run ID to reason, replaying set-aside and bring-back steps in order.
 func (s *Session) SetAside() map[string]string {
 	out := map[string]string{}
 	for _, st := range s.Steps {
@@ -119,30 +113,24 @@ type RunRecord struct {
 	HardwareSamples []HardwareSample `json:"hardware_samples,omitempty"`
 	SourceCodeHash  string           `json:"source_code_hash,omitempty"`
 	Declared        *DeclaredModel   `json:"declared,omitempty"`
-	// Linux only for now.
-	Trace      *RunTrace   `json:"trace,omitempty"`
-	Provenance *Provenance `json:"provenance,omitempty"`
-	// Open disclosure only.
-	ProvBundleHash string     `json:"prov_bundle_hash,omitempty"`
-	Artifacts      []Artifact `json:"artifacts,omitempty"`
-	Invocation     int        `json:"invocation,omitempty"`
-	RunDigest      string     `json:"run_digest,omitempty"`
-	// Written by earlier versions (attached runs, notebooks, the result channel); kept so their reports verify.
-	Launch          string         `json:"launch,omitempty"`
-	OutputCaptured  bool           `json:"output_captured,omitempty"`
-	ChannelHash     string         `json:"channel_hash,omitempty"`
-	ChannelMessages int            `json:"channel_messages,omitempty"`
-	ChannelGaps     int            `json:"channel_gaps,omitempty"`
-	Distributed     *Distributed   `json:"distributed,omitempty"`
-	Cells           []NotebookCell `json:"cells,omitempty"`
-	// Multi-node runs: every other node's own measurement, delivered to node 0.
-	Nodes         []NodeRecord `json:"nodes,omitempty"`
-	NodesExpected int          `json:"nodes_expected,omitempty"`
-	Branch        string       `json:"branch,omitempty"`
+	Trace           *RunTrace        `json:"trace,omitempty"`
+	Provenance      *Provenance      `json:"provenance,omitempty"`
+	ProvBundleHash  string           `json:"prov_bundle_hash,omitempty"`
+	Artifacts       []Artifact       `json:"artifacts,omitempty"`
+	Invocation      int              `json:"invocation,omitempty"`
+	RunDigest       string           `json:"run_digest,omitempty"`
+	Launch          string           `json:"launch,omitempty"`
+	OutputCaptured  bool             `json:"output_captured,omitempty"`
+	ChannelHash     string           `json:"channel_hash,omitempty"`
+	ChannelMessages int              `json:"channel_messages,omitempty"`
+	ChannelGaps     int              `json:"channel_gaps,omitempty"`
+	Distributed     *Distributed     `json:"distributed,omitempty"`
+	Cells           []NotebookCell   `json:"cells,omitempty"`
+	Nodes           []NodeRecord     `json:"nodes,omitempty"`
+	NodesExpected   int              `json:"nodes_expected,omitempty"`
+	Branch          string           `json:"branch,omitempty"`
 }
 
-// A result named as a claim when sealing rather than printed by the run. It is
-// signed apart from the runs, which were anchored as they ended and cannot change.
 type SealClaim struct {
 	Run    int     `json:"run"`
 	Metric string  `json:"metric"`
@@ -179,8 +167,6 @@ type NotebookCell struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// Public artifacts carry a plain content hash; private ones a salted commitment
-// that reveals nothing.
 type Artifact struct {
 	Role       string `json:"role"`
 	Name       string `json:"name,omitempty"`
@@ -189,8 +175,6 @@ type Artifact struct {
 	SizeBucket string `json:"size_bucket,omitempty"`
 }
 
-// At the default disclosure level names are redacted, so provenance proves what
-// changed and when without revealing code or filenames.
 type Provenance struct {
 	Disclosure string         `json:"disclosure"`
 	Root       string         `json:"root"`
@@ -206,7 +190,6 @@ type ProvEvent struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Path is a stable pseudonym unless the author disclosed real names.
 type ProvChange struct {
 	Op   string `json:"op"`
 	Path string `json:"path"`
@@ -223,16 +206,12 @@ type ProvCommit struct {
 	Link      string       `json:"link"`
 }
 
-// Kept out of any bundle via .kveritasignore. The hash is still committed, so the
-// file is disclosed here rather than silently dropped.
 type WithheldFile struct {
 	Path       string `json:"path"`
 	Hash       string `json:"hash"`
 	SizeBucket string `json:"size_bucket"`
 }
 
-// Op is "read" (opened, not written) or "write" (created or modified). Reads
-// coalesce to first open; writes carry the final content hash.
 type FileEvent struct {
 	Op        string    `json:"op"`
 	Path      string    `json:"path"`
@@ -263,8 +242,7 @@ type Metric struct {
 }
 
 type HardwareInfo struct {
-	Hostname string `json:"hostname,omitempty"`
-	// Set on multi-node runs only, so two nodes cannot be the same machine unnoticed.
+	Hostname  string   `json:"hostname,omitempty"`
 	MachineID string   `json:"machine_id,omitempty"`
 	OS        string   `json:"os"`
 	Arch      string   `json:"arch"`
@@ -276,7 +254,6 @@ type HardwareInfo struct {
 	GPUNames  []string `json:"gpu_names,omitempty"`
 }
 
-// Values are best-effort; zero means the counter was unavailable.
 type HardwareCounters struct {
 	CPUTimeSec   float64 `json:"cpu_time_sec"`
 	MemUsedGB    float64 `json:"mem_used_gb"`
@@ -287,11 +264,10 @@ type HardwareCounters struct {
 	CPUTempC     float64 `json:"cpu_temp_c,omitempty"`
 	DiskReadMB   float64 `json:"disk_read_mb"`
 	DiskWriteMB  float64 `json:"disk_write_mb"`
-	// Extra CPU-side channels for coherence analysis (per-process, cumulative).
-	CtxSwitches float64 `json:"ctx_switches,omitempty"`
-	MinorFaults float64 `json:"minor_faults,omitempty"`
-	Threads     float64 `json:"threads,omitempty"`
-	CPUFreqMHz  float64 `json:"cpu_freq_mhz,omitempty"`
+	CtxSwitches  float64 `json:"ctx_switches,omitempty"`
+	MinorFaults  float64 `json:"minor_faults,omitempty"`
+	Threads      float64 `json:"threads,omitempty"`
+	CPUFreqMHz   float64 `json:"cpu_freq_mhz,omitempty"`
 }
 
 type PhaseEvent struct {
@@ -338,8 +314,6 @@ type NodeCoherence struct {
 	Samples int     `json:"samples"`
 }
 
-// Declared via KVERITAS_MODEL / KVERITAS_WORKLOAD: the written claim the compute
-// certificate checks.
 type DeclaredModel struct {
 	Params      int64   `json:"params,omitempty"`
 	Arch        string  `json:"arch,omitempty"`
@@ -365,7 +339,6 @@ type ComputeCert struct {
 	Notes          []string `json:"notes,omitempty"`
 }
 
-// A run record from the server ledger, carrying no actual metric values.
 type LedgerRunEntry struct {
 	RunIndex    int     `json:"run_index"`
 	StartedAt   string  `json:"started_at"`
@@ -380,7 +353,6 @@ type LedgerRunEntry struct {
 	ReceivedAt  string  `json:"received_at,omitempty"`
 }
 
-// Nothing in this window was witnessed: the record existed only on the author's machine.
 func (e LedgerRunEntry) AnchorDelay() (time.Duration, bool) {
 	end, err1 := time.Parse(time.RFC3339Nano, e.EndedAt)
 	got, err2 := time.Parse(time.RFC3339Nano, e.ReceivedAt)
@@ -411,19 +383,14 @@ type SealRecord struct {
 	PublicKeyPEM      string    `json:"public_key_pem"`
 	ServerURL         string    `json:"server_url"`
 	SourceBundleHash  string    `json:"source_bundle_hash,omitempty"`
-	// CanonicalJSON is the exact bytes that were hashed to produce DataHash.
-	// Verifiers re-hash this directly instead of reconstructing the signing
-	// data structure, making verification immune to future field additions.
-	CanonicalJSON string `json:"canonical_json,omitempty"`
-	VisualPDFHash string `json:"visual_pdf_hash,omitempty"`
-	SealBlockHash string `json:"seal_block_hash,omitempty"`
-	// SHA-256 of the combined multi-run checkout bundle, bound into the signature.
-	CheckoutBundleHash string           `json:"checkout_bundle_hash,omitempty"`
-	RunHistory         []LedgerRunEntry `json:"run_history,omitempty"`
-	TotalRunCount      int              `json:"total_run_count,omitempty"`
-	// The server's signed statement of the ledger's length at seal time, so a ledger
-	// later cut short below this report is detectable by anyone holding it.
-	LedgerCheckpoint *LedgerCheckpoint `json:"ledger_checkpoint,omitempty"`
+	// The exact signed bytes: verifiers re-hash them, so new fields never break old reports.
+	CanonicalJSON      string            `json:"canonical_json,omitempty"`
+	VisualPDFHash      string            `json:"visual_pdf_hash,omitempty"`
+	SealBlockHash      string            `json:"seal_block_hash,omitempty"`
+	CheckoutBundleHash string            `json:"checkout_bundle_hash,omitempty"`
+	RunHistory         []LedgerRunEntry  `json:"run_history,omitempty"`
+	TotalRunCount      int               `json:"total_run_count,omitempty"`
+	LedgerCheckpoint   *LedgerCheckpoint `json:"ledger_checkpoint,omitempty"`
 }
 
 type LedgerCheckpoint struct {
@@ -532,9 +499,6 @@ func FormatDuration(seconds float64) string {
 	return fmt.Sprintf("%d months %d days", months, remainDays)
 }
 
-// ArchiveRecord is a published record's cover page content. Author-provided fields
-// are reviewed text; every number on it comes from the sealed reports, which stay
-// authoritative.
 type ArchiveRecord struct {
 	ID          string          `json:"id"`
 	Version     int             `json:"version"`

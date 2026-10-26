@@ -33,8 +33,6 @@ var citeBibTeX = []string{
 	"}",
 }
 
-// Standard Type 1 metrics (per 1000 units) for ASCII 32..126, so text can be
-// measured for wrapping, centering and table columns without embedding fonts.
 var timesW = [95]int{
 	250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 250, 278,
 	500, 500, 500, 500, 500, 500, 500, 500, 500, 500, 278, 278, 564, 564, 564, 444,
@@ -180,8 +178,6 @@ func (b *builder) subsection(title string) {
 	b.gap(1)
 }
 
-// Booktabs style: heavy rules above and below, a light one under the header, no
-// vertical lines. The header repeats when a table runs onto a new page.
 func (b *builder) table(headers []string, widths []float64, rows [][]string) {
 	const rowH = 13.0
 	var total float64

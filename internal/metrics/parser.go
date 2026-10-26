@@ -1,6 +1,3 @@
-// Package metrics parses the KVERITAS_* stdout protocol lines. The whole stdout
-// stream is SHA-256 hashed as it runs, and each match is anchored to its line
-// number, so lines cannot be inserted, removed, or reordered undetected.
 package metrics
 
 import (
@@ -168,8 +165,6 @@ func (p *Parser) ParseDeclared(line string, d *session.DeclaredModel) bool {
 	return true
 }
 
-// parseCountToken parses an integer count that may be written in scientific or
-// decimal notation (e.g. 25600000, 25.6e6). Returns 0 on failure.
 func parseCountToken(v string) int64 {
 	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 		return n
@@ -180,7 +175,6 @@ func parseCountToken(v string) int64 {
 	return 0
 }
 
-// Declared reports whether the run printed any result itself.
 func (p *Parser) Declared() bool { return p.explicitCount+p.claimCount > 0 }
 
 func (p *Parser) Summary(w io.Writer, auto int) {
@@ -201,7 +195,6 @@ func (p *Parser) Summary(w io.Writer, auto int) {
 	}
 }
 
-// DeclareHint shows how to print results, in a few languages.
 func DeclareHint() {
 	fmt.Fprintln(os.Stderr, "[kveritas] Print one line per result, from any language:")
 	// WriteString, not a Print verb: keeps the literal format directives in the examples.

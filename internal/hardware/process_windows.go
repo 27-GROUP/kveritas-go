@@ -79,8 +79,6 @@ func processUsage(pid int) (cpuSec, memGB float64, pageFaults float64) {
 	return cpuSec, memGB, pageFaults
 }
 
-// Windows has no /proc; a process snapshot gives the tree, and per-process times and
-// working sets scope CPU and memory to the run. GPU readings come from nvidia-smi, machine-wide.
 func ProcessCounters(rootPID int) session.HardwareCounters {
 	c := ProcessCPUCounters(rootPID)
 	g := ProcessGPUCounters(rootPID)

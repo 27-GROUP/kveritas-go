@@ -13,10 +13,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// ProcessCounters measures hardware use for the tree rooted at rootPID, so other
-// activity on the machine is not counted against the run. CPU and memory come from
-// /proc; GPU memory and utilization from nvidia-smi filtered to the tree's PIDs;
-// GPU power is device draw scaled by the tree's share of utilization.
 func ProcessCounters(rootPID int) session.HardwareCounters {
 	c := ProcessCPUCounters(rootPID)
 	g := ProcessGPUCounters(rootPID)
@@ -27,8 +23,6 @@ func ProcessCounters(rootPID int) session.HardwareCounters {
 	return c
 }
 
-// ProcessCPUCounters reads only the cheap /proc and sysfs counters for the tree.
-// It makes no nvidia-smi calls, so it is fast enough to sample at a high rate.
 func ProcessCPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}
@@ -49,15 +43,12 @@ func ProcessCPUCounters(rootPID int) session.HardwareCounters {
 	return c
 }
 
-// ProcessGPUCounters reads the per-process GPU counters via nvidia-smi (slower),
-// returning only the GPU fields. The sampler refreshes it at a lower rate.
 func ProcessGPUCounters(rootPID int) session.HardwareCounters {
 	pids := descendantPIDs(rootPID)
 	c := session.HardwareCounters{}
 	dev := gpuCounters()
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
-		// ROCm reports memory per process but not utilization, so a run holding GPU
-		// memory is credited with the device's utilization and power.
+		// ROCm has no per-process utilization: a run holding GPU memory gets the device's.
 		if mem, ok := amdMemForPIDs(pids); ok {
 			c.GPUTempC = dev.GPUTempC
 			c.GPUMemUsedMB = mem
@@ -148,7 +139,6 @@ func procCPUSeconds(pid int) float64 {
 		return 0
 	}
 	fields := strings.Fields(string(data[close+2:]))
-	// After comm: state ppid pgrp ... utime(12th) stime(13th) in this slice.
 	if len(fields) < 13 {
 		return 0
 	}
@@ -172,8 +162,8 @@ func procMinfltThreads(pid int) (minflt, threads float64) {
 	if len(fields) < 18 {
 		return 0, 0
 	}
-	minflt, _ = strconv.ParseFloat(fields[7], 64)   // minflt
-	threads, _ = strconv.ParseFloat(fields[17], 64) // num_threads
+	minflt, _ = strconv.ParseFloat(fields[7], 64)
+	threads, _ = strconv.ParseFloat(fields[17], 64)
 	return minflt, threads
 }
 
@@ -230,7 +220,7 @@ func linuxCPUFreqMHz() float64 {
 		}
 		v, err := strconv.ParseFloat(strings.TrimSpace(string(b)), 64)
 		if err == nil {
-			sum += v / 1000.0 // kHz -> MHz
+			sum += v / 1000.0
 			n++
 		}
 	}

@@ -52,9 +52,6 @@ func (tl traceLine) records() []*session.RunRecord {
 	return []*session.RunRecord{{HardwareSamples: hs}}
 }
 
-// TestCorpusEval runs the shipped detector over every stored trace and prints the
-// confusion table. It asserts only the property that matters: no genuine run is
-// accused.
 func TestCorpusEval(t *testing.T) {
 	paths := []string{
 		"/tmp/hmca_paper/traces.jsonl",

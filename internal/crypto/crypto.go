@@ -1,5 +1,3 @@
-// Package crypto implements the K-Veritas signing protocol: sign the payload
-// "data_hash:nonce:signed_at" with RSA-PSS-SHA256.
 package crypto
 
 import (
@@ -38,8 +36,7 @@ func HashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// CanonicalHash returns the SHA-256 hex digest of v as sorted-key JSON,
-// matching Python's json.dumps(sort_keys=True).
+// Matches Python's json.dumps(sort_keys=True).
 func CanonicalHash(v interface{}) (string, error) {
 	b, err := sortedMarshal(v)
 	if err != nil {
@@ -48,8 +45,6 @@ func CanonicalHash(v interface{}) (string, error) {
 	return HashBytes(b), nil
 }
 
-// CanonicalHashWithBytes also returns the raw canonical JSON, embedded in the
-// seal so verifiers re-hash the exact bytes rather than rebuild the structure.
 func CanonicalHashWithBytes(v interface{}) (string, []byte, error) {
 	b, err := sortedMarshal(v)
 	if err != nil {
@@ -120,8 +115,6 @@ func LoadPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
 	return x509.ParsePKCS1PrivateKey(block.Bytes)
 }
 
-// SignPSS returns a base64 RSA-PSS-SHA256 signature over payload. The digest is
-// SHA-256 of the payload bytes, matching Python's sign over payload.encode.
 func SignPSS(privKey *rsa.PrivateKey, payload string) (string, error) {
 	h := sha256.Sum256([]byte(payload))
 	opts := &rsa.PSSOptions{

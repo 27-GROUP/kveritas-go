@@ -10,8 +10,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/crypto"
 )
 
-// Remembers each file's hash by size, modification time and inode, kept in
-// .kveritas/filestate.json, so checkpoints and status only re-read files that changed.
 type HashCache struct {
 	mu    sync.Mutex
 	path  string
@@ -75,8 +73,7 @@ func (c *HashCache) lookup(key string, st os.FileInfo) (string, bool) {
 	return e.Hash, true
 }
 
-// A file written within the last two seconds could change again without its
-// modification time moving, so it is not remembered yet.
+// A file written in the last two seconds could change without its mtime moving.
 func (c *HashCache) remember(key string, st os.FileInfo, hash string) {
 	if c == nil || time.Since(st.ModTime()) < 2*time.Second {
 		return
@@ -107,7 +104,6 @@ func (c *HashCache) hash(key, path string) (string, error) {
 	return h, nil
 }
 
-// Hashes the given project files through the saved cache; unreadable files are left out.
 func HashFilesCached(projectDir, kvDir string, rels []string) map[string]string {
 	cache := LoadHashCache(kvDir)
 	hashes := make([]string, len(rels))

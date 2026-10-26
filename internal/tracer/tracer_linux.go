@@ -1,9 +1,5 @@
 //go:build linux
 
-// Package tracer records what a run reads, writes, and spawns, from the parent
-// kveritas process out of the traced program's reach. It watches the OS, not the
-// process, so it is language-agnostic: inotify for file activity under the project
-// directory, /proc polling for subprocesses.
 package tracer
 
 import (
@@ -22,13 +18,9 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// maxFiles caps the number of distinct files kept so a run that touches an
-// enormous tree cannot produce an unbounded trace.
 const maxFiles = 10000
 
-// skipDirs are never watched: noise, or feedback on ourselves. __pycache__ is kept
-// on purpose, since a warm run reads cached bytecode instead of the .py; watching
-// it and normalizing the .pyc back to source keeps the "main used helper.py" edge.
+// __pycache__ is watched: a warm run reads bytecode, mapped back to its source.
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, ".venv": true,
 	"venv": true, ".kveritas": true, "dist": true, ".mypy_cache": true,
@@ -38,7 +30,7 @@ var skipDirs = map[string]bool{
 const (
 	watchMask = syscall.IN_OPEN | syscall.IN_CLOSE_WRITE | syscall.IN_CREATE |
 		syscall.IN_MOVED_TO | syscall.IN_MOVED_FROM | syscall.IN_DELETE
-	eventHeader = 16 // sizeof(struct inotify_event) without the name field
+	eventHeader = 16
 )
 
 type Observer struct {
@@ -79,7 +71,6 @@ func New(root string) *Observer {
 	}
 }
 
-// Never fails the run: if inotify is unavailable the observer records nothing.
 func (o *Observer) Start() {
 	fd, err := syscall.InotifyInit1(syscall.IN_NONBLOCK | syscall.IN_CLOEXEC)
 	if err != nil {
@@ -190,7 +181,6 @@ func (o *Observer) handle(wd int32, mask uint32, name string) {
 		full = filepath.Join(dir, name)
 	}
 
-	// A new subdirectory appears: start watching it so nothing below is missed.
 	if isDir && mask&(syscall.IN_CREATE|syscall.IN_MOVED_TO) != 0 {
 		if !skipDirs[name] {
 			o.addWatchTree(full)
@@ -236,8 +226,6 @@ func (o *Observer) atCap() bool {
 func (o *Observer) procLoop() {
 	defer o.wg.Done()
 	root := int(atomic.LoadInt32(&o.pid))
-	// Poll frequently: real subprocesses outlive this and /proc is cheap. Very
-	// short-lived helpers may be missed, but usually surface as a file read too.
 	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -291,8 +279,6 @@ func descends(pid, root int, parent map[int]int) bool {
 	return false
 }
 
-// Command lines are read lazily, only for the descendants actually recorded, to
-// keep each poll cheap.
 func readProcTable() map[int]int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -308,7 +294,6 @@ func readProcTable() map[int]int {
 		if err != nil {
 			continue
 		}
-		// Fields after the ")" that closes comm: state, ppid, ...
 		close := bytes.LastIndexByte(stat, ')')
 		if close < 0 || close+2 >= len(stat) {
 			continue
@@ -339,9 +324,6 @@ func readCmdline(pid string) string {
 	return strings.Join(out, " ")
 }
 
-// assemble turns the collected maps into a timeline-ordered trace. Reads are
-// files that were opened but never written; writes carry their final content
-// hash. Both are relative to the project directory when possible.
 func (o *Observer) assemble() *session.RunTrace {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -390,9 +372,6 @@ func isCacheArtifact(path string) bool {
 	return strings.Contains(path, "/__pycache__/")
 }
 
-// normalizeSource maps a compiled bytecode file back to the source it came from
-// (e.g. pkg/__pycache__/helper.cpython-312.pyc -> pkg/helper.py) so a module the
-// run loaded from cache still shows up as its source file in the tree.
 func normalizeSource(path string) string {
 	dir := filepath.Dir(path)
 	if filepath.Base(dir) != "__pycache__" {
@@ -403,7 +382,7 @@ func normalizeSource(path string) string {
 		return path
 	}
 	stem := strings.TrimSuffix(name, ".pyc")
-	if i := strings.IndexByte(stem, '.'); i >= 0 { // drop ".cpython-312"
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
 		stem = stem[:i]
 	}
 	return filepath.Join(filepath.Dir(dir), stem+".py")

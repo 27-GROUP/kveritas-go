@@ -33,7 +33,7 @@ import (
 
 const defaultServer = "https://kveritas-api-production.up.railway.app"
 
-// Public ledger-check entry point; fronts the attestation server so its host stays hidden.
+// Fronts the attestation server so its host stays hidden.
 const publicVerifyServer = "https://kveritas.org"
 
 var root = &cobra.Command{
@@ -100,8 +100,6 @@ This action is irreversible -- the session token is lost.`,
 	},
 }
 
-// kveritas python train.py is kveritas run -- python train.py, for any program on
-// PATH that is not a kveritas command.
 func shortRun() {
 	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
 		return
@@ -331,8 +329,7 @@ func verifyProofAgainstSeal(proof *provenance.Proof, seal *session.SealRecord) e
 			continue
 		}
 		content, _ := base64.StdEncoding.DecodeString(pf.ContentB64)
-		// Where the snapshot sits comes from the report, not from the proof: only
-		// the root is committed, so the proof's own labels prove nothing.
+		// Snapshot labels come from the report: only the proof's root is committed.
 		refs := commits[pf.Root]
 		run := 0
 		var where []string
@@ -552,7 +549,6 @@ func init() {
 	cmdCheckout.Flags().StringVar(&checkoutReport, "report", "", "report PDF to verify the bundle against before checkout")
 }
 
-// Binds the designation at genesis with a server signature so it cannot be altered later.
 func harnessInit(kvDir, wd, machineID, sessionID string) error {
 	designation := defaultDesignation
 	if initDesignate != "" {
@@ -652,8 +648,6 @@ func harnessInit(kvDir, wd, machineID, sessionID string) error {
 	return nil
 }
 
-// Installs recording hooks so designated actions are committed to the chain before
-// they take effect. Existing hooks are preserved.
 func installClaudeHooks(projectDir string) error {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
@@ -819,7 +813,6 @@ type hookInput struct {
 	Prompt        string          `json:"prompt"`
 }
 
-// Names the top-level agent: launcher-set env name, else the per-process session id, else "main".
 func topAgent(h hookInput) string {
 	if name := os.Getenv("KVERITAS_AGENT_NAME"); name != "" {
 		return name
@@ -830,8 +823,6 @@ func topAgent(h hookInput) string {
 	return "main"
 }
 
-// Scopes an action's actor under its top-level agent; sub-agents carry agent_type/agent_id,
-// a top-level agent's own calls carry neither.
 func hookActor(h hookInput) string {
 	top := topAgent(h)
 	if h.AgentType != "" {
@@ -844,7 +835,6 @@ func hookActor(h hookInput) string {
 	return top
 }
 
-// Extracts the child agent id from an Agent tool result to tie a spawn to its sub-agent.
 func spawnedAgentID(resp json.RawMessage) string {
 	var r struct {
 		AgentID string `json:"agentId"`
@@ -853,8 +843,7 @@ func spawnedAgentID(resp json.RawMessage) string {
 	return r.AgentID
 }
 
-// Commits a designated action from the hook payload before the tool runs. On failure the
-// pre hook exits 2 to block the tool, so no designated effect can occur without its entry.
+// The pre hook exits 2 on failure, so no designated effect happens without its entry.
 func runHookRecord(event string) error {
 	data, _ := io.ReadAll(os.Stdin)
 	var h hookInput
@@ -866,7 +855,6 @@ func runHookRecord(event string) error {
 	}
 	sess, err := session.Load(kvDir)
 	if err != nil {
-		// Fail safe: block the pre hook so an action cannot proceed while recording is broken.
 		if event == "pre" {
 			fmt.Fprintf(os.Stderr, "kveritas: session unreadable; blocking tool to preserve the audit chain: %v\n", err)
 			os.Exit(2)
@@ -1074,12 +1062,11 @@ func renderActorTree(nodes []*harness.ActorNode, depth int) {
 	}
 }
 
-// Copies the session for embedding: the provenance salt never leaves the machine, and
-// real source paths are dropped unless the author disclosed names.
+// The provenance salt never leaves the machine; real paths only when names are disclosed.
 func sanitizeForReport(s *session.Session) *session.Session {
 	clean := *s
 	clean.ProvSalt = ""
-	// The session token is a server credential; never publish it in the report.
+	// The session token is a server credential; never publish it.
 	clean.Token = ""
 	clean.Failed = nil
 	if provenance.ParseLevel(s.Disclosure) < provenance.Names {
@@ -1088,8 +1075,6 @@ func sanitizeForReport(s *session.Session) *session.Session {
 	return &clean
 }
 
-// Prints a run's snapshot timeline. At the redacted level file names are pseudonyms;
-// withheld files are listed so a reviewer sees what was kept out of any bundle.
 func renderProvenance(idx int, p *session.Provenance) {
 	fmt.Fprintf(out, "\nRun %d provenance (%s, %d files):\n", idx, p.Disclosure, p.FileCount)
 	for _, c := range p.Commits {
@@ -1125,8 +1110,6 @@ func renderProvenance(idx int, p *session.Provenance) {
 	}
 }
 
-// Prints attested models and datasets: public artifacts show name and hash, private ones
-// show only a salted commitment.
 func renderArtifacts(idx int, arts []session.Artifact) {
 	fmt.Fprintf(out, "\nRun %d attested artifacts:\n", idx)
 	for _, a := range arts {
@@ -1304,8 +1287,7 @@ The node comes from the launcher or Slurm, or --node-rank.`,
 	},
 }
 
-// srun inside kveritas starts the other nodes' processes where no kveritas runs, so
-// only this node would be measured.
+// srun inside kveritas starts the other nodes without kveritas, so only this node is measured.
 func warnSrunInside(args []string) {
 	n, _ := strconv.Atoi(os.Getenv("SLURM_JOB_NUM_NODES"))
 	if n > 1 && len(args) > 0 && filepath.Base(args[0]) == "srun" {
@@ -1314,8 +1296,7 @@ func warnSrunInside(args []string) {
 	}
 }
 
-// Every node of a multi-node run runs the same command; only node 0 records the run.
-// The others never touch the session's run lock or anchors, so they cannot race it.
+// Only node 0 records; other nodes never touch the run lock or anchors.
 func runWorkerNode(args []string, rank int) error {
 	kvDir, err := session.Find()
 	if err != nil {
@@ -1335,8 +1316,7 @@ func runWorkerNode(args []string, rank int) error {
 	return nil
 }
 
-// Every invocation is anchored, failures included, so the server's history and the
-// chain have no holes. Only successful runs are kept for the report.
+// Every invocation is anchored, failures included, so the chain has no holes.
 func recordInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int, c *client.Client) error {
 	if err := anchorInvocation(kvDir, sess, rec, inv); err != nil {
 		return err
@@ -1362,8 +1342,7 @@ func recordInvocation(kvDir string, sess *session.Session, rec *session.RunRecor
 
 func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecord, inv int) error {
 	rec.Branch = sess.Branch
-	// Digest the record as it will read back from disk and from the report, not the
-	// in-memory copy, so the anchor matches at seal and at verify.
+	// Digest the bytes as they read back from disk, so the anchor matches at seal and verify.
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -1400,8 +1379,7 @@ func anchorInvocation(kvDir string, sess *session.Session, rec *session.RunRecor
 	return nil
 }
 
-// A run whose process died with its terminal still gets an entry, marked interrupted,
-// so its invocation number is never left as a gap the seal would refuse.
+// A killed run still gets an entry, so its invocation number is never a gap.
 func recoverInterrupted(kvDir string, sess *session.Session) error {
 	inf, ok := anchor.LoadInflight(kvDir)
 	if !ok {
@@ -1547,8 +1525,6 @@ var cmdSeal = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "[kveritas] HMCA flag: %s\n", f)
 		}
 
-		// Merge every run's store into one checkout bundle (open disclosure only) and bind
-		// its hash into the signature below.
 		var bundleHash string
 		var combinedBundle []byte
 		var checkoutBundleHash string
@@ -1615,8 +1591,6 @@ var cmdSeal = &cobra.Command{
 			return fmt.Errorf("PDF generation: %w", err)
 		}
 
-		// Merge per-run proof keystores into one sidecar so a proof can reveal a file from
-		// any run; keep it and the combined bundle next to the report before cleanup.
 		merged := &provenance.Keystore{SessionID: sess.ID}
 		for _, r := range runs {
 			if k, err := provenance.LoadKeystore(filepath.Join(kvDir, "keystore-"+r.ID+".json")); err == nil {
@@ -1749,8 +1723,7 @@ func init() {
 	cmdSeal.Flags().StringSliceVar(&sealClaimNames, "claim", nil, "name results as claims, taking each one's latest recorded value")
 }
 
-// Verification hashes the analysis the seal committed to, not what today's analyzer
-// would produce: otherwise improving either analyzer marks every old report tampered.
+// Use the signed analysis: recomputing it would mark old reports tampered when an analyzer improves.
 func signedClaims(canonicalJSON string) []session.SealClaim {
 	var doc struct {
 		Claims []session.SealClaim `json:"seal_claims"`
@@ -1761,10 +1734,7 @@ func signedClaims(canonicalJSON string) []session.SealClaim {
 	return doc.Claims
 }
 
-// A claim made at seal takes the value the latest run recorded for that name, so it
-// can only point at a number the signed runs already contain.
-// Only the runs the report leads with: a set-aside run or another branch's run is
-// never claimed by accident.
+// Seal claims take the latest featured run's value, never a set-aside or other-branch run.
 func sealClaims(sess *session.Session, runs []*session.RunRecord, names []string) ([]session.SealClaim, error) {
 	aside := sess.SetAside()
 	featured := func(r *session.RunRecord) bool {
@@ -1896,8 +1866,7 @@ func runPayloadOf(r *session.RunRecord) runPayload {
 	}
 }
 
-// Hashes the exact bytes this run occupies inside the signed canonical JSON, so a
-// verifier can check a run against its run-end anchor without re-encoding it.
+// The run's exact bytes in the signed canonical JSON, so anchors check without re-encoding.
 func runDigest(r *session.RunRecord) (string, error) {
 	return crypto.CanonicalHash(runPayloadOf(r))
 }
@@ -1908,9 +1877,7 @@ func canonicalSessionHash(sess *session.Session, runs []*session.RunRecord, bund
 		runPayloads = append(runPayloads, runPayloadOf(r))
 	}
 
-	// Compute certs are deterministic, so binding them makes declared-card or sample
-	// tampering break the signature. Bound only when a run declares a card, so reports
-	// without one hash exactly as before.
+	// Bound only when a run declares a card, so older reports hash as before.
 	certs := certsOverride
 	anyDeclared := false
 	for _, r := range runs {
@@ -2121,16 +2088,13 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// The stored canonical JSON is the exact bytes that were signed; hashing it
-		// must reproduce the data hash, so an edit to the embedded copy is caught.
+		// The stored canonical JSON must hash to the data hash, or the embedded copy was edited.
 		if seal.CanonicalJSON != "" && crypto.HashBytes([]byte(seal.CanonicalJSON)) != seal.DataHash {
 			fmt.Fprintf(out, "TAMPERED\nStored canonical JSON does not match the signed data hash.\n")
 			jr.set("TAMPERED", "stored canonical JSON does not match the signed data hash")
 			return nil
 		}
 
-		// The signature covers each run's anchored digest; a run whose content does not
-		// hash to it was signed by a client that lied about what it anchored.
 		for i, r := range runs {
 			if r.RunDigest == "" {
 				continue
@@ -2155,8 +2119,7 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// The seal block covers what the signature does not: run history, total run
-		// count, and the other fields verify prints straight from the seal.
+		// The seal block covers what the signature does not (run history, counts).
 		if seal.SealBlockHash != "" {
 			if sh, serr := pdf.SealBlockHash(reportPath); serr == nil && sh != seal.SealBlockHash {
 				fmt.Fprintf(out, "TAMPERED\nThe seal block was modified after signing.\n")
@@ -2165,8 +2128,6 @@ var cmdVerify = &cobra.Command{
 			}
 		}
 
-		// Re-hash the visual pages so an edit to the human-readable PDF is caught,
-		// not only changes to the embedded data.
 		if seal.VisualPDFHash != "" {
 			if vh, verr := pdf.VisualPDFHash(reportPath); verr == nil && vh != seal.VisualPDFHash {
 				fmt.Fprintf(out, "TAMPERED\nThe visual PDF pages were modified after signing.\n")
@@ -2184,7 +2145,6 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Proves internal consistency only; origin against the trust anchor is next.
 		embeddedKey, err := crypto.LoadPublicKey([]byte(seal.PublicKeyPEM))
 		if err != nil {
 			return fmt.Errorf("parsing embedded public key: %w", err)
@@ -2195,8 +2155,7 @@ var cmdVerify = &cobra.Command{
 			return nil
 		}
 
-		// Origin: the embedded key must match the trust anchor (--key, or the pinned server
-		// key). Any other key means self-attested: valid signature, but not from K-Veritas.
+		// Any key outside the trusted list (or --key) means SELF-ATTESTED.
 		var anchorPEM []byte
 		if verifyKeyPath != "" {
 			anchorPEM, err = os.ReadFile(verifyKeyPath)
@@ -2266,8 +2225,7 @@ var cmdVerify = &cobra.Command{
 			}
 		}
 
-		// Coherence is part of the signed data, so report it offline too. Re-analysis
-		// is shown when it disagrees: the detector improves, sealed reports do not.
+		// Re-analysis is shown when it disagrees: the detector improves, sealed reports do not.
 		if signedHMCA != nil && signedHMCA.Verdict != "" {
 			fmt.Fprintf(out, "Coherence:  %s (%.2f)\n", signedHMCA.Verdict, signedHMCA.Score)
 			for _, f := range signedHMCA.Flags {
@@ -2407,8 +2365,6 @@ var cmdVerify = &cobra.Command{
 						m := false
 						jr.BundleMatch = &m
 					}
-					// The caller asked whether this code belongs to this report, so a
-					// mismatch has to fail rather than print VERIFIED and bury it below.
 					fmt.Fprintf(out, "Source bundle: MISMATCH (this zip is not the sealed bundle)\n")
 					return fmt.Errorf("bundle does not match the signed report")
 				}
@@ -2585,7 +2541,7 @@ type claim struct {
 	Metric    string  `json:"metric"`
 	Value     float64 `json:"value"`
 	Tolerance float64 `json:"tolerance"`
-	Run       int     `json:"run,omitempty"` // 1-indexed; 0 means any run
+	Run       int     `json:"run,omitempty"`
 }
 
 var (
@@ -2644,8 +2600,7 @@ var cmdCheck = &cobra.Command{
 			fmt.Println("TAMPERED: stored canonical JSON does not match the signed data hash; claims check aborted")
 			return nil
 		}
-		// A valid signature only proves the report is self-consistent. Without this a
-		// reviewer checking a paper's numbers would accept a self-signed forgery.
+		// Without the origin check a self-signed forgery would pass.
 		serverSigned, err := crypto.OriginConfirmed(seal.PublicKeyPEM, nil, seal.SignedAt)
 		if err != nil {
 			return fmt.Errorf("checking report origin: %w", err)
@@ -2703,8 +2658,7 @@ func init() {
 	cmdCheck.Flags().StringVar(&checkReportPath, "report", "", "path to K-Veritas PDF report")
 }
 
-// runFilter is 1-indexed; 0 searches all runs.
-// The last reading is the value a paper cites; the first would be epoch zero.
+// The last reading is the value a paper cites.
 func findMetric(runs []*session.RunRecord, name string, runFilter int) (found bool, value float64, explicit bool) {
 	for i, r := range runs {
 		if runFilter > 0 && i+1 != runFilter {
@@ -2879,7 +2833,6 @@ report for reviewer cross-referencing.`,
 			Claims []claimEntry `json:"claims"`
 		}
 
-		// Later readings replace earlier ones, keeping first-seen order.
 		at := map[string]int{}
 		var claims []claimEntry
 

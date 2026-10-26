@@ -13,14 +13,12 @@ func makeTime(offsetSec int) time.Time {
 	return base.Add(time.Duration(offsetSec) * time.Second)
 }
 
-// coupledSamples builds a genuine-looking run: several channels driven by one
-// shared activity signal (they co-fluctuate), plus real trend.
 func coupledSamples(n int) []session.RunRecord {
 	s := make([]session.HardwareSample, n)
 	cpu := 0.0
 	ctx := 0.0
 	for i := 0; i < n; i++ {
-		burst := 0.5 + 0.5*math.Sin(float64(i)*0.7) // shared activity
+		burst := 0.5 + 0.5*math.Sin(float64(i)*0.7)
 		cpu += 0.8 * burst
 		ctx += 500 * burst
 		s[i] = session.HardwareSample{
@@ -40,10 +38,7 @@ func coupledSamples(n int) []session.RunRecord {
 	return []session.RunRecord{{HardwareSamples: s}}
 }
 
-// incoherentSamples builds a run where each channel is an INDEPENDENT random walk
-// (fabricated/spliced): the channels share no cause, so coherence collapses.
 func incoherentSamples(n int) []session.RunRecord {
-	// simple deterministic per-channel PRNGs (different seeds)
 	rng := func(seed uint64) func() float64 {
 		st := seed
 		return func() float64 {

@@ -53,8 +53,7 @@ func Enqueue(kvDir string, a client.RunAnchor) error {
 	})
 }
 
-// Sends queued anchors oldest first and stops at the first failure, so the server
-// never receives invocation k+1 before k.
+// Stops at the first failure so the server never gets invocation k+1 before k.
 func Flush(c *client.Client, kvDir string) (int, error) {
 	q, err := load(kvDir)
 	if err != nil || len(q) == 0 {
@@ -94,8 +93,7 @@ func Rejected(err error) bool {
 	return errors.As(err, &se) && se.Status >= 400 && se.Status < 500 && se.Status != 429
 }
 
-// Retries with backoff until the queue drains, the budget runs out, or the server
-// rejects an anchor outright (retrying a rejection would never succeed).
+// A rejection is final; only network failures are retried.
 func FlushWithin(c *client.Client, kvDir string, budget time.Duration) (int, error) {
 	deadline := time.Now().Add(budget)
 	wait := time.Second
@@ -182,8 +180,7 @@ func writeAtomic(path string, v interface{}) error {
 	return os.Rename(tmp, path)
 }
 
-// Guards read-modify-write of the outbox across processes: a run's background flush
-// and a concurrent status or seal share the same file.
+// A run's background flush and a concurrent status or seal share the outbox.
 func withLock(kvDir string, fn func() error) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -238,8 +235,7 @@ func LoadInflight(kvDir string) (*Inflight, bool) {
 	return &inf, true
 }
 
-// Keeps a last-seen time so a run killed with its terminal is recorded as ending
-// roughly when it died, not when it started.
+// Last-seen time, so a killed run ends roughly when it died.
 func touchInflight(kvDir string) {
 	inf, ok := LoadInflight(kvDir)
 	if !ok || inf.PID != os.Getpid() {
@@ -275,8 +271,7 @@ func RunLockHolder(kvDir string) (int, bool) {
 	return pid, ok
 }
 
-// A session folder shared across machines can hold a lock from another host, whose
-// pid means nothing here; it is presumed alive.
+// A lock from another host is presumed alive: its pid means nothing here.
 func lockHolder(kvDir string) (int, string, bool) {
 	data, err := os.ReadFile(filepath.Join(kvDir, runLockFile))
 	if err != nil {

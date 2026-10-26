@@ -21,8 +21,7 @@ func interactive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
 }
 
-// Asked once per session, the first time a run declares no results. A batch job is
-// never stopped by a question: it gets the hint and keeps declared results only.
+// A batch job is never stopped by a question.
 func chooseResults(kvDir string, sess *session.Session) string {
 	return askResults(kvDir, sess, "No results declared in this run.")
 }

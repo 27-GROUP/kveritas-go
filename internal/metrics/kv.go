@@ -11,18 +11,7 @@ var (
 	kvNumberRe = regexp.MustCompile(`^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
 )
 
-// TranslateKV turns a compact KV line into the KVERITAS_* lines it stands for:
-//
-//	KV val_acc=0.93 loss=0.21 step=3
-//	KV claim test_acc=0.91 phase=eval
-//	KV seed 42
-//	KV phase train
-//	KV model params=25.6e6 arch=resnet50 precision=fp16
-//	KV workload dataset_size=50000 epochs=10 batch_size=128
-//	KV artifact role=dataset path=data/train.csv visibility=public
-//
-// The grammar is strict so ordinary output that happens to start with KV is never
-// read as a result. near reports a line that starts with KV but does not parse.
+// Strict grammar, so output like "KV cache: 2 GB" is never a result.
 func TranslateKV(line string) (lines []string, ok, near bool) {
 	f := strings.Fields(line)
 	if len(f) == 0 || f[0] != "KV" {
@@ -110,8 +99,7 @@ func kvPairs(tokens []string) ([][2]string, bool) {
 	return pairs, true
 }
 
-// The protocol regexes want digits on both sides of the point, so 1. and .5 are
-// rewritten; anything strconv accepts keeps its value.
+// 1. and .5 are rewritten for the protocol regexes.
 func number(v string) string {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {

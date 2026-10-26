@@ -28,9 +28,6 @@ const (
 	pointsPerTag = 50
 )
 
-// AutoFiles reads results from metric files a run created or changed under root:
-// TensorBoard event files, Hugging Face trainer_state.json, CSV logs and MLflow's
-// local store. Each file's hash is already in the run's signed snapshots.
 func AutoFiles(root string, since time.Time) []session.Metric {
 	var out []session.Metric
 	scanned := 0
@@ -75,7 +72,6 @@ func metric(name string, v float64, step, source string) (session.Metric, bool) 
 	return session.Metric{Name: name, Value: v, Step: step, Source: "auto:" + source}, true
 }
 
-// Long curves keep an even spread of points and always the last one.
 func thin(ms []session.Metric) []session.Metric {
 	byName := map[string][]session.Metric{}
 	var order []string
@@ -174,7 +170,6 @@ func csvLog(path string) []session.Metric {
 	return thin(out)
 }
 
-// MLflow's file store keeps one file per metric: "timestamp value step" per line.
 func mlflowMetric(path, name string) []session.Metric {
 	f, err := os.Open(path)
 	if err != nil {
@@ -203,8 +198,6 @@ func mlflowMetric(path, name string) []session.Metric {
 	return thin(out)
 }
 
-// TensorBoard event files are length-prefixed protobuf records; only scalar
-// summaries are read, so no TensorFlow is needed.
 func tensorboard(path string) []session.Metric {
 	f, err := os.Open(path)
 	if err != nil {
@@ -326,7 +319,6 @@ func parseValue(b []byte) (scalar, bool) {
 	return s, found && s.tag != ""
 }
 
-// TF2 writes scalars as one-element tensors: float or double, packed or raw.
 func tensorScalar(b []byte) (float64, bool) {
 	dtype := 0
 	for _, f := range fields(b) {
@@ -356,7 +348,6 @@ func tensorScalar(b []byte) (float64, bool) {
 	return 0, false
 }
 
-// A float32 printed at its own precision: 0.0083333 rather than 0.008333333767950535.
 func f32(v float32) float64 {
 	f, _ := strconv.ParseFloat(strconv.FormatFloat(float64(v), 'g', -1, 32), 64)
 	return f

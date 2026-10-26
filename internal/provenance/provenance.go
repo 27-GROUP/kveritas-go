@@ -1,8 +1,3 @@
-// Package provenance records a run as a chain of content-addressed snapshots. At
-// each boundary (run start, phase, run end) it hashes the tracked files into a
-// Merkle root linked to the previous one, giving a verifiable timeline of what
-// changed. Leaves are salted per file, so a published hash cannot be guessed back
-// to known content and revealing one file never exposes the others.
 package provenance
 
 import (
@@ -25,9 +20,9 @@ const maxCommits = 512
 type Level int
 
 const (
-	Redacted Level = iota // pseudonyms, no names, no content
-	Names                 // real names, still no content
-	Open                  // real names plus stored content (checkout-able)
+	Redacted Level = iota
+	Names
+	Open
 )
 
 func ParseLevel(s string) Level {
@@ -68,16 +63,16 @@ type Recorder struct {
 
 	names    map[string]string
 	nameSeq  int
-	prev     map[string]string // path -> leaf hash from the previous snapshot
+	prev     map[string]string
 	prevRoot string
 	prevLink string
 	commits  []session.ProvCommit
 	withheld map[string]withheldInfo
 	trunc    bool
 
-	keyCommits []KeyCommit         // local, holds real paths and salts for proofs
-	objects    map[string][]byte   // Open level: content by content hash
-	manifests  []map[string]string // Open level: per-commit path -> content hash
+	keyCommits []KeyCommit
+	objects    map[string][]byte
+	manifests  []map[string]string
 }
 
 type withheldInfo struct {
@@ -101,8 +96,7 @@ func New(root, level, sessionID string, salt []byte) *Recorder {
 	return r
 }
 
-// leafSalt derives a per-file salt from the session salt, so revealing one file's
-// salt exposes neither the session salt nor any other file's.
+// Revealing one file's salt exposes no other.
 func (r *Recorder) leafSalt(rel string) []byte {
 	m := hmac.New(sha256.New, r.salt)
 	m.Write([]byte(rel))
@@ -130,12 +124,8 @@ func contentHash(content []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// ContentHash is the plain content hash used for public artifacts, so a verifier
-// can compare it against an independently published reference hash.
 func ContentHash(content []byte) string { return contentHash(content) }
 
-// SaltedLeaf is the salted commitment used for private artifacts: the same leaf
-// hashing as the tracked files, so nothing about the content leaks.
 func SaltedLeaf(sessionSalt []byte, path string, content []byte) string {
 	m := hmac.New(sha256.New, sessionSalt)
 	m.Write([]byte(path))
@@ -180,8 +170,7 @@ func (r *Recorder) Snapshot(kind, name string) {
 		if withheld {
 			r.withheld[rel] = withheldInfo{hash: lh, size: info.Size()}
 		}
-		// A withheld file's hash is committed, but its content never enters the bundle,
-		// so a .kveritasignore file can never be reconstructed via checkout.
+		// Withheld content never enters the bundle; only its hash is committed.
 		if r.level >= Open && !withheld {
 			ch := contentHash(content)
 			r.objects[ch] = content
@@ -274,8 +263,6 @@ func (r *Recorder) diff(old map[string]string, cur map[string]string) []session.
 	return changes
 }
 
-// display returns the real path when names are disclosed, otherwise a stable
-// pseudonym that is consistent across the whole run.
 func (r *Recorder) display(rel string) string {
 	if r.level >= Names {
 		return rel
@@ -289,7 +276,6 @@ func (r *Recorder) display(rel string) string {
 	return p
 }
 
-// SizeBucket coarsens a byte size so a report never reveals an exact file size.
 func SizeBucket(n int64) string { return sizeBucket(n) }
 
 func sizeBucket(n int64) string {

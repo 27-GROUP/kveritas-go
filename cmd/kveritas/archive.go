@@ -141,7 +141,6 @@ func init() {
 	cmdArchiveRecord.Flags().StringVarP(&archiveOut, "output", "o", "", "output path (default: record.pdf next to the metadata)")
 }
 
-// Checks a sealed report the way verify does, without printing.
 func sealedReportProblem(path string, meta *pdf.EmbeddedData) string {
 	seal := meta.Seal
 	signedHMCA, signedCerts, haveSigned := signedAnalysis(seal.CanonicalJSON)

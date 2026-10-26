@@ -21,8 +21,6 @@ import (
 )
 
 type Options struct {
-	// Autolog keeps the results detected in output and metric files; FindAuto
-	// detects them without keeping them, so the caller can still decide.
 	Autolog  bool
 	FindAuto bool
 	Launch   string
@@ -36,8 +34,6 @@ type Result struct {
 	Auto     []session.Metric
 }
 
-// Recorder turns one process's lifetime into a run record: it samples hardware,
-// snapshots the project, and reads results from the lines it is given.
 type Recorder struct {
 	sess      *session.Session
 	command   []string
@@ -92,8 +88,7 @@ func NewRecorder(sess *session.Session, command, fileHints []string, opts Option
 	wg.Add(3)
 	go func() { defer wg.Done(); preHashes, preErr = hashFiles(fileHints) }()
 	go func() { defer wg.Done(); hw = hardware.Snapshot() }()
-	// The code as this run starts, so a run's source hash is its own and seal compares
-	// against the latest run, not the first.
+	// Each run hashes its own source, so seal compares against the latest run.
 	go func() {
 		defer wg.Done()
 		if files, err := bundle.CollectSourceFiles(sess.ProjectDir); err == nil && len(files) > 0 {
@@ -105,7 +100,6 @@ func NewRecorder(sess *session.Session, command, fileHints []string, opts Option
 		return nil, fmt.Errorf("pre-run file hashing: %w", preErr)
 	}
 
-	// Short interval gives enough resolution to integrate GPU energy for the compute cert.
 	r.sampler = hardware.NewSampler(100 * time.Millisecond)
 	r.sampler.Start()
 	r.rec = &session.RunRecord{
@@ -136,12 +130,10 @@ func NewRecorder(sess *session.Session, command, fileHints []string, opts Option
 	return r, nil
 }
 
-// Attach starts measuring the process tree rooted at pid.
 func (r *Recorder) Attach(pid int) {
 	r.pid = pid
 	r.obs.SetPID(pid)
 	r.sampler.SetPID(pid)
-	// Snapshots at start, each phase, and end make the run a verifiable state timeline.
 	r.provLevel = provenance.ParseLevel(r.sess.Disclosure)
 	r.salt = decodeSalt(r.sess.ProvSalt)
 	r.prov = provenance.New(r.sess.ProjectDir, r.sess.Disclosure, r.sess.ID, r.salt)
@@ -150,7 +142,6 @@ func (r *Recorder) Attach(pid int) {
 	r.rec.Command = redactCommand(r.command, r.provLevel)
 }
 
-// Abandon stops measuring a run whose process never started.
 func (r *Recorder) Abandon() {
 	r.obs.Stop()
 	r.sampler.Stop()
@@ -159,7 +150,6 @@ func (r *Recorder) Abandon() {
 
 func (r *Recorder) Stderr() io.Writer { return &r.stderrBuf }
 
-// Line takes one line of the process's output, in order.
 func (r *Recorder) Line(line string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -173,8 +163,7 @@ func (r *Recorder) Line(line string) {
 		}
 		return
 	}
-	// A malformed KV line is usually ordinary output (an LLM's "KV cache"), so it is
-	// noted once rather than per line.
+	// Usually ordinary output (an LLM's "KV cache"), so noted once.
 	if near && !r.nearMiss {
 		r.nearMiss = true
 		fmt.Fprintf(r.log, "[kveritas] Note: output line %d starts with KV but is not a result line; ignored\n", r.lineNum)
@@ -214,7 +203,6 @@ func (r *Recorder) handle(line string) bool {
 			r.artifacts = append(r.artifacts, *art)
 			fmt.Fprintf(r.log, "[kveritas] Artifact attested: %s (%s, %s)\n", d.Role, art.Visibility, where)
 		} else {
-			// Silence here would let a mistyped path look attested to its author.
 			fmt.Fprintf(r.log, "[kveritas] Warning: artifact %q not attested, cannot read %s (%s)\n", d.Role, d.Path, where)
 		}
 		return true
@@ -227,15 +215,13 @@ func (r *Recorder) handle(line string) bool {
 	return false
 }
 
-// Finish closes the run once its process has exited.
 func (r *Recorder) Finish(exitCode int) (*Result, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	defer r.endNodes()
 	rec := r.rec
 
-	// A low cap would make the stored rate depend on duration, silently rescaling
-	// anything later derived from how fast the counters move.
+	// A low cap would make the stored rate depend on duration.
 	samples := hardware.Decimate(r.sampler.Stop(), sampleCap())
 	if len(samples) > 0 {
 		fmt.Fprintf(r.log, "[kveritas] Hardware sampler: %d samples collected\n", len(samples))
@@ -261,7 +247,7 @@ func (r *Recorder) Finish(exitCode int) (*Result, error) {
 		}
 	}
 
-	// The cleartext activity map exposes real file names, so it ships only once names are disclosed.
+	// The activity map exposes real file names, so it ships only once names are disclosed.
 	trace := r.obs.Stop()
 	if r.provLevel >= provenance.Names {
 		rec.Trace = trace
@@ -332,8 +318,6 @@ func (r *Recorder) Finish(exitCode int) (*Result, error) {
 	if len(rec.Modified) > 0 {
 		fmt.Fprintf(r.log, "[kveritas] Warning: files modified during run: %v\n", rec.Modified)
 	}
-	// File-hint hashes are keyed by real paths and provenance already covers them,
-	// so they are dropped at the redacted level.
 	if r.provLevel < provenance.Names {
 		rec.PreHashes = nil
 		rec.PostHashes = nil
@@ -351,8 +335,7 @@ func (r *Recorder) Finish(exitCode int) (*Result, error) {
 	return &Result{Record: rec, Declared: r.parser.Declared(), Auto: auto}, nil
 }
 
-// A name the program declared itself is never shadowed by a detected one, and a
-// metric file beats the console line that echoed it.
+// Declared names win, and a metric file beats the console line that echoed it.
 func mergeAuto(explicit, lines, files []session.Metric) []session.Metric {
 	have := map[string]bool{}
 	for _, m := range explicit {
@@ -376,7 +359,6 @@ func mergeAuto(explicit, lines, files []session.Metric) []session.Metric {
 	return out
 }
 
-// Results every run has without anyone declaring them: what the hardware did.
 func measured(rec *session.RunRecord) []session.Metric {
 	var out []session.Metric
 	add := func(name string, v float64) {

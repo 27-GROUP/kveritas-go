@@ -115,8 +115,7 @@ func serveWeb() error {
 	return nil
 }
 
-// Refusing any other Host header stops a web page from reaching this server through
-// DNS rebinding; the headers keep the page from being framed or leaking its URL.
+// The Host check stops DNS rebinding; the headers stop framing and URL leaks.
 func (s *webServer) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.hosts[r.Host] {
@@ -218,7 +217,6 @@ func (s *webServer) state(r *http.Request) (any, error) {
 	return st, nil
 }
 
-// Every action goes through the same lock and the same code as its command.
 func (s *webServer) act(fn func(sess *session.Session) ([]string, error)) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

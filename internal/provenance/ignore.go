@@ -7,9 +7,6 @@ import (
 	"strings"
 )
 
-// ignoreMatcher reads .kveritasignore and decides which tracked files the author
-// chose to keep out of any bundle. It supports comments, glob patterns, and
-// directory patterns ending in "/".
 type ignoreMatcher struct {
 	patterns []string
 }

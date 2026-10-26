@@ -1,7 +1,3 @@
-// Package harness records an agentic session as a hash-chained log of designated
-// actions. Each entry's link binds the actor, its input and output, and the prior
-// chain, so the identity, content, or order of an action cannot be altered
-// undetected. Verification recomputes the chain and localizes the first failure.
 package harness
 
 import (
@@ -23,8 +19,6 @@ const (
 	lockFile    = "chain.lock"
 )
 
-// Carries the nonce and timestamp that went into the signature, and the public
-// key a verifier needs to check it later.
 type ServerSig struct {
 	Signature    string `json:"signature"`
 	Nonce        string `json:"nonce"`
@@ -32,8 +26,6 @@ type ServerSig struct {
 	PublicKeyPEM string `json:"public_key_pem"`
 }
 
-// Genesis binds the designation D and the session identity. Its Hash is the
-// chain root (the previous link of the first entry) and is signed by the server.
 type Genesis struct {
 	SessionID       string    `json:"session_id"`
 	MachineID       string    `json:"machine_id"`
@@ -47,10 +39,6 @@ type Genesis struct {
 	Server          ServerSig `json:"server"`
 }
 
-// Entry is one designated action in session order. TopAgent names the top-level
-// agent it belongs to, AgentID a sub-agent within it, and SpawnedID (on a spawn
-// result) the sub-agent that action created. Together they let the agent forest be
-// rebuilt from signed facts, so re-attribution across sub-agents is detectable.
 type Entry struct {
 	Index       int    `json:"index"`
 	Actor       string `json:"actor"`
@@ -81,8 +69,6 @@ type ActorAction struct {
 
 var actionOrder = []string{"turns", "reads", "writes", "commands", "spawns", "tools", "claims", "approvals", "other"}
 
-// bucket groups a ledger entry type into a human category. The ".result" half of
-// a call is folded into its action so counts reflect what was done.
 func bucket(t string) string {
 	if strings.HasSuffix(t, ".result") {
 		return ""
@@ -109,10 +95,6 @@ func bucket(t string) string {
 	}
 }
 
-// ActorTree reconstructs the agent forest from the entries: each top-level agent is
-// a root, and a sub-agent hangs under whichever agent spawned it. Spawn edges come
-// from the signed TopAgent/AgentID/SpawnedID fields, so re-attributing or hiding an
-// agent is detectable; a manual ParentActor is honored as a fallback off the hook.
 func ActorTree(entries []Entry) []*ActorNode {
 	topName := func(e Entry) string {
 		if e.TopAgent != "" {
@@ -204,8 +186,6 @@ func ActorTree(entries []Entry) []*ActorNode {
 	return roots
 }
 
-// Pins the final chain head and the server's signature over it, so a verifier can
-// confirm the chain ends where the server saw it end and no entries were dropped.
 type Seal struct {
 	ChainHead  string    `json:"chain_head"`
 	EntryCount int       `json:"entry_count"`
@@ -220,10 +200,6 @@ type Report struct {
 	Seal    Seal    `json:"seal"`
 }
 
-// Proof is a self-contained attestation that a specific prompt or output was
-// recorded at a specific position in a signed session. It carries the full chain
-// (hashes only) plus the revealed content for one entry; every other entry's
-// content stays a hash, so nothing else is exposed.
 type Proof struct {
 	Kind   string `json:"kind"`
 	Report Report `json:"report"`
@@ -251,9 +227,6 @@ func findEntry(entries []Entry, index int) *Entry {
 	return nil
 }
 
-// BuildProof reveals the given entry's input and/or output content, checking each
-// against the entry's committed hash so only genuinely-recorded content can be
-// proven. The session must already verify.
 func BuildProof(r *Report, index int, input, output []byte) (*Proof, error) {
 	if res := Verify(r); res.Verdict != "VERIFIED" && res.Verdict != "SELF-ATTESTED" {
 		return nil, fmt.Errorf("session does not verify (%s): %s", res.Verdict, res.Detail)
@@ -281,8 +254,6 @@ func BuildProof(r *Report, index int, input, output []byte) (*Proof, error) {
 	return p, nil
 }
 
-// VerifyProof checks the chain, then confirms the revealed content re-hashes to
-// the committed hash at the named entry.
 func VerifyProof(p *Proof) ProofResult {
 	if p.Kind != "kveritas-harness-proof" {
 		return ProofResult{Detail: "not a harness proof"}
@@ -317,8 +288,6 @@ func VerifyProof(p *Proof) ProofResult {
 	return out
 }
 
-// CoreHash hashes the genesis fields excluding its own Hash and the server
-// signature, giving the value the server signs and the chain root.
 func (g Genesis) CoreHash() (string, error) {
 	core := g
 	core.Hash = ""
@@ -326,8 +295,6 @@ func (g Genesis) CoreHash() (string, error) {
 	return crypto.CanonicalHash(core)
 }
 
-// linkOf computes an entry's link as the hash of the entry with an empty Link.
-// PrevLink is part of the entry, so the link binds the entire prior chain.
 func linkOf(e Entry) (string, error) {
 	c := e
 	c.Link = ""
@@ -381,7 +348,6 @@ func LoadChain(kvDir string) ([]Entry, error) {
 	return entries, sc.Err()
 }
 
-// Appends under a file lock and returns the entry with its index and link filled in.
 func AppendEntry(kvDir string, e Entry) (*Entry, error) {
 	unlock, err := lock(kvDir)
 	if err != nil {
@@ -433,8 +399,6 @@ func AppendEntry(kvDir string, e Entry) (*Entry, error) {
 	return &e, nil
 }
 
-// lock serializes chain appends across processes, since parallel sub-agents can
-// each fire a hook at once. An exclusive-create spinlock is enough and portable.
 func lock(kvDir string) (func(), error) {
 	path := filepath.Join(kvDir, lockFile)
 	for i := 0; i < 1000; i++ {
@@ -457,8 +421,6 @@ type Result struct {
 	ActorCounts map[string]int
 }
 
-// Verify checks the genesis signature, the full chain, and the seal signature,
-// localizing the first inconsistency it finds.
 func Verify(r *Report) Result {
 	res := Result{ActorCounts: map[string]int{}, EntryCount: len(r.Entries)}
 
@@ -522,8 +484,6 @@ func Verify(r *Report) Result {
 		return res
 	}
 
-	// Valid signatures prove the chain is intact, not who signed it: a session signed
-	// with any key but the K-Veritas server key is self-attested, as reports are.
 	for _, s := range []ServerSig{r.Genesis.Server, r.Seal.Server} {
 		if ok, err := crypto.OriginConfirmed(s.PublicKeyPEM, nil, s.SignedAt); err != nil || !ok {
 			res.Verdict = "SELF-ATTESTED"

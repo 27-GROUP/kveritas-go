@@ -22,8 +22,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// A checkpoint's files by content hash. The contents sit in .kveritas/objects and
-// never leave the machine; only a salted root of this map is anchored.
 type Manifest struct {
 	Files map[string]string `json:"files"`
 	Extra []string          `json:"extra,omitempty"`
@@ -142,9 +140,7 @@ func isText(path string) bool {
 	return !bytes.Contains(buf[:n], []byte{0})
 }
 
-// Text is stored zstd-compressed; anything else as a copy-on-write clone where the
-// filesystem allows it, otherwise a plain copy. Objects are named by the hash of the
-// bytes actually stored, so a file that changes mid-copy can never be mislabeled.
+// Named by the hash of the bytes stored, so a file changing mid-copy is never mislabeled.
 func store(kvDir string, cache *HashCache, rel, path string) (string, error) {
 	st, err := os.Stat(path)
 	if err != nil {
@@ -260,7 +256,6 @@ func LoadManifest(kvDir, id string) (*Manifest, error) {
 	return &m, nil
 }
 
-// Salted, so the anchored root reveals nothing about files anyone could guess.
 func (m *Manifest) Root(salt []byte) string {
 	_, canon, err := crypto.CanonicalHashWithBytes(m.Files)
 	if err != nil {
@@ -316,8 +311,7 @@ func CompareCached(projectDir string, m *Manifest, cache *HashCache) Drift {
 	return d
 }
 
-// Writes back every file that differs from the checkpoint. Files created since are
-// left alone: restore never deletes the author's work.
+// Restore never deletes the author's work.
 func Restore(projectDir, kvDir string, m *Manifest) (int, error) {
 	cache := LoadHashCache(kvDir)
 	defer cache.Save()

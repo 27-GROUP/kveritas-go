@@ -11,8 +11,6 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/session"
 )
 
-// KeyEntry is one file's commitment as it went into a snapshot. It holds the real
-// path and salt, so it stays local and is never published.
 type KeyEntry struct {
 	Path       string `json:"path"`
 	Salt       string `json:"salt"`
@@ -20,8 +18,6 @@ type KeyEntry struct {
 	Leaf       string `json:"leaf"`
 }
 
-// KeyCommit mirrors a published commit but keeps the real file list. Run labels
-// which run of the session it came from.
 type KeyCommit struct {
 	Run   int               `json:"run,omitempty"`
 	Index int               `json:"index"`
@@ -30,8 +26,6 @@ type KeyCommit struct {
 	Files []KeyEntry        `json:"files"`
 }
 
-// Keystore is the author's local record for building selective-disclosure proofs
-// later. It contains real paths and salts and must never be shared.
 type Keystore struct {
 	SessionID string      `json:"session_id"`
 	Commits   []KeyCommit `json:"commits"`
@@ -58,8 +52,6 @@ func LoadKeystore(path string) (*Keystore, error) {
 	return &k, json.Unmarshal(data, &k)
 }
 
-// ProofFile is the disclosure of one file: its content plus the snapshot's entry
-// list. The other files in that snapshot appear only as their salted commitments.
 type ProofFile struct {
 	Path        string            `json:"path"`
 	Run         int               `json:"run,omitempty"`
@@ -71,16 +63,12 @@ type ProofFile struct {
 	Entries     [][2]string       `json:"entries"`
 }
 
-// Proof is a self-contained selective-disclosure proof. It embeds the report's
-// signed seal, so it can be checked on its own, and reveals one or more files.
 type Proof struct {
 	Kind  string              `json:"kind"`
 	Seal  *session.SealRecord `json:"seal,omitempty"`
 	Files []ProofFile         `json:"files"`
 }
 
-// BuildProofFile reveals rel against the newest snapshot whose committed leaf
-// matches the file's current content. It fails if the file changed since the run.
 func (k *Keystore) BuildProofFile(projectDir, rel string) (*ProofFile, error) {
 	content, err := os.ReadFile(filepath.Join(projectDir, rel))
 	if err != nil {
@@ -118,8 +106,6 @@ func (k *Keystore) BuildProofFile(projectDir, rel string) (*ProofFile, error) {
 	return nil, fmt.Errorf("%s is not a tracked file in this session", rel)
 }
 
-// VerifyFile checks that a revealed file reconstructs its snapshot root, and that
-// the root is one the report actually signed.
 func VerifyFile(pf *ProofFile, signedRoots map[string]bool) error {
 	if !signedRoots[pf.Root] {
 		return fmt.Errorf("the proof's snapshot is not in the signed report")
@@ -157,9 +143,7 @@ type CommitRef struct {
 	Event session.ProvEvent
 }
 
-// A proof states its own run and event but nothing commits to them, so the labels are
-// taken from the report. One root can span several commits: when nothing changed
-// between two boundaries the snapshot is identical, and the file existed at both.
+// Labels come from the report: nothing commits to the proof's own.
 func SignedCommits(canonicalJSON string) map[string][]CommitRef {
 	var doc struct {
 		Runs []struct {
@@ -182,8 +166,6 @@ func SignedCommits(canonicalJSON string) map[string][]CommitRef {
 	return refs
 }
 
-// SignedRoots collects every provenance root committed in a report's canonical
-// JSON, which is what a proof's root must belong to.
 func SignedRoots(canonicalJSON string) map[string]bool {
 	var doc struct {
 		Runs []struct {

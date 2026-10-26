@@ -29,8 +29,6 @@ func Snapshot() session.HardwareInfo {
 	}
 }
 
-// MachineID returns an 8-byte hex host fingerprint. Not a secret; used to detect
-// replay across machines.
 func MachineID() string {
 	hostname, _ := os.Hostname()
 	raw := fmt.Sprintf("%s:%s:%s:%d", hostname, runtime.GOOS, runtime.GOARCH, runtime.NumCPU())
@@ -38,8 +36,6 @@ func MachineID() string {
 	return hex.EncodeToString(h[:8])
 }
 
-// DetailedCounters captures a hardware snapshot. Best-effort: a zero means the
-// counter was unavailable on this platform.
 func DetailedCounters() session.HardwareCounters {
 	c := session.HardwareCounters{}
 	switch runtime.GOOS {
@@ -60,8 +56,6 @@ func DetailedCounters() session.HardwareCounters {
 	return c
 }
 
-// CapturePhaseEvent records current counters at a phase boundary. A non-zero pid
-// scopes them to that process tree, matching the sampler.
 func CapturePhaseEvent(name string, line, pid int) session.PhaseEvent {
 	counters := DetailedCounters()
 	if pid != 0 {
@@ -188,7 +182,6 @@ func linuxCPUTime() float64 {
 				v, _ := strconv.ParseFloat(f, 64)
 				total += v
 			}
-			// Convert from jiffies (1/100 sec) to seconds
 			return total / 100.0
 		}
 	}
@@ -210,7 +203,7 @@ func linuxMemUsed() float64 {
 		}
 	}
 	if total > 0 {
-		return (total - avail) / 1048576 // KB to GB
+		return (total - avail) / 1048576
 	}
 	return 0
 }
@@ -224,7 +217,7 @@ func linuxCPUTemp() float64 {
 		}
 		v, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
 		if err == nil && v > 0 {
-			return v / 1000.0 // millidegrees to degrees
+			return v / 1000.0
 		}
 	}
 	return 0
@@ -240,7 +233,6 @@ func linuxDiskIO() (readMB, writeMB float64) {
 		if len(fields) < 14 {
 			continue
 		}
-		// Field 2 is device name; aggregate all devices
 		rSectors, _ := strconv.ParseFloat(fields[5], 64)
 		wSectors, _ := strconv.ParseFloat(fields[9], 64)
 		readMB += rSectors * 512 / (1024 * 1024)
@@ -301,8 +293,6 @@ func gpuCounters() gpuState {
 		"--format=csv,noheader,nounits",
 	).Output()
 	if err == nil {
-		// One line per GPU. Utilization, memory and power add up across devices, the
-		// same way per-process utilization is summed, so the run's share stays consistent.
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			fields := strings.Split(line, ",")
 			if len(fields) < 4 {

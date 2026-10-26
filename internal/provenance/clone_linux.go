@@ -6,7 +6,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A copy-on-write clone (Btrfs, XFS): instant, and no extra space until one side changes.
 func cloneFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {

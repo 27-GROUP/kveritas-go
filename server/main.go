@@ -1,4 +1,3 @@
-// K-Veritas attestation server: holds the RSA private key and signs client data hashes.
 package main
 
 import (
@@ -59,9 +58,9 @@ type srv struct {
 	privKey    *rsa.PrivateKey
 	pubKeyPEM  string
 	mu         sync.RWMutex
-	sessions   map[string]*serverSession  // session_id -> session
-	tokens     map[string]string          // token -> session_id
-	runHistory map[string][]runInvocation // session_id -> runs
+	sessions   map[string]*serverSession
+	tokens     map[string]string
+	runHistory map[string][]runInvocation
 }
 
 func main() {
@@ -153,7 +152,6 @@ func newServer(keysDir string) (*srv, error) {
 	}, nil
 }
 
-// POST /api/v1/init
 func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SessionID   string `json:"session_id"`
@@ -195,7 +193,6 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]string{"token": token}
 
-	// Sign the genesis hash so the harness designation is bound and unalterable.
 	if req.GenesisHash != "" {
 		if len(req.GenesisHash) != 64 {
 			writeError(w, http.StatusBadRequest, "genesis_hash must be 64 hex characters (SHA-256)")
@@ -219,7 +216,6 @@ func (s *srv) handleInit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// POST /api/v1/record-run
 func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token       string  `json:"token"`
@@ -272,8 +268,7 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 		k := *req.Invocation
 		have := anchored(s.runHistory[req.SessionID])
 		if prev, dup := have[k]; dup {
-			// A resend of a delivered anchor is fine; a different digest for the same
-			// invocation is an attempt to rewrite a finished run.
+			// A different digest for the same invocation is an attempt to rewrite a run.
 			if prev.RunDigest == req.RunDigest {
 				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 			} else {
@@ -306,7 +301,6 @@ func (s *srv) handleRecordRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// GET /api/v1/run-history?session_id=<id>&token=<token>
 func (s *srv) handleRunHistory(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")
 	token := r.URL.Query().Get("token")
@@ -332,7 +326,6 @@ func (s *srv) handleRunHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/v1/seal
 func (s *srv) handleSeal(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Token     string `json:"token"`
@@ -440,7 +433,6 @@ func (s *srv) handleSeal(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GET /api/v1/public-key
 func (s *srv) handlePublicKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"public_key": s.pubKeyPEM})
 }

@@ -39,9 +39,6 @@ type combinedMeta struct {
 	Snapshots []snapshotRef `json:"snapshots"`
 }
 
-// WriteBundle writes the per-run checkout store for an Open-level run: the
-// deduplicated file contents plus a manifest per snapshot. Returned as a no-op
-// below the Open level.
 func (r *Recorder) WriteBundle(outPath string) (string, error) {
 	if r.level < Open || len(r.objects) == 0 {
 		return "", nil
@@ -92,9 +89,6 @@ type BundleInput struct {
 	Path string
 }
 
-// MergeBundles folds every run's checkout store into a single zip the author can
-// upload. Objects are content-addressed, so identical files across runs are stored
-// once; each run's manifests are namespaced. It returns the bytes and their hash.
 func MergeBundles(inputs []BundleInput) ([]byte, string, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -156,10 +150,6 @@ func MergeBundles(inputs []BundleInput) ([]byte, string, error) {
 	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
 }
 
-// Checkout materializes the files of one snapshot from a combined bundle into
-// outDir. The selector is "<run>:<snapshot>" or just "<snapshot>" (which takes the
-// latest matching run); a snapshot is a phase name, "run_start"/"run_end", or an
-// index.
 func Checkout(bundlePath, which, outDir string) (int, error) {
 	zr, err := zip.OpenReader(bundlePath)
 	if err != nil {

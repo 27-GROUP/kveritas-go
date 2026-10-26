@@ -22,11 +22,10 @@ import (
 )
 
 const (
-	nodesDir     = "nodes"
-	nodeRunFile  = "run.json"
-	nodeBeat     = 5 * time.Second
-	nodeLiveness = 30 * time.Second
-	// A worker started this long before or after node 0 is not part of its run.
+	nodesDir        = "nodes"
+	nodeRunFile     = "run.json"
+	nodeBeat        = 5 * time.Second
+	nodeLiveness    = 30 * time.Second
 	nodeAdoptWindow = 10 * time.Minute
 )
 
@@ -45,8 +44,7 @@ type nodeStatus struct {
 	Record    *session.NodeRecord `json:"record,omitempty"`
 }
 
-// NodeRank is this machine's node in a multi-node run, 0 when it is the only or the
-// first one. KVERITAS_NODE_RANK wins, then the launcher's own flags, then Slurm.
+// KVERITAS_NODE_RANK wins, then the launcher's flags, then Slurm.
 func NodeRank(command []string) int {
 	if n, ok := envInt("KVERITAS_NODE_RANK"); ok {
 		return n
@@ -62,7 +60,6 @@ func NodeRank(command []string) int {
 	return 0
 }
 
-// 0 means unknown: node 0 then waits only for nodes that announced themselves.
 func expectedNodes(command []string) int {
 	if n, ok := envInt("KVERITAS_NODES"); ok {
 		return n
@@ -81,7 +78,6 @@ func envInt(key string) (int, bool) {
 	return n, err == nil && n >= 0
 }
 
-// Reads --name=v and --name v; an elastic range such as 1:4 counts as its maximum.
 func flagInt(args []string, names ...string) (int, bool) {
 	for i, a := range args {
 		for _, name := range names {
@@ -168,9 +164,7 @@ func nodeWait() time.Duration {
 	return 5 * time.Minute
 }
 
-// collectNodes waits for every node that joined the run to finish and returns their
-// records. Liveness is judged by node 0's clock watching heartbeats change, never by
-// comparing clocks across machines.
+// Liveness is judged by heartbeats changing on node 0's clock, never by comparing clocks.
 func collectNodes(kvDir, runID string, expected int) []session.NodeRecord {
 	dir := filepath.Join(kvDir, nodesDir)
 	deadline := time.Now().Add(nodeWait())
@@ -271,8 +265,6 @@ type nodeAgent struct {
 	stopBeat chan struct{}
 }
 
-// Measures this node the way node 0 measures its own run and hands the record to
-// node 0 through the shared session folder. An empty kvDir measures nothing.
 func startNodeAgent(kvDir string, rank int) *nodeAgent {
 	a := &nodeAgent{rank: rank, machine: hardware.MachineID(), stopBeat: make(chan struct{})}
 	if kvDir != "" {
@@ -330,7 +322,6 @@ func (a *nodeAgent) abandon() {
 	}
 }
 
-// Returns whether the record reached a run on node 0.
 func (a *nodeAgent) finish(exitCode int, envCmd []string, stdoutH, stderrH *countingHash) bool {
 	end := time.Now().UTC()
 	close(a.stopBeat)

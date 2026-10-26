@@ -103,7 +103,6 @@ func parseRocmInventory(data []byte) []GPU {
 	return out
 }
 
-// rocm-smi --showpids --json lists each process as "PID<n>": "name, gpus, vram bytes, sdma, cu occupancy".
 func parseRocmPIDs(data []byte) map[int]float64 {
 	var raw map[string]map[string]string
 	if json.Unmarshal(data, &raw) != nil {
@@ -160,8 +159,6 @@ var (
 	ioregMemRe  = regexp.MustCompile(`"In use system memory"\s*=\s*(\d+)`)
 )
 
-// Apple GPUs report utilization and memory through IOAccelerator without root;
-// power needs powermetrics and sudo, so it stays unmeasured.
 func parseIoreg(data []byte) gpuState {
 	g := gpuState{}
 	for _, m := range ioregUtilRe.FindAllSubmatch(data, -1) {
@@ -214,7 +211,6 @@ func appleInventory() []GPU {
 	return parseSystemProfiler(out)
 }
 
-// ps TIME is [[dd-]hh:]mm:ss[.cc]; returns seconds.
 func parsePSTime(s string) float64 {
 	days := 0.0
 	if d, rest, ok := strings.Cut(s, "-"); ok {
