@@ -23,6 +23,7 @@ type verifyDoc struct {
 	Runs             []runDoc                  `json:"runs,omitempty"`
 	BundleMatch      *bool                     `json:"bundle_match,omitempty"`
 	LedgerCheckpoint *checkpointDoc            `json:"ledger_checkpoint,omitempty"`
+	Signer           *signerDoc                `json:"signer,omitempty"`
 	Audit            *client.ServerAuditResult `json:"server_audit,omitempty"`
 	AuditError       string                    `json:"server_audit_error,omitempty"`
 }

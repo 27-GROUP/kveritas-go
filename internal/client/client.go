@@ -13,28 +13,51 @@ import (
 	"time"
 
 	"github.com/Mamadou2727/kveritas-go/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/signer"
 )
+
+var Version = "dev"
 
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
 }
 
+type versionHeader struct{}
+
+func (versionHeader) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("X-KV-Version", Version)
+	return http.DefaultTransport.RoundTrip(r)
+}
+
 func New(baseURL string) *Client {
 	return &Client{
 		BaseURL:    baseURL,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: versionHeader{}},
 	}
 }
 
 type initRequest struct {
-	SessionID string `json:"session_id"`
-	MachineID string `json:"machine_id"`
-	InitAt    string `json:"init_at"`
+	SessionID       string `json:"session_id"`
+	MachineID       string `json:"machine_id"`
+	InitAt          string `json:"init_at"`
+	SignerPublicKey string `json:"signer_public_key,omitempty"`
+	SignerSignature string `json:"signer_signature,omitempty"`
+}
+
+type SignerProof struct {
+	PublicKey string
+	Signature string
 }
 
 type InitResponse struct {
-	Token string `json:"token"`
+	Token  string `json:"token"`
+	Latest string `json:"latest"`
+	Signer *struct {
+		Fingerprint string            `json:"fingerprint"`
+		Unsealed    []signer.Unsealed `json:"unsealed"`
+	} `json:"signer"`
 }
 
 type sealRequest struct {
@@ -44,6 +67,9 @@ type sealRequest struct {
 	DataHash  string       `json:"data_hash"`
 	RunCount  int          `json:"run_count"`
 	Anchors   []SealAnchor `json:"anchors,omitempty"`
+
+	SignerPublicKey string `json:"signer_public_key,omitempty"`
+	SignerSignature string `json:"signer_signature,omitempty"`
 }
 
 type SealAnchor struct {
@@ -68,6 +94,7 @@ type SealResponse struct {
 	SignedMessageHash string                    `json:"signed_message_hash"`
 	PublicKeyPEM      string                    `json:"public_key_pem"`
 	Checkpoint        *session.LedgerCheckpoint `json:"checkpoint"`
+	SignerHistory     *session.SignerHistory    `json:"signer_history"`
 }
 
 type RunAnchor struct {
@@ -103,13 +130,13 @@ type RunHistoryResponse struct {
 	TotalRuns int                      `json:"total_runs"`
 }
 
-func (c *Client) Init(sessionID, machineID string, initAt time.Time) (*InitResponse, error) {
+func (c *Client) Init(sessionID, machineID, initAt string, proof *SignerProof) (*InitResponse, error) {
 	var resp InitResponse
-	err := c.post("/api/v1/init", initRequest{
-		SessionID: sessionID,
-		MachineID: machineID,
-		InitAt:    initAt.UTC().Format(time.RFC3339Nano),
-	}, &resp)
+	req := initRequest{SessionID: sessionID, MachineID: machineID, InitAt: initAt}
+	if proof != nil {
+		req.SignerPublicKey, req.SignerSignature = proof.PublicKey, proof.Signature
+	}
+	err := c.post("/api/v1/init", req, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -145,16 +172,20 @@ func (c *Client) HarnessInit(sessionID, machineID string, initAt time.Time, gene
 	return &resp, nil
 }
 
-func (c *Client) Seal(sess *session.Session, dataHash string, runCount int, anchors []SealAnchor) (*SealResponse, error) {
+func (c *Client) Seal(sess *session.Session, dataHash string, runCount int, anchors []SealAnchor, proof *SignerProof) (*SealResponse, error) {
 	var resp SealResponse
-	err := c.post("/api/v1/seal", sealRequest{
+	req := sealRequest{
 		Token:     sess.Token,
 		SessionID: sess.ID,
 		MachineID: sess.MachineID,
 		DataHash:  dataHash,
 		RunCount:  runCount,
 		Anchors:   anchors,
-	}, &resp)
+	}
+	if proof != nil {
+		req.SignerPublicKey, req.SignerSignature = proof.PublicKey, proof.Signature
+	}
+	err := c.post("/api/v1/seal", req, &resp)
 	if err != nil {
 		return nil, err
 	}
@@ -221,6 +252,60 @@ func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (c *Client) Abandon(sessionID string, k *signer.Key) error {
+	var resp struct{}
+	return c.post("/api/v1/signer/abandon", map[string]string{
+		"session_id": sessionID, "public_key": k.Public(), "signature": k.Sign(signer.AbandonMessage(sessionID)),
+	}, &resp)
+}
+
+func (c *Client) LinkStart(k *signer.Key) (string, error) {
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	var resp struct {
+		Code string `json:"code"`
+	}
+	err := c.post("/api/v1/signer/link/start", map[string]string{
+		"public_key": k.Public(), "at": at, "signature": k.Sign(signer.LinkStartMessage(at)),
+	}, &resp)
+	return resp.Code, err
+}
+
+func (c *Client) LinkConfirm(code string, k *signer.Key) (*signer.Statement, error) {
+	var resp signer.Statement
+	err := c.post("/api/v1/signer/link/confirm", map[string]string{
+		"code": code, "public_key": k.Public(), "signature": k.Sign(signer.LinkMessage(code)),
+	}, &resp)
+	return &resp, err
+}
+
+func (c *Client) Revoke(target string, k *signer.Key) error {
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	var resp struct{}
+	return c.post("/api/v1/signer/revoke", map[string]string{
+		"target": target, "at": at, "public_key": k.Public(), "signature": k.Sign(signer.RevokeMessage(target, at)),
+	}, &resp)
+}
+
+func (c *Client) SignerHistory(fp string) (*signer.Statement, error) {
+	resp, err := c.HTTPClient.Get(c.BaseURL + "/api/v1/signer/history?fp=" + fp)
+	if err != nil {
+		return nil, fmt.Errorf("cannot reach server: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ServerError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+	}
+	var st signer.Statement
+	return &st, json.Unmarshal(body, &st)
 }
 
 func (c *Client) PublicKeyPEM() (string, error) {
@@ -295,6 +380,15 @@ type AnchorCheck struct {
 	DelaySec   *float64 `json:"delay_sec"`
 }
 
+type SignerCheck struct {
+	Present      bool              `json:"present"`
+	SelfReported bool              `json:"self_reported"`
+	Signed       bool              `json:"signed"`
+	Bound        bool              `json:"bound"`
+	Statement    *signer.Statement `json:"statement"`
+	Current      *signer.Statement `json:"current"`
+}
+
 type ServerAuditResult struct {
 	CryptoStatus struct {
 		Valid     bool   `json:"valid"`
@@ -308,6 +402,7 @@ type ServerAuditResult struct {
 		HMCAVerdict      *string       `json:"hmca_verdict"`
 		HMCAFlags        []string      `json:"hmca_flags"`
 		RunAnchors       []AnchorCheck `json:"run_anchors"`
+		Signer           *SignerCheck  `json:"signer"`
 		RunAnchorSummary string        `json:"run_anchor_summary"`
 		LedgerCheckpoint struct {
 			Report    *CheckpointCheck `json:"report"`
@@ -397,7 +492,7 @@ func (c *Client) AuditReport(reportPath, bundlePath, manuscriptPath string) (*Se
 		return nil, fmt.Errorf("server did not start the audit")
 	}
 
-	poll := &http.Client{Timeout: 30 * time.Second}
+	poll := &http.Client{Timeout: 30 * time.Second, Transport: versionHeader{}}
 	deadline := time.Now().Add(15 * time.Minute)
 	for time.Now().Before(deadline) {
 		time.Sleep(3 * time.Second)

@@ -111,3 +111,17 @@ func CheckpointSigned(seq int64, entryHash, at, signature string) bool {
 	}
 	return false
 }
+
+func HistoryPayload(statement string) string {
+	return "kveritas-signer-history:" + HashBytes([]byte(statement))
+}
+
+func HistorySigned(statement, at, signature string) bool {
+	payload := HistoryPayload(statement)
+	for _, k := range TrustedKeys() {
+		if k.validAt(at) && VerifyPSS(k.key, payload, signature) == nil {
+			return true
+		}
+	}
+	return false
+}

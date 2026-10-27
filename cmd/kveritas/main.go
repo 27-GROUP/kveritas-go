@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/Mamadou2727/kveritas-go/internal/provenance"
 	"github.com/Mamadou2727/kveritas-go/internal/runner"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
+	"github.com/Mamadou2727/kveritas-go/internal/signer"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
@@ -65,6 +67,11 @@ History (every step is anchored; nothing is ever deleted):
   kveritas set-aside <run>   Move a run out of the main results, keeping it in the report.
   kveritas web               The same, in your browser: tree, changed files, buttons.
 
+Other sessions (each report lists the sessions you started but never sealed):
+  kveritas key               This machine's signer key and its session history.
+  kveritas key link [code]   Share one history across your machines.
+  kveritas abandon [id]      Drop a session; it shows as abandoned, not hidden.
+
   kveritas status            Your branch, files changed since the checkpoint, the session.
   kveritas update            Update to the latest version.
 
@@ -92,6 +99,7 @@ This action is irreversible -- the session token is lost.`,
 		if err != nil {
 			return fmt.Errorf("no session found to clean")
 		}
+		abandonQuietly(kvDir)
 		if err := os.RemoveAll(kvDir); err != nil {
 			return fmt.Errorf("removing session directory: %w", err)
 		}
@@ -120,11 +128,13 @@ func shortRun() {
 }
 
 func main() {
+	client.Version = version
 	root.AddCommand(cmdInit, cmdRun, cmdRecord, cmdSeal, cmdVerify, cmdCheck, cmdStatus, cmdGenerateClaims, cmdUpdate, cmdClean)
 	root.AddCommand(cmdProve, cmdVerifyProof, cmdCheckout)
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
 	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdAutolog, cmdShell)
 	root.AddCommand(cmdCheckpoint, cmdRestore, cmdBranch, cmdSetAside, cmdLog, cmdWeb)
+	root.AddCommand(cmdKey, cmdAbandon)
 	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -481,18 +491,45 @@ var cmdInit = &cobra.Command{
 
 		var token string
 		serverURL := initServer
+		initAt := time.Now().UTC()
+		key, kerr := signer.Load()
+		if kerr != nil {
+			fmt.Fprintf(os.Stderr, "[kveritas] Warning: no signer key (%v); this report will not list your other sessions\n", kerr)
+		}
 
 		if !initLocal {
 			c := client.New(serverURL)
-			initResp, err := c.Init(sessionID, machineID, time.Now())
+			var proof *client.SignerProof
+			if key != nil {
+				proof = &client.SignerProof{PublicKey: key.Public(), Signature: key.Sign(signer.StartMessage(sessionID, initAt.Format(time.RFC3339Nano)))}
+			}
+			initResp, err := c.Init(sessionID, machineID, initAt.Format(time.RFC3339Nano), proof)
 			if err != nil {
 				_ = os.RemoveAll(kvDir)
+				var se *client.ServerError
+				if errors.As(err, &se) && se.Status == http.StatusUpgradeRequired {
+					return unsupportedVersion()
+				}
+				if errors.As(err, &se) && se.Status == 403 {
+					return fmt.Errorf("server refused the session: %s", se.Body)
+				}
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
 			token = initResp.Token
+			if initResp.Latest != "" {
+				fmt.Fprintf(os.Stderr, "[kveritas] kveritas %s is available (this is %s): %s\n", initResp.Latest, version, updateCommand())
+			}
+			if initResp.Signer != nil {
+				printUnsealed(initResp.Signer.Unsealed)
+			}
 		} else {
 			token = "local"
 			serverURL = "local"
+			if key != nil {
+				if err := signer.RecordLocal(key, "start", sessionID); err != nil {
+					fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record the session locally: %v\n", err)
+				}
+			}
 		}
 
 		if initShowNames && initDisclosure == "redacted" {
@@ -506,7 +543,7 @@ var cmdInit = &cobra.Command{
 
 		sess := &session.Session{
 			ID:         sessionID,
-			InitAt:     time.Now().UTC(),
+			InitAt:     initAt,
 			ProjectDir: wd,
 			MachineID:  machineID,
 			Token:      token,
@@ -514,6 +551,9 @@ var cmdInit = &cobra.Command{
 			Runs:       []string{},
 			Disclosure: initDisclosure,
 			ProvSalt:   salt,
+		}
+		if key != nil {
+			sess.Signer = key.Fingerprint()
 		}
 		if initAutolog {
 			sess.Results = "autolog"
@@ -938,7 +978,7 @@ func harnessSeal(kvDir string, sess *session.Session) error {
 		sealSig = *s
 	} else {
 		c := client.New(sess.ServerURL)
-		resp, err := c.Seal(sess, chainHead, len(entries), nil)
+		resp, err := c.Seal(sess, chainHead, len(entries), nil, nil)
 		if err != nil {
 			return fmt.Errorf("server seal failed: %w", err)
 		}
@@ -1565,6 +1605,9 @@ var cmdSeal = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if seal.SignerHistory == nil && (sess.ServerURL == "local" || sealKeyPath != "") {
+			seal.SignerHistory = localSignerHistory(sess, dataHash)
+		}
 		seal.SourceBundleHash = bundleHash
 		seal.CheckoutBundleHash = checkoutBundleHash
 		seal.CanonicalJSON = string(canonicalBytes)
@@ -1938,7 +1981,11 @@ func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash strin
 	for _, st := range sess.Steps {
 		anchors = append(anchors, client.SealAnchor{Run: -1, Invocation: st.Invocation, RunDigest: st.Digest})
 	}
-	resp, err := c.Seal(sess, dataHash, len(runs), anchors)
+	proof, err := sealProof(sess, dataHash)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.Seal(sess, dataHash, len(runs), anchors, proof)
 	if err != nil {
 		var se *client.ServerError
 		if errors.As(err, &se) {
@@ -1958,6 +2005,7 @@ func serverSeal(sess *session.Session, runs []*session.RunRecord, dataHash strin
 		PublicKeyPEM:      resp.PublicKeyPEM,
 		ServerURL:         sess.ServerURL,
 		LedgerCheckpoint:  resp.Checkpoint,
+		SignerHistory:     resp.SignerHistory,
 	}, nil
 }
 
@@ -2224,6 +2272,7 @@ var cmdVerify = &cobra.Command{
 				jr.LedgerCheckpoint = &checkpointDoc{Seq: cp.Seq, At: cp.At, Signed: signed}
 			}
 		}
+		renderSignerHistory(seal, jr)
 
 		// Re-analysis is shown when it disagrees: the detector improves, sealed reports do not.
 		if signedHMCA != nil && signedHMCA.Verdict != "" {
@@ -2424,6 +2473,11 @@ func renderServerAudit(r *client.ServerAuditResult) {
 		default:
 			fmt.Fprintf(out, "  Ledger checkpoint:    TRUNCATED, %s\n", cp.Reason)
 		}
+	}
+	if sc := cs.Signer; sc != nil && sc.Statement != nil && sc.Current != nil {
+		more, unsealed := sc.Current.Started-sc.Statement.Started, sc.Current.Open+sc.Current.Abandoned-sc.Statement.Open-sc.Statement.Abandoned
+		fmt.Fprintf(out, "  Signer sessions:      %d started since the seal, %d more not sealed (now %d started, %d sealed)\n",
+			max(more, 0), max(unsealed, 0), sc.Current.Started, sc.Current.Sealed)
 	}
 	if len(cs.RunAnchors) > 0 {
 		fmt.Fprintf(out, "  Run anchors:          %s\n", cs.RunAnchorSummary)

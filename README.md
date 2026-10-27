@@ -86,6 +86,7 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 - **Artifacts.** Attest a model or dataset by public hash or private commitment.
 - **Run anchors.** Every run anchored at the server when it ends, failed ones too.
 - **History.** Checkpoints, restore, branches, set-aside, each anchored; nothing erased.
+- **Other sessions.** Signer key per machine; each report lists sessions started but never sealed.
 - **Origin.** Signed by a trusted K-Veritas key: `VERIFIED`. Any other key: `SELF-ATTESTED`.
 - **Agent sessions.** `init --harness`: hash-chained log of agent actions.
 
@@ -108,6 +109,8 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `checkout <bundle.zip> <[run:]snapshot> <dir>` | Rebuild a snapshot. |
 | `check --claims c.json --report r.pdf` | Check paper claims. |
 | `status [-v]` / `update` / `clean` | Branch and changed files, self-update, remove session. |
+| `key` / `key link [code]` / `key revoke [fp]` / `key export` | Signer key, share history across machines, revoke, CI secret. |
+| `abandon [id]` | Drop a session; listed as abandoned. |
 
 ## Cryptographic protocol
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mamadou2727/kveritas-go/internal/compute"
 	"github.com/Mamadou2727/kveritas-go/internal/session"
+	kvsigner "github.com/Mamadou2727/kveritas-go/internal/signer"
 )
 
 const (
@@ -868,6 +869,7 @@ func (b *builder) verificationSection(seal *session.SealRecord) {
 	if cp := seal.LedgerCheckpoint; cp != nil {
 		rows = append(rows, []string{"Ledger checkpoint", fmt.Sprintf("entry #%d, %s", cp.Seq, cp.At)})
 	}
+	rows = append(rows, []string{"Signer sessions", signerSessions(seal.SignerHistory)})
 	b.table([]string{"Field", "Value"}, []float64{1, 3.2}, rows)
 
 	anchored, late := 0, 0
@@ -1046,4 +1048,18 @@ func (b *builder) appendix(runs []*session.RunRecord, seal *session.SealRecord) 
 	for _, l := range citeBibTeX {
 		b.line(l, "C", 7.5, mL)
 	}
+}
+
+func signerSessions(sh *session.SignerHistory) string {
+	var st kvsigner.Statement
+	if sh == nil || json.Unmarshal([]byte(sh.Statement), &st) != nil {
+		return "not recorded: this report covers its own session only"
+	}
+	s := fmt.Sprintf("key %s: %d started, %d sealed, %d abandoned, %d never sealed", st.Signer[:min(16, len(st.Signer))], st.Started, st.Sealed, st.Abandoned, st.Open)
+	if sh.SelfReported {
+		s += " (self-reported, offline)"
+	} else if st.Started <= 1 {
+		s += " (new signer)"
+	}
+	return s
 }

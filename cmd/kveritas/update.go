@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -111,4 +112,30 @@ func checkReleaseSum(path, name string) error {
 		return fmt.Errorf("checksum mismatch for %s; update refused", name)
 	}
 	return nil
+}
+
+func updateCommand() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "kveritas update"
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	slash := filepath.ToSlash(exe)
+	wheels := "https://27-group.github.io/kveritas-releases/wheels/"
+	switch {
+	case strings.Contains(slash, "/uv/tools/"):
+		return "uv tool upgrade kveritas --find-links " + wheels
+	case fileExists(filepath.Join(filepath.Dir(filepath.Dir(exe)), "pyvenv.cfg")) || strings.Contains(slash, "/site-packages/"):
+		return "pip install -U kveritas --find-links " + wheels
+	}
+	return "kveritas update"
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func unsupportedVersion() error {
+	return fmt.Errorf("this version of kveritas (%s) is no longer supported.\nUpdate, then run the command again:\n  %s", version, updateCommand())
 }

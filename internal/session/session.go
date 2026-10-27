@@ -35,6 +35,7 @@ type Session struct {
 	Branch      string      `json:"branch,omitempty"`
 	Steps       []Step      `json:"steps,omitempty"`
 	Failed      []FailedRun `json:"failed,omitempty"`
+	Signer      string      `json:"signer,omitempty"`
 }
 
 type Step struct {
@@ -391,6 +392,13 @@ type SealRecord struct {
 	RunHistory         []LedgerRunEntry  `json:"run_history,omitempty"`
 	TotalRunCount      int               `json:"total_run_count,omitempty"`
 	LedgerCheckpoint   *LedgerCheckpoint `json:"ledger_checkpoint,omitempty"`
+	SignerHistory      *SignerHistory    `json:"signer_history,omitempty"`
+}
+
+type SignerHistory struct {
+	Statement    string `json:"statement"`
+	Signature    string `json:"signature,omitempty"`
+	SelfReported bool   `json:"self_reported,omitempty"`
 }
 
 type LedgerCheckpoint struct {
