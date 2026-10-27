@@ -70,7 +70,6 @@ History (every step is anchored; nothing is ever deleted):
 Other sessions (each report lists the sessions you started but never sealed):
   kveritas key               This machine's signer key and its session history.
   kveritas key link [code]   Share one history across your machines.
-  kveritas abandon [id]      Drop a session; it shows as abandoned, not hidden.
 
   kveritas status            Your branch, files changed since the checkpoint, the session.
   kveritas update            Update to the latest version.
@@ -144,7 +143,7 @@ func main() {
 	root.AddCommand(cmdHarnessProve, cmdVerifyHarnessProof)
 	root.AddCommand(cmdArchiveRecord, cmdVersion, cmdHardware, cmdAutolog, cmdShell)
 	root.AddCommand(cmdCheckpoint, cmdRestore, cmdBranch, cmdSetAside, cmdLog, cmdWeb)
-	root.AddCommand(cmdKey, cmdAbandon)
+	root.AddCommand(cmdKey)
 	shortRun()
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -2489,7 +2488,7 @@ func renderServerAudit(r *client.ServerAuditResult) {
 		}
 	}
 	if sc := cs.Signer; sc != nil && sc.Statement != nil && sc.Current != nil {
-		more, unsealed := sc.Current.Started-sc.Statement.Started, sc.Current.Open+sc.Current.Abandoned-sc.Statement.Open-sc.Statement.Abandoned
+		more, unsealed := sc.Current.Started-sc.Statement.Started, sc.Current.Open-sc.Statement.Open
 		fmt.Fprintf(out, "  Signer sessions:      %d started since the seal, %d more not sealed (now %d started, %d sealed)\n",
 			max(more, 0), max(unsealed, 0), sc.Current.Started, sc.Current.Sealed)
 	}

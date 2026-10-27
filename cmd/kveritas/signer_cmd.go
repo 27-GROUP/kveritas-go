@@ -100,7 +100,7 @@ func renderSignerHistory(seal *session.SealRecord, jr *verifyDoc) {
 	default:
 		fmt.Fprintf(out, "Signer:     key %s, first seen %s, history signed by the given key\n", shortFP(st.Signer), shortTime(st.FirstSeen))
 	}
-	fmt.Fprintf(out, "Sessions:   %d started, %d sealed, %d abandoned, %d never sealed", st.Started, st.Sealed, st.Abandoned, st.Open)
+	fmt.Fprintf(out, "Sessions:   %d started, %d sealed, %d never sealed", st.Started, st.Sealed, st.Open)
 	if st.Keys > 1 {
 		fmt.Fprintf(out, " (%d linked keys)", st.Keys)
 	}
@@ -109,11 +109,7 @@ func renderSignerHistory(seal *session.SealRecord, jr *verifyDoc) {
 		fmt.Fprintf(out, "            New signer: no earlier history, other attempts cannot be ruled out.\n")
 	}
 	for _, u := range st.Unsealed[:min(len(st.Unsealed), 10)] {
-		status := "never sealed"
-		if u.Status == "abandoned" {
-			status = "abandoned"
-		}
-		fmt.Fprintf(out, "  %s  started %s, %s, %s\n", u.Session, shortTime(u.StartedAt), plural(u.Runs, "run"), status)
+		fmt.Fprintf(out, "  %s  started %s, %s, never sealed\n", u.Session, shortTime(u.StartedAt), plural(u.Runs, "run"))
 	}
 	if n := len(st.Unsealed) - 10; n > 0 {
 		fmt.Fprintf(out, "  and %d more\n", n)
@@ -203,52 +199,6 @@ func cleanByID(id string) error {
 	return nil
 }
 
-var cmdAbandon = &cobra.Command{
-	Use:   "abandon [session-id]",
-	Short: "Drop a session: it is removed here and listed as abandoned in your later reports",
-	Args:  cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		key, err := signer.Load()
-		if err != nil {
-			return err
-		}
-		if len(args) == 1 {
-			if err := client.New(keyServer).Abandon(args[0], key); err != nil {
-				return serverRefusal(err)
-			}
-			fmt.Printf("Session %s abandoned.\n", args[0])
-			return nil
-		}
-		if os.Getenv("KVERITAS_SHELL") != "" {
-			return fmt.Errorf("exit the shell first, then run kveritas abandon")
-		}
-		kvDir, err := session.Find()
-		if err != nil {
-			return err
-		}
-		sess, err := session.Load(kvDir)
-		if err != nil {
-			return err
-		}
-		if sess.Signer == "" {
-			return fmt.Errorf("this session has no signer key; remove it with 'kveritas clean'")
-		}
-		if sess.ServerURL == "local" {
-			err = signer.RecordLocal(key, "abandon", sess.ID)
-		} else {
-			err = client.New(sess.ServerURL).Abandon(sess.ID, key)
-		}
-		if err != nil {
-			return serverRefusal(err)
-		}
-		if err := os.RemoveAll(kvDir); err != nil {
-			return err
-		}
-		fmt.Printf("Session %s abandoned and removed.\n", sess.ID[:8])
-		return nil
-	},
-}
-
 func serverRefusal(err error) error {
 	var se *client.ServerError
 	if errors.As(err, &se) {
@@ -284,7 +234,7 @@ config folder and survives updates. In CI, set KVERITAS_SIGNER_KEY
 			fmt.Println("History:    no sessions yet")
 		default:
 			fmt.Printf("First seen: %s\n", shortTime(st.FirstSeen))
-			fmt.Printf("Sessions:   %d started, %d sealed, %d abandoned, %d never sealed\n", st.Started, st.Sealed, st.Abandoned, st.Open)
+			fmt.Printf("Sessions:   %d started, %d sealed, %d never sealed\n", st.Started, st.Sealed, st.Open)
 			if st.Keys > 1 {
 				fmt.Printf("Keys:       %d linked (%d revoked)\n", st.Keys, st.RevokedKeys)
 				for _, k := range st.KeyList {
@@ -411,7 +361,7 @@ var cmdKeyExport = &cobra.Command{
 }
 
 func init() {
-	for _, c := range []*cobra.Command{cmdKey, cmdAbandon, cmdClean} {
+	for _, c := range []*cobra.Command{cmdKey, cmdClean} {
 		c.PersistentFlags().StringVar(&keyServer, "server", defaultServer, "attestation server URL")
 	}
 	cmdKey.AddCommand(cmdKeyLink, cmdKeyRevoke, cmdKeyExport)

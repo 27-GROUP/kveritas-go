@@ -110,7 +110,6 @@ Strict: `KV cache: 2 GB` is ignored. Old `KVERITAS_*` lines still work.
 | `check --claims c.json --report r.pdf` | Check paper claims. |
 | `status [-v]` / `update` / `clean` | Branch and changed files, self-update, remove session. |
 | `key` / `key link [code]` / `key revoke [fp]` / `key export` | Signer key, share history across machines, revoke, CI secret. |
-| `abandon [id]` | Drop a session; listed as abandoned. |
 
 ## Cryptographic protocol
 

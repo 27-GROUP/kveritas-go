@@ -122,10 +122,6 @@ func SealMessage(sessionID, dataHash string) string {
 	return "kveritas-signer-seal:" + sessionID + ":" + dataHash
 }
 
-func AbandonMessage(sessionID string) string {
-	return "kveritas-signer-abandon:" + sessionID
-}
-
 func CleanMessage(sessionID string) string {
 	return "kveritas-signer-clean:" + sessionID
 }
@@ -153,7 +149,6 @@ type Statement struct {
 	FirstSeen   string     `json:"first_seen"`
 	Started     int        `json:"started"`
 	Sealed      int        `json:"sealed"`
-	Abandoned   int        `json:"abandoned"`
 	Open        int        `json:"open"`
 	Unsealed    []Unsealed `json:"unsealed"`
 	KeyList     []KeyInfo  `json:"key_list,omitempty"`
@@ -240,8 +235,6 @@ func localSessions(k *Key) ([]localSession, string) {
 		case s == nil:
 		case e.Kind == "seal":
 			s.status = "sealed"
-		case e.Kind == "abandon":
-			s.status = "abandoned"
 		case e.Kind == "clean":
 			s.status = "cleaned"
 		}
@@ -285,8 +278,6 @@ func LocalStatement(k *Key, sessionID, dataHash string) (string, error) {
 		switch s.status {
 		case "sealed":
 			st.Sealed++
-		case "abandoned":
-			st.Abandoned++
 		default:
 			st.Open++
 		}

@@ -1055,7 +1055,7 @@ func signerSessions(sh *session.SignerHistory) string {
 	if sh == nil || json.Unmarshal([]byte(sh.Statement), &st) != nil {
 		return "not recorded: this report covers its own session only"
 	}
-	s := fmt.Sprintf("key %s: %d started, %d sealed, %d abandoned, %d never sealed", st.Signer[:min(16, len(st.Signer))], st.Started, st.Sealed, st.Abandoned, st.Open)
+	s := fmt.Sprintf("key %s: %d started, %d sealed, %d never sealed", st.Signer[:min(16, len(st.Signer))], st.Started, st.Sealed, st.Open)
 	if sh.SelfReported {
 		s += " (self-reported, offline)"
 	} else if st.Started <= 1 {

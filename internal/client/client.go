@@ -254,13 +254,6 @@ func (c *Client) RunHistory(sess *session.Session) (*RunHistoryResponse, error) 
 	return &result, nil
 }
 
-func (c *Client) Abandon(sessionID string, k *signer.Key) error {
-	var resp struct{}
-	return c.post("/api/v1/signer/abandon", map[string]string{
-		"session_id": sessionID, "public_key": k.Public(), "signature": k.Sign(signer.AbandonMessage(sessionID)),
-	}, &resp)
-}
-
 func (c *Client) Clean(sessionID string, k *signer.Key) error {
 	var resp struct{}
 	return c.post("/api/v1/signer/clean", map[string]string{
