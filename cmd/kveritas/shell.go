@@ -89,6 +89,9 @@ func runShell() error {
 	}
 	kvDir, err := session.Find()
 	if err != nil {
+		if err := openOnThisMachine(initServer); err != nil {
+			return err
+		}
 		initDisclosure = askDisclosure()
 		if err := cmdInit.RunE(cmdInit, nil); err != nil {
 			return err

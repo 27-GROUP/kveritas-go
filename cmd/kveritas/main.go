@@ -100,6 +100,9 @@ that session wherever its folder is. Cannot be undone.`,
 		if len(args) == 1 {
 			return cleanByID(args[0])
 		}
+		if os.Getenv("KVERITAS_SHELL") != "" {
+			return fmt.Errorf("exit the shell first, then run kveritas clean")
+		}
 		kvDir, err := session.Find()
 		if err != nil {
 			return fmt.Errorf("no session found to clean")

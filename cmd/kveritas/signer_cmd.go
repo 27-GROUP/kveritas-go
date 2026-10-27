@@ -132,6 +132,24 @@ func anchorSigned(sh *session.SignerHistory) bool {
 	return err == nil && crypto.VerifyPSS(key, crypto.HistoryPayload(sh.Statement), sh.Signature) == nil
 }
 
+func openOnThisMachine(server string) error {
+	key, err := signer.Load()
+	if err != nil {
+		return nil
+	}
+	st, err := client.New(server).SignerHistory(key.Fingerprint())
+	if err != nil || st == nil {
+		return nil
+	}
+	for _, u := range st.Unsealed {
+		if u.Status == "open" && strings.HasPrefix(key.Fingerprint(), u.Key) {
+			return fmt.Errorf("session %s is still open on this machine (started %s). Seal it, or remove it with: kveritas clean %s",
+				u.Session, shortTime(u.StartedAt), u.Session)
+		}
+	}
+	return nil
+}
+
 func localOpen(key *signer.Key) string {
 	if key == nil {
 		return ""
@@ -200,6 +218,9 @@ var cmdAbandon = &cobra.Command{
 			}
 			fmt.Printf("Session %s abandoned.\n", args[0])
 			return nil
+		}
+		if os.Getenv("KVERITAS_SHELL") != "" {
+			return fmt.Errorf("exit the shell first, then run kveritas abandon")
 		}
 		kvDir, err := session.Find()
 		if err != nil {
