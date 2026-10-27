@@ -35,7 +35,7 @@ func TestLocalStatementCountsSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range [][2]string{{"start", "s1"}, {"start", "s2"}, {"start", "s3"}, {"abandon", "s3"}} {
+	for _, e := range [][2]string{{"start", "s1"}, {"start", "s2"}, {"start", "s3"}, {"abandon", "s3"}, {"start", "s4"}, {"clean", "s4"}} {
 		if err := RecordLocal(k, e[0], e[1]); err != nil {
 			t.Fatal(err)
 		}
@@ -50,5 +50,8 @@ func TestLocalStatementCountsSessions(t *testing.T) {
 	}
 	if st.Started != 3 || st.Sealed != 1 || st.Abandoned != 1 || st.Open != 1 || len(st.Unsealed) != 2 {
 		t.Fatalf("got %+v", st)
+	}
+	if open := LocalOpen(k); len(open) != 2 {
+		t.Fatalf("open sessions: %v", open)
 	}
 }

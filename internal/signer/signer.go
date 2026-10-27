@@ -126,6 +126,10 @@ func AbandonMessage(sessionID string) string {
 	return "kveritas-signer-abandon:" + sessionID
 }
 
+func CleanMessage(sessionID string) string {
+	return "kveritas-signer-clean:" + sessionID
+}
+
 func LinkStartMessage(at string) string {
 	return "kveritas-signer-link-start:" + at
 }
@@ -202,48 +206,83 @@ func RecordLocal(k *Key, kind, sessionID string) error {
 	return err
 }
 
-func LocalStatement(k *Key, sessionID, dataHash string) (string, error) {
+type localSession struct {
+	id, startedAt, status string
+}
+
+func localSessions(k *Key) ([]localSession, string) {
 	p, err := localLog()
 	if err != nil {
-		return "", err
+		return nil, ""
 	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, ""
+	}
+	defer f.Close()
+	fp, first := k.Fingerprint(), ""
+	byID := map[string]*localSession{}
+	var order []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var e localEvent
+		if json.Unmarshal(sc.Bytes(), &e) != nil || e.Signer != fp {
+			continue
+		}
+		if first == "" {
+			first = e.At
+		}
+		s := byID[e.SessionID]
+		switch {
+		case e.Kind == "start" && s == nil:
+			byID[e.SessionID] = &localSession{id: e.SessionID, startedAt: e.At, status: "open"}
+			order = append(order, e.SessionID)
+		case s == nil:
+		case e.Kind == "seal":
+			s.status = "sealed"
+		case e.Kind == "abandon":
+			s.status = "abandoned"
+		case e.Kind == "clean":
+			s.status = "cleaned"
+		}
+	}
+	var out []localSession
+	for _, id := range order {
+		if s := byID[id]; s.status != "cleaned" {
+			out = append(out, *s)
+		}
+	}
+	return out, first
+}
+
+func LocalOpen(k *Key) []string {
+	sessions, _ := localSessions(k)
+	var open []string
+	for _, s := range sessions {
+		if s.status == "open" {
+			open = append(open, s.id)
+		}
+	}
+	return open
+}
+
+func LocalStatement(k *Key, sessionID, dataHash string) (string, error) {
 	st := Statement{Kind: "kveritas-signer-history", At: time.Now().UTC().Format(time.RFC3339Nano),
 		SessionID: sessionID, DataHash: dataHash, Signer: k.Fingerprint(), Keys: 1, Unsealed: []Unsealed{}}
-	status := map[string]string{}
-	started := map[string]string{}
-	var order []string
-	if f, err := os.Open(p); err == nil {
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			var e localEvent
-			if json.Unmarshal(sc.Bytes(), &e) != nil || e.Signer != st.Signer {
-				continue
-			}
-			if st.FirstSeen == "" {
-				st.FirstSeen = e.At
-			}
-			switch e.Kind {
-			case "start":
-				if _, ok := status[e.SessionID]; !ok {
-					order = append(order, e.SessionID)
-					started[e.SessionID] = e.At
-				}
-				status[e.SessionID] = "open"
-			case "seal":
-				status[e.SessionID] = "sealed"
-			case "abandon":
-				status[e.SessionID] = "abandoned"
-			}
+	sessions, first := localSessions(k)
+	st.FirstSeen = first
+	found := false
+	for i := range sessions {
+		if sessions[i].id == sessionID {
+			sessions[i].status, found = "sealed", true
 		}
-		f.Close()
 	}
-	if _, ok := status[sessionID]; !ok {
-		order = append(order, sessionID)
+	if !found {
+		sessions = append(sessions, localSession{id: sessionID, status: "sealed"})
 	}
-	status[sessionID] = "sealed"
-	for _, id := range order {
+	for _, s := range sessions {
 		st.Started++
-		switch status[id] {
+		switch s.status {
 		case "sealed":
 			st.Sealed++
 		case "abandoned":
@@ -251,8 +290,8 @@ func LocalStatement(k *Key, sessionID, dataHash string) (string, error) {
 		default:
 			st.Open++
 		}
-		if status[id] != "sealed" {
-			st.Unsealed = append(st.Unsealed, Unsealed{Session: id[:min(8, len(id))], Key: st.Signer[:16], StartedAt: started[id], Status: status[id]})
+		if s.status != "sealed" {
+			st.Unsealed = append(st.Unsealed, Unsealed{Session: s.id[:min(8, len(s.id))], Key: st.Signer[:16], StartedAt: s.startedAt, Status: s.status})
 		}
 	}
 	data, err := json.Marshal(st)

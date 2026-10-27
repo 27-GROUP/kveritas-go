@@ -89,21 +89,28 @@ Every run also gets measured results: time, CPU, memory, GPU and energy.`,
 }
 
 var cmdClean = &cobra.Command{
-	Use:   "clean",
-	Short: "Remove the .kveritas session directory",
-	Long: `Removes the .kveritas directory and all session data.
-Use this to abandon an in-progress session or clean up after a failed run.
-This action is irreversible -- the session token is lost.`,
+	Use:   "clean [session-id]",
+	Short: "Remove the session completely; it appears in no report",
+	Long: `Removes the .kveritas directory and all session data, and frees this
+machine for a new session. The session is erased from your history: no
+later report lists it. With a session id (8 characters are enough), removes
+that session wherever its folder is. Cannot be undone.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			return cleanByID(args[0])
+		}
 		kvDir, err := session.Find()
 		if err != nil {
 			return fmt.Errorf("no session found to clean")
 		}
-		abandonQuietly(kvDir)
+		if err := cleanSession(kvDir); err != nil {
+			return err
+		}
 		if err := os.RemoveAll(kvDir); err != nil {
 			return fmt.Errorf("removing session directory: %w", err)
 		}
-		fmt.Println("Session directory removed.")
+		fmt.Println("Session removed.")
 		return nil
 	},
 }
@@ -510,8 +517,8 @@ var cmdInit = &cobra.Command{
 				if errors.As(err, &se) && se.Status == http.StatusUpgradeRequired {
 					return unsupportedVersion()
 				}
-				if errors.As(err, &se) && se.Status == 403 {
-					return fmt.Errorf("server refused the session: %s", se.Body)
+				if errors.As(err, &se) && (se.Status == 403 || se.Status == 409) {
+					return serverRefusal(err)
 				}
 				return fmt.Errorf("server registration failed: %w\n\nStart the server with: kveritas-server\nOr use --local for offline mode.", err)
 			}
@@ -525,6 +532,10 @@ var cmdInit = &cobra.Command{
 		} else {
 			token = "local"
 			serverURL = "local"
+			if open := localOpen(key); open != "" {
+				_ = os.RemoveAll(kvDir)
+				return fmt.Errorf("session %s is still open on this machine. Seal it, or remove it with: kveritas clean %s", open, open)
+			}
 			if key != nil {
 				if err := signer.RecordLocal(key, "start", sessionID); err != nil {
 					fmt.Fprintf(os.Stderr, "[kveritas] Warning: could not record the session locally: %v\n", err)

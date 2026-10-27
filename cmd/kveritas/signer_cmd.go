@@ -31,7 +31,7 @@ func printUnsealed(list []signer.Unsealed) {
 	if len(list) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[kveritas] %s on this signer key. Your reports list them; seal them or drop them with 'kveritas abandon <id>':\n", plural(len(list), "unsealed session"))
+	fmt.Fprintf(os.Stderr, "[kveritas] %s open on your other linked machines; your reports list them:\n", plural(len(list), "unsealed session"))
 	for _, u := range list[:min(len(list), 5)] {
 		fmt.Fprintf(os.Stderr, "[kveritas]   %s  started %s, %s\n", u.Session, shortTime(u.StartedAt), plural(u.Runs, "run"))
 	}
@@ -132,22 +132,57 @@ func anchorSigned(sh *session.SignerHistory) bool {
 	return err == nil && crypto.VerifyPSS(key, crypto.HistoryPayload(sh.Statement), sh.Signature) == nil
 }
 
-func abandonQuietly(kvDir string) {
+func localOpen(key *signer.Key) string {
+	if key == nil {
+		return ""
+	}
+	if open := signer.LocalOpen(key); len(open) > 0 {
+		return open[len(open)-1][:min(8, len(open[len(open)-1]))]
+	}
+	return ""
+}
+
+func cleanSession(kvDir string) error {
 	sess, err := session.Load(kvDir)
 	if err != nil || sess.Sealed || sess.Signer == "" {
-		return
+		return nil
 	}
 	key, err := signer.Load()
 	if err != nil || key.Fingerprint() != sess.Signer {
-		return
+		return nil
 	}
 	if sess.ServerURL == "local" {
-		_ = signer.RecordLocal(key, "abandon", sess.ID)
-		return
+		return signer.RecordLocal(key, "clean", sess.ID)
 	}
 	c := client.New(sess.ServerURL)
-	c.HTTPClient.Timeout = 5 * time.Second
-	_ = c.Abandon(sess.ID, key)
+	c.HTTPClient.Timeout = 10 * time.Second
+	if err := c.Clean(sess.ID, key); err != nil {
+		return fmt.Errorf("could not remove the session from the server (%v); nothing was deleted, try again", serverRefusal(err))
+	}
+	return nil
+}
+
+func cleanByID(id string) error {
+	key, err := signer.Load()
+	if err != nil {
+		return err
+	}
+	if len(id) >= 8 {
+		for _, open := range signer.LocalOpen(key) {
+			if strings.HasPrefix(open, id) {
+				if err := signer.RecordLocal(key, "clean", open); err != nil {
+					return err
+				}
+				fmt.Printf("Session %s removed.\n", id)
+				return nil
+			}
+		}
+	}
+	if err := client.New(keyServer).Clean(id, key); err != nil {
+		return serverRefusal(err)
+	}
+	fmt.Printf("Session %s removed. Delete its .kveritas folder if it still exists.\n", id)
+	return nil
 }
 
 var cmdAbandon = &cobra.Command{
@@ -355,7 +390,7 @@ var cmdKeyExport = &cobra.Command{
 }
 
 func init() {
-	for _, c := range []*cobra.Command{cmdKey, cmdAbandon} {
+	for _, c := range []*cobra.Command{cmdKey, cmdAbandon, cmdClean} {
 		c.PersistentFlags().StringVar(&keyServer, "server", defaultServer, "attestation server URL")
 	}
 	cmdKey.AddCommand(cmdKeyLink, cmdKeyRevoke, cmdKeyExport)

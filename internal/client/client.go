@@ -261,6 +261,13 @@ func (c *Client) Abandon(sessionID string, k *signer.Key) error {
 	}, &resp)
 }
 
+func (c *Client) Clean(sessionID string, k *signer.Key) error {
+	var resp struct{}
+	return c.post("/api/v1/signer/clean", map[string]string{
+		"session_id": sessionID, "public_key": k.Public(), "signature": k.Sign(signer.CleanMessage(sessionID)),
+	}, &resp)
+}
+
 func (c *Client) LinkStart(k *signer.Key) (string, error) {
 	at := time.Now().UTC().Format(time.RFC3339Nano)
 	var resp struct {
