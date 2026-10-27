@@ -157,7 +157,7 @@ func cleanSession(kvDir string) error {
 	c := client.New(sess.ServerURL)
 	c.HTTPClient.Timeout = 10 * time.Second
 	if err := c.Clean(sess.ID, key); err != nil {
-		return fmt.Errorf("could not remove the session from the server (%v); nothing was deleted, try again", serverRefusal(err))
+		fmt.Fprintf(os.Stderr, "[kveritas] The server could not be told (%v). Before your next session, run: kveritas clean %s\n", serverRefusal(err), sess.ID[:8])
 	}
 	return nil
 }
