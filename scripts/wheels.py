@@ -31,7 +31,7 @@ def build(version: str, dist: str) -> None:
                 "Metadata-Version: 2.1\nName: kveritas\n"
                 f"Version: {version}\n"
                 "Summary: K-Veritas CLI: cryptographic verification for computational experiments\n"
-                "Home-page: https://kveritas.org\nLicense: AGPL-3.0-only\n"
+                "Home-page: https://kveritas.org\nLicense: Apache-2.0\n"
             ).encode(),
             f"{info}/WHEEL": f"Wheel-Version: 1.0\nGenerator: kveritas\nRoot-Is-Purelib: false\nTag: py3-none-{tag}\n".encode(),
         }

@@ -7,6 +7,6 @@ The CLI, protocol, and verification libraries are licensed under the Apache
 License, Version 2.0 (see LICENSE).
 
 The attestation server (server/) is licensed under the GNU Affero General
-Public License, Version 3 (see LICENSE-AGPL).
+Public License, Version 3 (see server/LICENSE).
 
 "K-Veritas" is a trademark. This license grants no trademark rights.
